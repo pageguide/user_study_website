@@ -673,7 +673,23 @@ function applyFindGrounding(frame, canned, arm) {
   (Array.isArray(canned?.citation_anchors) ? canned.citation_anchors : [])
     .forEach(a => { if (a && a.index != null) byIndex.set(Number(a.index), a); });
 
-  cites.forEach(cite => markFindCitation(doc, cite.text, cite.index, byIndex.get(Number(cite.index))));
+  // ONE INDEX, ONE ELEMENT. Two citations can share an index — the same paragraph quoted twice —
+  // and they must land on the same place, because they ARE the same place: [N] means element N.
+  //
+  // Resolved independently they can disagree, and did. With the anchor missing, each fell back to
+  // text search on its own quote: "Foundation series" is short enough to hit an image caption,
+  // while "extend the human species' reach." is rare enough to hit nothing. Same target, two
+  // different answers, and one of them confidently wrong.
+  //
+  // So the first citation to resolve an index decides it, and the rest of that index reuse the
+  // element rather than searching again for their own wording.
+  const resolvedByIndex = new Map();
+  cites.forEach(cite => {
+    const key = Number(cite.index);
+    const already = resolvedByIndex.get(key);
+    const el = markFindCitation(doc, cite.text, cite.index, byIndex.get(key), already);
+    if (el && !already) resolvedByIndex.set(key, el);
+  });
   drawEvidenceMarks(doc, canned);
 }
 
@@ -915,8 +931,13 @@ function normText(v) {
  * Whatever matches, a picture beside it is outlined too — for an image citation the picture is the
  * evidence, and highlighting only its caption would point next to the thing rather than at it.
  */
-function markFindCitation(doc, text, index, anchor) {
+function markFindCitation(doc, text, index, anchor, settled) {
   const needle = normText(text);
+
+  // 0. ALREADY SETTLED. Another citation with this same index has resolved, and [N] means element N
+  // — so this one is that element too, whatever its own wording would have matched. Reuses it
+  // instead of searching again, which is what let two [69] citations disagree.
+  if (settled) { markElement(settled, needle || String(index)); return settled; }
 
   // 0a. THE RECORDED LOCATOR, when the response carries one. Resolved on the live page at the moment
   // the answer was banked, while the index that issued `index` was still installed — see
@@ -925,7 +946,7 @@ function markFindCitation(doc, text, index, anchor) {
   // including snapshots captured before anchoring existed, and re-capturing cannot strip it off.
   if (anchor && anchor.tag && anchor.text) {
     const located = resolveCitationAnchor(doc, anchor);
-    if (located) { markElement(located, needle || String(index)); return; }
+    if (located) { markElement(located, needle || String(index)); return located; }
   }
 
   // 0b. THE STAMPED ANCHOR, when the snapshot has one. `[69:"…"]` means element 69 in the page index
@@ -935,26 +956,31 @@ function markFindCitation(doc, text, index, anchor) {
   // fallback for snapshots captured before stamping existed.
   if (index != null) {
     const anchored = doc.querySelector(`[data-pg-index="${CSS.escape(String(index))}"]`);
-    if (anchored) { markElement(anchored, needle || String(index)); return; }
+    if (anchored) { markElement(anchored, needle || String(index)); return anchored; }
   }
 
-  if (needle.length < 4) return;            // too short to match uniquely; a false hit is worse
+  if (needle.length < 4) return null;       // too short to match uniquely; a false hit is worse
 
   // 1. The whole quote inside one text node — the clean case, marked precisely.
-  if (markText(doc, needle)) return;
+  //
+  // Returns the CONTAINING element, not the span it made, so a sibling citation with the same index
+  // reuses the paragraph rather than a fragment of it.
+  const hit = markText(doc, needle);
+  if (hit) return hit.parentElement || null;
 
   // 2. A prefix inside one text node. Long enough to stay distinctive, short enough to survive the
   //    markup that split the caption up.
   for (const len of [40, 25, 15]) {
     if (needle.length <= len) continue;
     const el = findElementContaining(doc, needle.slice(0, len));
-    if (el) { markElement(el, needle); return; }
+    if (el) { markElement(el, needle); return el; }
   }
 
   // 3. An image whose alt text carries the quote.
   const img = Array.from(doc.querySelectorAll('img'))
     .find(i => normText(i.getAttribute('alt')).includes(needle.slice(0, 25)));
-  if (img) markImage(img, needle);
+  if (img) { markImage(img, needle); return img; }
+  return null;
 }
 
 /**
@@ -1119,10 +1145,13 @@ function markText(doc, needle) {
     mark.className = 'pageguide-highlight';
     mark.setAttribute('data-pageguide-styled', '');
     mark.dataset.pgCite = needle;
-    try { range.surroundContents(mark); } catch (e) { return false; }  // spans elements: leave it
-    return true;
+    try { range.surroundContents(mark); } catch (e) { return null; }  // spans elements: leave it
+    // The MARK is returned, not just success: a sibling citation with the same index needs the
+    // element this landed in, so it can reuse it rather than searching again for its own wording.
+    // Still truthy, so callers that only asked "did it match?" are unaffected.
+    return mark;
   }
-  return false;
+  return null;
 }
 
 /**
