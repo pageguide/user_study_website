@@ -166,7 +166,78 @@ function buildResultRow({ task, record, timings, confidence, helpfulness }) {
   };
 }
 
+/**
+ * One Find result row.
+ *
+ * Same table and same field names as the guide half and the extension, so a Find run on the web is
+ * one row among the rest rather than a separate dataset. `answer_correct` is graded here the way
+ * _gradeFindAnswer does it in the extension: a case- and space-insensitive comparison against the
+ * task's recorded answer, because the option text is what the participant clicked and the task file
+ * is what it must match.
+ */
+function buildFindResultRow({ task, payload, confidence, helpfulness }) {
+  const questionIndex = state.results.filter(r => r.task_type === 'find').length;
+  const chosen = String(payload.answer || '').trim().toLowerCase();
+  const correct = String(task?.answer || '').trim().toLowerCase();
+
+  return {
+    session_id: state.sessionId,
+    participant_id: state.participantId,
+    block_index: 0,
+    task_index: state.idx,
+    question_index: questionIndex,
+    task_type: 'find',
+    condition: conditionLabel(state.arm),
+    time_ms: payload.answerElapsed,
+    notes_time_ms: null,
+    answer_time_ms: payload.answerElapsed,
+    // The split that makes the two halves of a Find task measurable separately: deciding, then
+    // hunting. Grounding should help the second far more than the first.
+    answer_multiple_choice_ms: payload.answerChoiceMs,
+    find_supporting_answer_ms: payload.findSupportingMs,
+
+    guide_answer_correct: null,
+    guide_answer_problems: null,
+    guide_answer_problem: null,
+    guide_errors: null,
+    score_verdict_correct: null,
+    score_problem_precision: null,
+    score_problem_recall: null,
+    score_problem_exact: null,
+    score_type_precision: null,
+    score_type_recall: null,
+    score_step_precision: null,
+    score_step_recall: null,
+    score_step_exact: null,
+    score_no_error_agreement: null,
+
+    evidence_responses: payload.evidenceResponses || [],
+    answer: payload.answer,
+    answer_correct: !!correct && chosen === correct,
+    question_or_task: task?.question || '',
+    confidence: confidence || null,
+    helpfulness: helpfulness || null,
+    chat_turn_count: 0,
+    chat_transcript: [],
+    user_hidden_selectors: null,
+    guide_screenshot: null,
+
+    scroll_user_count: 0,
+    scroll_agent_count: 0,
+    ctrl_f_count: 0,
+    text_select_count: 0,
+    click_count: 0,
+    mouse_move_px: 0,
+    agent_think_ms: null,
+    page_visit_count: 0,
+    page_visit_urls: null,
+
+    task_data: { id: task?.id, type: task?.type || '', url: task?.url || '', source: 'pageguide-web' },
+  };
+}
+
 window.StudySession = {
+  buildFindResultRow,
   state, resolveArm, conditionLabel, saveLocal, loadLocal, clearLocal, buildResultRow,
   saveReview, loadReview, clearReview,
 };

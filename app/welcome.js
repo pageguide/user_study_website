@@ -27,7 +27,12 @@ async function buildQueue() {
   const out = [];
   try {
     const tasks = await window.StudyDB.listStudyTasks();
-    tasks.forEach(t => out.push({ taskType: 'find', id: t.id, title: t.title, question: t.question, url: t.url, type: t.type }));
+    // answer + distractors ride along: they are what Q1's options are built from, and fetching the
+    // task again at question time would be a second round trip for data already in hand.
+    tasks.forEach(t => out.push({
+      taskType: 'find', id: t.id, title: t.title, question: t.question,
+      url: t.url, type: t.type, answer: t.answer, distractors: t.distractors,
+    }));
   } catch (e) {
     console.warn('[study] no Find tasks:', e.message);
   }
