@@ -778,12 +778,32 @@ function overlayAnnotations(doc, img, annotations, key, marks) {
   // researcher approved that rendering, so a participant must get the same one.
   const shapes = Array.isArray(annotations) ? annotations : [];
   const region = marks?.region_bbox;
-  if (!shapes.length && region && Number.isFinite(region.w) && Number.isFinite(region.h)) {
+
+  // COORDINATE SPACE. Annotation coordinates are fractions of the CAPTURED AREA, not of the image —
+  // the same space `region_bbox` is expressed in, which is where the image sits inside that capture.
+  // Drawing them straight onto the image put every mark in the wrong place at the wrong scale.
+  //
+  // SVSF-V1 is the proof: region_bbox is {x:0.598, w:0.402} — the cover occupies the right 40% of
+  // the capture, because the shot took in both book covers. Its "spaceman" ellipse is at x=0.803,
+  // which is 80% across the CAPTURE and (0.803-0.598)/0.402 = 51% across the COVER. Drawn raw it
+  // landed at 80% of the cover; drawn through the region it lands where the recorder drew it.
+  //
+  // A region of {0,0,1,1} — the whole-image case — makes this the identity, so items captured on
+  // the image alone are unaffected.
+  const usable = region && Number.isFinite(region.w) && Number.isFinite(region.h)
+    && region.w > 0 && region.h > 0;
+  const fx = (x) => (usable ? ((Number(x) || 0) - (region.x || 0)) / region.w : (Number(x) || 0));
+  const fy = (y) => (usable ? ((Number(y) || 0) - (region.y || 0)) / region.h : (Number(y) || 0));
+  const fw = (w) => (usable ? (Number(w) || 0) / region.w : (Number(w) || 0));
+  const fh = (h) => (usable ? (Number(h) || 0) / region.h : (Number(h) || 0));
+
+  if (!shapes.length && usable) {
+    // The region maps to the whole image by definition, so it is drawn as the full frame.
     const r = doc.createElementNS(NS, 'rect');
-    r.setAttribute('x', (region.x || 0) * 100);
-    r.setAttribute('y', (region.y || 0) * 100);
-    r.setAttribute('width', region.w * 100);
-    r.setAttribute('height', region.h * 100);
+    r.setAttribute('x', 0);
+    r.setAttribute('y', 0);
+    r.setAttribute('width', 100);
+    r.setAttribute('height', 100);
     r.setAttribute('fill', 'none');
     r.setAttribute('stroke', '#ff2d78');
     r.setAttribute('stroke-width', '0.8');
@@ -801,14 +821,8 @@ function overlayAnnotations(doc, img, annotations, key, marks) {
       bar.className = 'pg-annot-note';
       bar.textContent = label;
       bar.setAttribute('style', [
-        'position:absolute',
-        `left:${(region.x || 0) * 100}%`,
-        `top:${(region.y || 0) * 100}%`,
-        `max-width:${Math.max(30, region.w * 100)}%`,
-        // Above the region normally, but INSIDE it when the region starts at the very top — which
-        // is the whole-image case, where sitting above means sitting outside the picture and
-        // getting clipped by whatever the snapshot puts there.
-        (region.y || 0) > 0.05 ? 'transform:translateY(-100%)' : '',
+        // The region IS the image after the transform above, so the note sits at its top-left.
+        'position:absolute', 'left:0', 'top:0', 'max-width:100%',
         'background:#ff2d78', 'color:#fff',
         'font:700 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         'padding:4px 8px', 'border-radius:4px',
@@ -822,37 +836,37 @@ function overlayAnnotations(doc, img, annotations, key, marks) {
     const colour = a.color || '#ff2d78';
     if (a.type === 'ellipse' && a.bbox) {
       const e = doc.createElementNS(NS, 'ellipse');
-      e.setAttribute('cx', (a.bbox.x + a.bbox.w / 2) * 100);
-      e.setAttribute('cy', (a.bbox.y + a.bbox.h / 2) * 100);
-      e.setAttribute('rx', (a.bbox.w / 2) * 100);
-      e.setAttribute('ry', (a.bbox.h / 2) * 100);
+      e.setAttribute('cx', (fx(a.bbox.x) + fw(a.bbox.w) / 2) * 100);
+      e.setAttribute('cy', (fy(a.bbox.y) + fh(a.bbox.h) / 2) * 100);
+      e.setAttribute('rx', (fw(a.bbox.w) / 2) * 100);
+      e.setAttribute('ry', (fh(a.bbox.h) / 2) * 100);
       e.setAttribute('fill', 'none');
       e.setAttribute('stroke', colour);
       e.setAttribute('stroke-width', '0.6');
       e.setAttribute('vector-effect', 'non-scaling-stroke');
       svg.appendChild(e);
-      if (a.label) svg.appendChild(_annotLabel(doc, NS, a.bbox.x * 100, a.bbox.y * 100 - 2, a.label, colour));
+      if (a.label) svg.appendChild(_annotLabel(doc, NS, fx(a.bbox.x) * 100, fy(a.bbox.y) * 100 - 2, a.label, colour));
     } else if ((a.type === 'box' || a.type === 'rect') && a.bbox) {
       const r = doc.createElementNS(NS, 'rect');
-      r.setAttribute('x', a.bbox.x * 100);
-      r.setAttribute('y', a.bbox.y * 100);
-      r.setAttribute('width', a.bbox.w * 100);
-      r.setAttribute('height', a.bbox.h * 100);
+      r.setAttribute('x', fx(a.bbox.x) * 100);
+      r.setAttribute('y', fy(a.bbox.y) * 100);
+      r.setAttribute('width', fw(a.bbox.w) * 100);
+      r.setAttribute('height', fh(a.bbox.h) * 100);
       r.setAttribute('fill', 'none');
       r.setAttribute('stroke', colour);
       r.setAttribute('stroke-width', '0.6');
       r.setAttribute('vector-effect', 'non-scaling-stroke');
       svg.appendChild(r);
-      if (a.label) svg.appendChild(_annotLabel(doc, NS, a.bbox.x * 100, a.bbox.y * 100 - 2, a.label, colour));
+      if (a.label) svg.appendChild(_annotLabel(doc, NS, fx(a.bbox.x) * 100, fy(a.bbox.y) * 100 - 2, a.label, colour));
     } else if (a.type === 'arrow' && a.from && a.to) {
       const l = doc.createElementNS(NS, 'line');
-      l.setAttribute('x1', a.from.x * 100); l.setAttribute('y1', a.from.y * 100);
-      l.setAttribute('x2', a.to.x * 100);   l.setAttribute('y2', a.to.y * 100);
+      l.setAttribute('x1', fx(a.from.x) * 100); l.setAttribute('y1', fy(a.from.y) * 100);
+      l.setAttribute('x2', fx(a.to.x) * 100);   l.setAttribute('y2', fy(a.to.y) * 100);
       l.setAttribute('stroke', colour);
       l.setAttribute('stroke-width', '0.8');
       l.setAttribute('vector-effect', 'non-scaling-stroke');
       svg.appendChild(l);
-      if (a.label) svg.appendChild(_annotLabel(doc, NS, a.to.x * 100, a.to.y * 100 - 2, a.label, colour));
+      if (a.label) svg.appendChild(_annotLabel(doc, NS, fx(a.to.x) * 100, fy(a.to.y) * 100 - 2, a.label, colour));
     }
   });
 
