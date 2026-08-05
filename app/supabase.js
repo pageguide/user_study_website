@@ -107,6 +107,59 @@ async function insertStudyResult(record) {
   return insert('study_task_results', record);
 }
 
+async function updateCannedResponseGrounding(taskId, condition, patch) {
+  if (!supabaseConfigured()) throw new Error('Supabase is not configured.');
+  const clean = {};
+  ['answer_raw', 'answer_display', 'citation_anchors', 'evidence'].forEach(k => {
+    if (Object.prototype.hasOwnProperty.call(patch || {}, k)) clean[k] = patch[k];
+  });
+  try {
+    const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/study_canned_responses`
+      + `?task_id=eq.${encodeURIComponent(taskId)}&condition=eq.${encodeURIComponent(condition)}`
+      + '&select=task_id,condition,answer_raw,answer_display,citation_anchors,evidence', {
+      method: 'PATCH',
+      headers: headers('return=representation'),
+      body: JSON.stringify(clean),
+    });
+    if (res.ok) {
+      const rows = await res.json().catch(() => []);
+      if (Array.isArray(rows) && rows.length) return true;
+      throw new Error('Supabase accepted the request but updated no rows. RLS likely blocked the write.');
+    }
+    throw new Error(await res.text().catch(() => `Supabase update failed (${res.status})`));
+  } catch (e) {
+    return updateCannedResponseViaAdminHelper(taskId, condition, clean, e);
+  }
+}
+
+async function updateCannedResponseViaAdminHelper(taskId, condition, patch, originalError) {
+  let token = '';
+  try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
+  if (!token) {
+    token = window.prompt('Paste the admin save token printed by `node scripts/publish.mjs --serve`:') || '';
+    token = token.trim();
+    if (token) {
+      try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
+    }
+  }
+  if (!token) throw originalError;
+
+  const res = await fetch('http://127.0.0.1:8790/admin/canned-response', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-PageGuide-Admin-Token': token,
+    },
+    body: JSON.stringify({ task_id: taskId, condition, patch }),
+  });
+  if (res.ok) return true;
+  if (res.status === 401 || res.status === 403) {
+    try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
+  }
+  const body = await res.text().catch(() => '');
+  throw new Error(body || originalError?.message || `admin helper returned ${res.status}`);
+}
+
 // ── The Find half ──
 // The site cannot RUN a Find task: that needs the extension on a live page to index it, highlight
 // citations and let a participant pick sentences off it. What it can do is show the material —
@@ -123,6 +176,15 @@ async function getCannedResponse(taskId, condition) {
   const rows = await get('study_canned_responses?select=*'
     + `&task_id=eq.${encodeURIComponent(taskId)}&condition=eq.${encodeURIComponent(condition)}&limit=1`);
   return (Array.isArray(rows) && rows[0]) || null;
+}
+
+async function getStudyGroundTruth(taskId, url) {
+  const rows = await get(`study_ground_truth?select=*&task_id=eq.${encodeURIComponent(taskId)}&limit=1`);
+  if (Array.isArray(rows) && rows[0]) return rows[0];
+  if (!url) return null;
+  const all = await get('study_ground_truth?select=*');
+  return (Array.isArray(all) ? all : []).find(row =>
+    Object.values(row?.hops || {}).flat().some(hit => String(hit?.url || '') === String(url))) || null;
 }
 
 /**
@@ -155,6 +217,8 @@ window.StudyDB = {
   getStudyTrajectory,
   listStudyTasks,
   getCannedResponse,
+  getStudyGroundTruth,
+  updateCannedResponseGrounding,
   insertStudySession,
   insertStudyResult,
 };

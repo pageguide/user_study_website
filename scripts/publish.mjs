@@ -19,6 +19,7 @@
 //   SUPABASE_URL=https://xxxx.supabase.co
 //   SUPABASE_SECRET_KEY=sb_secret_...
 
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
@@ -26,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.PORT || 8790);
+const ADMIN_SAVE_TOKEN = process.env.PAGEGUIDE_ADMIN_SAVE_TOKEN || randomBytes(18).toString('base64url');
 
 /**
  * Read .env by hand rather than pulling in dotenv.
@@ -206,6 +208,96 @@ async function publishBundle(env, bundle) {
   return report;
 }
 
+async function applyReviewPatch(env, patchFile) {
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(resolve(patchFile), 'utf8'));
+  } catch (e) {
+    console.error(`✗ Could not read review patch: ${e?.message || e}`);
+    process.exit(2);
+  }
+  const taskId = String(payload?.task_id || '').trim();
+  const condition = String(payload?.condition || '').trim();
+  const patch = payload?.patch && typeof payload.patch === 'object' ? payload.patch : null;
+  if (!taskId || !condition || !patch) {
+    console.error('✗ Review patch must contain task_id, condition and patch.');
+    process.exit(2);
+  }
+  const allowed = {};
+  ['answer_raw', 'answer_display', 'citation_anchors', 'evidence'].forEach(k => {
+    if (Object.prototype.hasOwnProperty.call(patch, k)) allowed[k] = patch[k];
+  });
+  if (!Object.keys(allowed).length) {
+    console.error('✗ Review patch has no allowed fields.');
+    process.exit(2);
+  }
+
+  const url = `${env.SUPABASE_URL}/rest/v1/study_canned_responses`
+    + `?task_id=eq.${encodeURIComponent(taskId)}&condition=eq.${encodeURIComponent(condition)}`;
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: env.SUPABASE_SECRET_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SECRET_KEY}`,
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify(allowed),
+  });
+  if (!res.ok) {
+    console.error(`✗ ${res.status} ${await res.text().catch(() => '')}`);
+    process.exit(1);
+  }
+  console.log(`✓ Updated study_canned_responses for ${taskId} / ${condition}`);
+}
+
+function cleanReviewPatch(payload) {
+  const taskId = String(payload?.task_id || '').trim();
+  const condition = String(payload?.condition || '').trim();
+  const patch = payload?.patch && typeof payload.patch === 'object' ? payload.patch : null;
+  if (!taskId || !condition || !patch) {
+    return { error: 'task_id, condition and patch are required' };
+  }
+  const allowed = {};
+  ['answer_raw', 'answer_display', 'citation_anchors', 'evidence'].forEach(k => {
+    if (Object.prototype.hasOwnProperty.call(patch, k)) allowed[k] = patch[k];
+  });
+  if (!Object.keys(allowed).length) return { error: 'patch has no allowed fields' };
+  return { taskId, condition, patch: allowed };
+}
+
+function tokenMatches(got) {
+  const a = Buffer.from(String(got || ''));
+  const b = Buffer.from(ADMIN_SAVE_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+async function updateCannedResponse(env, payload) {
+  const clean = cleanReviewPatch(payload);
+  if (clean.error) return { status: 400, body: { error: clean.error } };
+  const url = `${env.SUPABASE_URL}/rest/v1/study_canned_responses`
+    + `?task_id=eq.${encodeURIComponent(clean.taskId)}&condition=eq.${encodeURIComponent(clean.condition)}`
+    + '&select=task_id,condition';
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: env.SUPABASE_SECRET_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SECRET_KEY}`,
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(clean.patch),
+  });
+  if (!res.ok) {
+    return { status: res.status, body: { error: await res.text().catch(() => '') } };
+  }
+  const rows = await res.json().catch(() => []);
+  if (!Array.isArray(rows) || !rows.length) {
+    return { status: 404, body: { error: `No canned response matched ${clean.taskId} / ${clean.condition}` } };
+  }
+  return { status: 200, body: { ok: true, updated: rows[0] } };
+}
+
 function summarize(report) {
   if (!report.length) return 'nothing to publish — the bundle was empty';
   return report
@@ -227,6 +319,15 @@ if (problem) {
   process.exit(2);
 }
 
+if (args[0] === '--apply-review-patch') {
+  if (!args[1]) {
+    console.error('✗ Usage: node scripts/publish.mjs --apply-review-patch review_patch.json');
+    process.exit(2);
+  }
+  await applyReviewPatch(env, args[1]);
+  process.exit(0);
+}
+
 if (args[0] === '--serve') {
   // The extension cannot hold the secret key, so it posts the bundle here instead. Bound to
   // 127.0.0.1: this endpoint uploads with a privileged key and has no business being reachable from
@@ -237,10 +338,33 @@ if (args[0] === '--serve') {
       // endpoint is loopback-only and lives for the length of one publishing session, so it is
       // reachable by this machine's browser and nothing else.
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, X-PageGuide-Admin-Token',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
     };
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); res.end(); return; }
+    if (req.method === 'POST' && req.url.startsWith('/admin/canned-response')) {
+      if (!tokenMatches(req.headers['x-pageguide-admin-token'])) {
+        res.writeHead(403, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Bad or missing admin save token.' }));
+        return;
+      }
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', async () => {
+        let payload;
+        try {
+          payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch (e) {
+          res.writeHead(400, { ...cors, 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'The request was not valid JSON.' }));
+          return;
+        }
+        const out = await updateCannedResponse(env, payload);
+        res.writeHead(out.status, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(out.body));
+      });
+      return;
+    }
     if (req.method !== 'POST' || !req.url.startsWith('/publish')) {
       res.writeHead(404, cors); res.end('not found'); return;
     }
@@ -272,6 +396,7 @@ if (args[0] === '--serve') {
   server.listen(PORT, '127.0.0.1', () => {
     console.log(`✓ Publish helper listening on http://127.0.0.1:${PORT}`);
     console.log(`  Key loaded from ${file}. It stays in this process — nothing is pasted anywhere.`);
+    console.log(`  Admin save token: ${ADMIN_SAVE_TOKEN}`);
     console.log('  Now press ⬆ Publish to web in the extension\'s recorder. Ctrl-C when you are done.');
   });
 } else if (args[0]) {

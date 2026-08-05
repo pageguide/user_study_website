@@ -106,6 +106,7 @@ async function showTask() {
     onSubmit: (timings) => askPostQuestions(task, record, timings),
   });
   if (S.state.adminReview) {
+    questionPane.insertAdjacentHTML('beforeend', adminGuideGroundTruthHtml(record));
     questionPane.insertAdjacentHTML('beforeend', adminNavHtml());
     bindAdminNav();
   }
@@ -127,10 +128,17 @@ async function showFindTask(task) {
   const { arm, idx, queue } = S.state;
   let canned = null;
   let page = null;
+  let groundTruth = null;
   try {
     canned = await DB.getCannedResponse(task.id, arm);
   } catch (e) {
     console.warn('[study] no recorded answer for', task.id, e.message);
+  }
+  try {
+    groundTruth = await loadFindGroundTruth(task);
+  } catch (e) {
+    console.warn('[study] could not load ground truth for', task.id, e.message);
+    groundTruth = { error: e?.message || String(e), task_id: task.id };
   }
   try {
     if (DB.getTaskPage) page = await DB.getTaskPage(task.id, task.url);
@@ -182,15 +190,50 @@ async function showFindTask(task) {
       <div class="q-body">
         <p class="q-text">${esc(task.question || '')}</p>
         ${answerCardHtml(answer, arm)}
-        <p class="q-sub">Review mode — nothing is recorded.</p>
+        ${adminFindGroundTruthHtml(groundTruth, task)}
+        ${adminGroundingReviewHtml(task, canned, arm, cites, !!page?.html)}
+        <p class="q-sub">Review mode — participant answers are not recorded.</p>
         ${adminNavHtml()}
       </div>`;
     bindFindAnswerChips(canned, arm, cites);
+    bindAdminGroundingReview(task, canned, arm, cites);
     bindAdminNav();
     return;
   }
 
   renderFindQuestions(task, canned, answer, arm, cites);
+}
+
+async function loadFindGroundTruth(task) {
+  if (DB?.getStudyGroundTruth) {
+    const row = await DB.getStudyGroundTruth(task.id, task.url);
+    if (row) return row;
+  }
+  return fetchFindGroundTruthDirect(task);
+}
+
+async function fetchFindGroundTruthDirect(task) {
+  const cfg = window.STUDY_CONFIG || {};
+  if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) return null;
+  const headers = {
+    apikey: cfg.SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${cfg.SUPABASE_ANON_KEY}`,
+  };
+  const base = `${cfg.SUPABASE_URL}/rest/v1/study_ground_truth?select=*`;
+  const byId = await fetch(`${base}&task_id=eq.${encodeURIComponent(task.id)}&limit=1`, { headers });
+  if (!byId.ok) throw new Error(`Supabase ${byId.status} loading study_ground_truth`);
+  const rows = await byId.json();
+  if (Array.isArray(rows) && rows[0]) return rows[0];
+
+  const allRes = await fetch(base, { headers });
+  if (!allRes.ok) throw new Error(`Supabase ${allRes.status} scanning study_ground_truth`);
+  const all = await allRes.json();
+  const taskId = String(task.id || '').toLowerCase();
+  return (Array.isArray(all) ? all : []).find(row => {
+    if (String(row?.task_id || '').toLowerCase() === taskId) return true;
+    const hits = Object.values(row?.hops || {}).flat();
+    return hits.some(hit => String(hit?.url || '') === String(task.url || ''));
+  }) || null;
 }
 
 /** The agent's recorded answer, rendered with its citations and evidence. */
@@ -383,7 +426,10 @@ function startPicking(frame, kind, onPick) {
       .pg-pickable{outline:2px dashed #7857ff!important;outline-offset:2px;cursor:pointer!important;
         background:rgba(120,87,255,.10)!important}
       .pg-picked{outline:3px solid #168f5a!important;outline-offset:2px;
-        background:rgba(22,143,90,.14)!important}`;
+        background:rgba(22,143,90,.14)!important}
+      .pg-picked-sentence{border-radius:3px!important;padding:1px 3px!important;margin:0 1px!important;
+        background:rgba(22,143,90,.22)!important;outline:2px solid #168f5a!important;
+        outline-offset:2px!important}`;
     doc.head?.appendChild(style);
   }
 
@@ -402,14 +448,27 @@ function startPicking(frame, kind, onPick) {
     if (!el) return;
     e.preventDefault();
     e.stopPropagation();
-    doc.querySelectorAll('.pg-picked').forEach(n => n.classList.remove('pg-picked'));
+    clearPickedPassage(doc);
     el.classList.remove('pg-pickable');
-    el.classList.add('pg-picked');
     hovered = null;
-    const text = (el.getAttribute?.('alt') || el.textContent || '').replace(/\s+/g, ' ').trim();
+    const pickedPassage = kind === 'image' ? null : sentencePickFromClick(doc, el, e.clientX, e.clientY);
+    if (pickedPassage?.range) {
+      wrapPickedSentence(doc, pickedPassage.range);
+    } else {
+      el.classList.add('pg-picked');
+    }
+    const text = kind === 'image'
+      ? imagePickLabel(el)
+      : (pickedPassage?.text || el.textContent || '').replace(/\s+/g, ' ').trim();
+    const locator = pickLocator(el, pickedPassage);
     onPick(
-      { text: text.slice(0, 600), tag: el.tagName.toLowerCase() },
-      text ? text.slice(0, 120) + (text.length > 120 ? '…' : '') : `(${el.tagName.toLowerCase()})`
+      {
+        text: text.slice(0, 600),
+        tag: el.tagName.toLowerCase(),
+        granularity: kind === 'image' ? 'image' : (pickedPassage ? 'sentence' : 'block'),
+        locator,
+      },
+      pickDisplayLabel(text, locator, kind)
     );
     stopPicking(frame);
   };
@@ -417,6 +476,179 @@ function startPicking(frame, kind, onPick) {
   doc.addEventListener('mouseover', over, true);
   doc.addEventListener('click', click, true);
   doc.__pgPick = { over, click };
+}
+
+function pickDisplayLabel(text, locator, kind) {
+  const main = text ? text.slice(0, 120) + (text.length > 120 ? '...' : '') : `(${kind})`;
+  if (kind === 'image') return main;
+  if (locator?.table?.rowText) return `${main} | row: ${locator.table.rowText.slice(0, 120)}${locator.table.rowText.length > 120 ? '...' : ''}`;
+  if (locator?.pageIndex != null) return `${main} | page index ${locator.pageIndex}`;
+  return main;
+}
+
+function pickLocator(el, passage) {
+  const row = el.closest?.('tr');
+  const cell = el.closest?.('td, th');
+  const block = el.closest?.('p, li, figcaption, blockquote, h1, h2, h3, td, th') || el;
+  return {
+    pageIndex: closestPageIndex(el),
+    cssPath: cssPathForPick(el),
+    blockTag: block?.tagName?.toLowerCase() || '',
+    blockText: normText(block?.textContent || '').slice(0, 600),
+    sentenceStart: passage?.start ?? null,
+    sentenceEnd: passage?.end ?? null,
+    table: row ? {
+      rowIndex: Array.from(row.parentElement?.children || []).indexOf(row),
+      cellIndex: cell ? Array.from(row.children || []).indexOf(cell) : null,
+      rowText: normText(row.textContent || '').slice(0, 600),
+      columnText: cell ? normText(cell.textContent || '').slice(0, 300) : '',
+    } : null,
+  };
+}
+
+function closestPageIndex(el) {
+  const indexed = el.closest?.('[data-pg-index]');
+  const value = indexed?.getAttribute?.('data-pg-index');
+  return value == null || value === '' ? null : Number(value);
+}
+
+function cssPathForPick(el) {
+  const parts = [];
+  let cur = el;
+  while (cur && cur.nodeType === 1 && cur !== cur.ownerDocument.body && parts.length < 8) {
+    const tag = cur.tagName.toLowerCase();
+    const parent = cur.parentElement;
+    const same = parent ? Array.from(parent.children).filter(c => c.tagName === cur.tagName) : [];
+    const nth = same.length > 1 ? `:nth-of-type(${same.indexOf(cur) + 1})` : '';
+    parts.unshift(`${tag}${nth}`);
+    cur = parent;
+  }
+  return parts.join(' > ');
+}
+
+function imagePickLabel(img) {
+  if (!img) return '';
+  const figure = img.closest?.('figure, .thumb, [class*="figure" i], [class*="image" i]');
+  const caption = figure?.querySelector?.('figcaption, .thumbcaption, [class*="caption" i]');
+  const candidates = [
+    caption?.textContent,
+    img.getAttribute?.('alt'),
+    img.getAttribute?.('title'),
+    img.getAttribute?.('aria-label'),
+    figure?.textContent,
+  ].map(v => String(v || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .filter(v => !/^\(?img\)?$/i.test(v));
+  if (candidates.length) return candidates[0];
+  const src = img.currentSrc || img.getAttribute?.('src') || '';
+  const file = src.split('/').pop()?.split(/[?#]/)[0] || '';
+  return file ? decodeURIComponent(file).replace(/[_-]+/g, ' ').trim() : 'Selected image';
+}
+
+function clearPickedPassage(doc) {
+  doc.querySelectorAll('.pg-picked').forEach(n => n.classList.remove('pg-picked'));
+  doc.querySelectorAll('.pg-picked-sentence').forEach(mark => {
+    const parent = mark.parentNode;
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+    mark.remove();
+    parent.normalize?.();
+  });
+}
+
+function sentencePickFromClick(doc, block, x, y) {
+  const caret = caretFromPoint(doc, x, y);
+  if (!caret?.node || !block.contains(caret.node)) return sentencePickFromBlock(doc, block);
+  const nodes = textNodesIn(block);
+  const hit = textOffsetInNodes(nodes, caret.node, caret.offset);
+  if (hit == null) return sentencePickFromBlock(doc, block);
+  return sentencePickAtOffset(doc, nodes, hit);
+}
+
+function caretFromPoint(doc, x, y) {
+  if (doc.caretRangeFromPoint) {
+    const range = doc.caretRangeFromPoint(x, y);
+    return range ? { node: range.startContainer, offset: range.startOffset } : null;
+  }
+  if (doc.caretPositionFromPoint) {
+    const pos = doc.caretPositionFromPoint(x, y);
+    return pos ? { node: pos.offsetNode, offset: pos.offset } : null;
+  }
+  return null;
+}
+
+function sentencePickFromBlock(doc, block) {
+  return sentencePickAtOffset(doc, textNodesIn(block), 0);
+}
+
+function sentencePickAtOffset(doc, nodes, offset) {
+  const full = nodes.map(n => n.nodeValue || '').join('');
+  if (!full.trim()) return null;
+  let start = Math.max(0, Math.min(offset, full.length));
+  let end = start;
+  while (start > 0 && !/[.!?]\s/.test(full.slice(Math.max(0, start - 2), start))) start--;
+  while (start < full.length && /\s/.test(full[start])) start++;
+  while (end < full.length && !/[.!?]/.test(full[end])) end++;
+  if (end < full.length) end++;
+  while (end > start && /\s/.test(full[end - 1])) end--;
+  if (end <= start) return null;
+  const range = rangeForTextOffsets(doc, nodes, start, end);
+  const text = full.slice(start, end).replace(/\s+/g, ' ').trim();
+  return text ? { text, range, start, end } : null;
+}
+
+function textNodesIn(root) {
+  const nodes = [];
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) nodes.push(node);
+  return nodes;
+}
+
+function textOffsetInNodes(nodes, target, offset) {
+  let total = 0;
+  for (const node of nodes) {
+    if (node === target) return total + offset;
+    total += (node.nodeValue || '').length;
+  }
+  return null;
+}
+
+function rangeForTextOffsets(doc, nodes, start, end) {
+  const range = doc.createRange();
+  let total = 0;
+  let started = false;
+  for (const node of nodes) {
+    const len = (node.nodeValue || '').length;
+    if (!started && start <= total + len) {
+      range.setStart(node, Math.max(0, start - total));
+      started = true;
+    }
+    if (started && end <= total + len) {
+      range.setEnd(node, Math.max(0, end - total));
+      return range;
+    }
+    total += len;
+  }
+  const last = nodes[nodes.length - 1];
+  if (last) {
+    if (!started) range.setStart(last, last.nodeValue.length);
+    range.setEnd(last, last.nodeValue.length);
+  }
+  return range;
+}
+
+function wrapPickedSentence(doc, range) {
+  const mark = doc.createElement('span');
+  mark.className = 'pg-picked-sentence';
+  try {
+    mark.appendChild(range.extractContents());
+    range.insertNode(mark);
+  } catch (e) {
+    const parent = range.commonAncestorContainer?.nodeType === Node.TEXT_NODE
+      ? range.commonAncestorContainer.parentElement
+      : range.commonAncestorContainer;
+    parent?.classList?.add('pg-picked');
+  }
 }
 
 function stopPicking(frame) {
@@ -427,6 +659,503 @@ function stopPicking(frame) {
   doc.removeEventListener('click', doc.__pgPick.click, true);
   doc.querySelectorAll('.pg-pickable').forEach(n => n.classList.remove('pg-pickable'));
   delete doc.__pgPick;
+}
+
+function adminFindGroundTruthHtml(groundTruth, task) {
+  if (groundTruth?.error) {
+    return adminGroundTruthShell(`<div class="admin-gt-empty">Could not load Find ground truth for ${esc(task?.id || '')}: ${esc(groundTruth.error)}</div>`);
+  }
+  const hops = groundTruth?.hops && typeof groundTruth.hops === 'object' ? groundTruth.hops : null;
+  const keys = hops ? Object.keys(hops).sort((a, b) => Number(a) - Number(b)) : [];
+  const body = keys.length ? keys.map(key => {
+    const rows = Array.isArray(hops[key]) ? hops[key] : [];
+    return `
+      <div class="admin-gt-hop">
+        <div class="admin-gt-label">Hop ${esc(key)}</div>
+        ${rows.length ? rows.map(r => `
+          <div class="admin-gt-quote">${esc(r?.text || r?.answer || JSON.stringify(r))}</div>`).join('')
+        : '<div class="admin-gt-empty">No accepted span recorded.</div>'}
+      </div>`;
+  }).join('') : `<div class="admin-gt-empty">No Find ground truth row matched task id ${esc(task?.id || '')}.</div>`;
+  return adminGroundTruthShell(body);
+}
+
+function adminGuideGroundTruthHtml(record) {
+  const gt = record?.ground_truth;
+  if (!gt) return adminGroundTruthShell('<div class="admin-gt-empty">No Guide ground truth recorded for this trajectory.</div>');
+  const correctness = gt.correctness === 'success' ? 'Yes — completed the task'
+    : gt.correctness === 'failure' ? 'No — did not complete the task'
+    : gt.no_error ? 'Yes — no error'
+    : 'Not set';
+  const problems = Array.isArray(gt.problems) ? gt.problems : [];
+  const errors = Array.isArray(gt.errors) ? gt.errors : [];
+  const body = `
+    <div class="admin-gt-row"><b>Completed?</b> ${esc(correctness)}</div>
+    ${problems.length ? `
+      <div class="admin-gt-label">Problem</div>
+      ${problems.map(p => `<div class="admin-gt-pill">${esc(guideProblemLabel(p))}</div>`).join('')}` : ''}
+    ${gt.problem ? `<div class="admin-gt-quote">${esc(gt.problem)}</div>` : ''}
+    <div class="admin-gt-label">Errors</div>
+    ${gt.no_error ? '<div class="admin-gt-pill">No error — agent did this correctly</div>' : ''}
+    ${errors.length ? errors.map(e => `
+      <div class="admin-gt-quote">
+        <b>${esc(guideErrorLabel(e?.type))}</b>
+        ${Array.isArray(e?.steps) && e.steps.length ? ` · steps ${esc(e.steps.join(', '))}` : ''}
+      </div>`).join('') : (!gt.no_error ? '<div class="admin-gt-empty">No localized errors recorded.</div>' : '')}`;
+  return adminGroundTruthShell(body);
+}
+
+function adminGroundTruthShell(body) {
+  return `
+    <div class="admin-ground-truth">
+      <div class="admin-grounding-title">Ground truth</div>
+      ${body}
+    </div>`;
+}
+
+function guideProblemLabel(id) {
+  const t = (window.GUIDE_PROBLEM_TYPES || []).find(x => x.id === id);
+  return t?.label || id || 'Unknown problem';
+}
+
+function guideErrorLabel(id) {
+  const t = (window.GUIDE_ERROR_TYPES || []).find(x => x.id === id);
+  return t?.label || id || 'Unknown error';
+}
+
+function adminGroundingReviewHtml(task, canned, arm, cites, hasPage) {
+  if (arm === 'nongrounding') return '';
+  const answer = canned?.answer_display || canned?.answer_raw || '';
+  const evKeys = Array.from(new Set((canned?.evidence || []).map(e => String(e?.key || '').trim()).filter(Boolean)));
+  const citeOptions = cites.map((c, i) =>
+    `<option value="cite:${i}">Citation ${i + 1} · ${esc(c.text).slice(0, 80)}</option>`).join('');
+  const evOptions = evKeys.map(key =>
+    `<option value="ev:${esc(key)}">Evidence · ${esc(key)}</option>`).join('');
+  return `
+    <div class="admin-grounding">
+      <div class="admin-grounding-title">Review grounding</div>
+      <label class="admin-answer-edit">
+        <span>Answer text</span>
+        <textarea id="admin-answer-editor" rows="7">${esc(answer)}</textarea>
+      </label>
+      <div class="q-actions">
+        <button type="button" class="q-btn" id="admin-apply-answer">Apply answer edit</button>
+      </div>
+      <div class="admin-new-evidence">
+        <input id="admin-evidence-key" class="admin-inline-input" placeholder="evidence key">
+        <input id="admin-evidence-note" class="admin-inline-input" placeholder="evidence note">
+      </div>
+      <div class="q-actions">
+        <button type="button" class="q-btn" id="admin-add-evidence">Add/update evidence and insert marker</button>
+      </div>
+      <label class="admin-task-jump">
+        <span>Grounding item</span>
+        <select id="admin-grounding-target">${citeOptions}${evOptions}</select>
+      </label>
+      <div class="q-actions">
+        <button type="button" class="q-btn" id="admin-pick-text"${hasPage ? '' : ' disabled'}>Pick exact text</button>
+        <button type="button" class="q-btn" id="admin-pick-image"${hasPage && evOptions ? '' : ' disabled'}>Pick image</button>
+      </div>
+      <div class="admin-grounding-status" id="admin-grounding-status">No repair selected.</div>
+      <div class="q-actions">
+        <button type="button" class="q-btn q-btn-primary" id="admin-save-grounding" disabled>Save to database</button>
+        <button type="button" class="q-btn" id="admin-download-grounding" disabled>Download patch</button>
+      </div>
+    </div>`;
+}
+
+function bindAdminGroundingReview(task, canned, arm, cites) {
+  if (!S.state.adminReview || arm === 'nongrounding' || !canned) return;
+  const target = document.getElementById('admin-grounding-target');
+  const pickText = document.getElementById('admin-pick-text');
+  const pickImage = document.getElementById('admin-pick-image');
+  const save = document.getElementById('admin-save-grounding');
+  const download = document.getElementById('admin-download-grounding');
+  const status = document.getElementById('admin-grounding-status');
+  const editor = document.getElementById('admin-answer-editor');
+  const applyAnswer = document.getElementById('admin-apply-answer');
+  const evidenceKey = document.getElementById('admin-evidence-key');
+  const evidenceNote = document.getElementById('admin-evidence-note');
+  const addEvidence = document.getElementById('admin-add-evidence');
+  if (!target || !status) return;
+
+  let draft = null;
+  const frame = () => document.getElementById('find-page');
+  const setStatus = (msg, good = false) => {
+    status.textContent = msg;
+    status.classList.toggle('is-good', !!good);
+  };
+  const markDraftReady = (msg) => {
+    save.disabled = false;
+    download.disabled = false;
+    setStatus(msg, true);
+  };
+  const ensureDraft = () => draft || (draft = {
+    answer_raw: canned.answer_raw || canned.answer_display || '',
+    answer_display: canned.answer_display || canned.answer_raw || '',
+    citation_anchors: Array.isArray(canned.citation_anchors) ? cloneJSON(canned.citation_anchors) : [],
+    evidence: Array.isArray(canned.evidence) ? cloneJSON(canned.evidence) : [],
+  });
+  const refreshFromDraft = () => {
+    const d = ensureDraft();
+    canned.answer_raw = d.answer_raw;
+    canned.answer_display = d.answer_display;
+    canned.citation_anchors = d.citation_anchors;
+    canned.evidence = d.evidence;
+    renderAdminAnswerPreview(canned, arm);
+    rebuildAdminGroundingTarget(target, d);
+    rerenderFindGrounding(frame(), canned, arm);
+  };
+
+  if (applyAnswer) applyAnswer.onclick = () => {
+    const d = ensureDraft();
+    d.answer_display = editor?.value || '';
+    d.answer_raw = d.answer_display;
+    d.citation_anchors = anchorsForAnswer(d.answer_raw, d.citation_anchors);
+    refreshFromDraft();
+    markDraftReady('Answer text updated. Save when the preview looks right.');
+  };
+
+  if (addEvidence) addEvidence.onclick = () => {
+    const key = slugEvidenceKey(evidenceKey?.value);
+    if (!key) return setStatus('Give the new evidence a short key.');
+    const d = ensureDraft();
+    const note = String(evidenceNote?.value || '').trim() || key;
+    let item = d.evidence.find(e => String(e?.key || '').trim() === key);
+    if (!item) {
+      item = { key, note, source_kind: 'text', source_text: '', source_anchor: null, marks: { annotations: [], region_bbox: null } };
+      d.evidence.push(item);
+    } else {
+      item.note = note;
+    }
+    insertAtTextareaCursor(editor, `[ev:${key}]`);
+    d.answer_display = editor?.value || '';
+    d.answer_raw = d.answer_display;
+    refreshFromDraft();
+    target.value = `ev:${key}`;
+    markDraftReady(`Evidence ${key} added. Pick exact text or image for it.`);
+  };
+
+  pickText.onclick = () => {
+    const selected = selectedAdminTarget(target.value);
+    if (!selected) return setStatus('Choose a citation or evidence item before picking text.');
+    setStatus('Select the exact text in the page.');
+    startAdminTextSelection(frame(), ({ text, anchor }) => {
+      const d = ensureDraft();
+      if (selected.kind === 'cite') {
+        const before = parseFindCitations(d.answer_raw || d.answer_display);
+        d.answer_raw = replaceCitationQuote(d.answer_raw, selected.value, text);
+        d.answer_display = replaceCitationQuote(d.answer_display, selected.value, text);
+        if (editor) editor.value = d.answer_display || d.answer_raw;
+        d.citation_anchors = replaceCitationAnchor(d.answer_raw, d.citation_anchors, selected.value, anchor, before[selected.value]);
+        refreshFromDraft();
+        markDraftReady(`Citation ${selected.value + 1} will use: ${text.slice(0, 140)}${text.length > 140 ? '...' : ''}`);
+      } else {
+        const item = d.evidence.find(e => String(e?.key || '').trim() === selected.value);
+        if (!item) return setStatus(`Could not find evidence item ${selected.value}.`);
+        item.source_kind = 'text';
+        item.source_text = text;
+        item.source_anchor = Object.assign({}, anchor, { quote: text });
+        item.shot = null;
+        item.marks = { annotations: [], region_bbox: null };
+        refreshFromDraft();
+        markDraftReady(`Evidence ${selected.value} will use text: ${text.slice(0, 140)}${text.length > 140 ? '...' : ''}`);
+      }
+    });
+  };
+
+  pickImage.onclick = () => {
+    const selected = selectedAdminTarget(target.value);
+    const key = selected?.kind === 'ev' ? selected.value : '';
+    if (!key) return setStatus('Choose saved evidence before picking an image.');
+    setStatus('Click the exact image in the page.');
+    startAdminImageSelection(frame(), ({ imageId, label }) => {
+      const d = ensureDraft();
+      const item = d.evidence.find(e => String(e?.key || '').trim() === key);
+      if (!item) return setStatus(`Could not find evidence item ${key}.`);
+      item.source_image_id = imageId;
+      item.source_kind = 'image';
+      item.source_text = '';
+      item.source_anchor = null;
+      item.marks = Object.assign({ annotations: [], region_bbox: { x: 0, y: 0, w: 1, h: 1 } }, item.marks || {}, {
+        source_image_id: imageId,
+      });
+      refreshFromDraft();
+      markDraftReady(`Evidence ${key} will use ${label || imageId}.`);
+    });
+  };
+
+  save.onclick = async () => {
+    if (!draft) return;
+    save.disabled = true;
+    setStatus('Saving grounding...');
+    try {
+      await DB.updateCannedResponseGrounding(task.id, arm, draft);
+      setStatus('Saved to the database.', true);
+    } catch (e) {
+      save.disabled = false;
+      setStatus('Database save did not land. Start `node scripts/publish.mjs --serve`, paste its admin token, then save again.');
+      console.warn('[admin] grounding save failed:', e);
+    }
+  };
+
+  download.onclick = () => {
+    if (!draft) return;
+    downloadJSON({
+      task_id: task.id,
+      condition: arm,
+      patch: draft,
+    }, `review_grounding_${task.id}_${arm}.json`);
+    setStatus('Patch downloaded. Apply it with: node scripts/publish.mjs --apply-review-patch <file>');
+  };
+}
+
+function selectedAdminTarget(value, kind = null) {
+  const [got, ...rest] = String(value || '').split(':');
+  if (kind && got !== kind) return null;
+  if (got !== 'cite' && got !== 'ev') return null;
+  return { kind: got, value: got === 'cite' ? Number(rest.join(':')) : rest.join(':') };
+}
+
+function startAdminTextSelection(frame, onPick) {
+  let doc;
+  try { doc = frame?.contentDocument; } catch (e) { return; }
+  if (!doc?.body) return;
+  stopAdminSelection(frame);
+  ensureAdminPickStyle(doc);
+
+  const done = () => {
+    const sel = doc.getSelection?.();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    const text = normText(sel.toString());
+    if (!text) return;
+    const range = sel.getRangeAt(0);
+    const el = adminRangeElement(range);
+    if (!el) return;
+    const anchor = buildCitationAnchor(el, null, text);
+    clearAdminPicked(doc);
+    el.classList.add('pg-admin-context');
+    wrapAdminPickedText(doc, range);
+    stopAdminSelection(frame);
+    onPick({ text, anchor });
+  };
+  doc.addEventListener('mouseup', done, true);
+  doc.__pgAdminPick = { done };
+}
+
+function startAdminImageSelection(frame, onPick) {
+  let doc;
+  try { doc = frame?.contentDocument; } catch (e) { return; }
+  if (!doc?.body) return;
+  stopAdminSelection(frame);
+  ensureAdminPickStyle(doc);
+  let hovered = null;
+  const over = (e) => {
+    const img = e.target.closest?.('img');
+    if (img === hovered) return;
+    hovered?.classList.remove('pg-admin-pickable');
+    hovered = img;
+    hovered?.classList.add('pg-admin-pickable');
+  };
+  const click = (e) => {
+    const img = e.target.closest?.('img');
+    if (!img) return;
+    e.preventDefault();
+    e.stopPropagation();
+    clearAdminPicked(doc);
+    img.classList.add('pg-admin-picked');
+    stopAdminSelection(frame);
+    onPick({ imageId: imageIdForAdminPick(doc, img), label: img.getAttribute('alt') || img.currentSrc || '' });
+  };
+  doc.addEventListener('mouseover', over, true);
+  doc.addEventListener('click', click, true);
+  doc.__pgAdminPick = { over, click };
+}
+
+function stopAdminSelection(frame) {
+  let doc;
+  try { doc = frame?.contentDocument; } catch (e) { return; }
+  if (!doc?.__pgAdminPick) return;
+  if (doc.__pgAdminPick.done) doc.removeEventListener('mouseup', doc.__pgAdminPick.done, true);
+  if (doc.__pgAdminPick.over) doc.removeEventListener('mouseover', doc.__pgAdminPick.over, true);
+  if (doc.__pgAdminPick.click) doc.removeEventListener('click', doc.__pgAdminPick.click, true);
+  doc.querySelectorAll('.pg-admin-pickable').forEach(n => n.classList.remove('pg-admin-pickable'));
+  delete doc.__pgAdminPick;
+}
+
+function clearAdminPicked(doc) {
+  doc.querySelectorAll('.pg-admin-picked, .pg-admin-context')
+    .forEach(n => n.classList.remove('pg-admin-picked', 'pg-admin-context'));
+  doc.querySelectorAll('.pg-admin-picked-exact').forEach(mark => {
+    const parent = mark.parentNode;
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+    mark.remove();
+    parent.normalize?.();
+  });
+}
+
+function ensureAdminPickStyle(doc) {
+  if (doc.getElementById('pg-admin-pick-style')) return;
+  const style = doc.createElement('style');
+  style.id = 'pg-admin-pick-style';
+  style.textContent = `
+    .pg-admin-pickable{outline:3px dashed #168f5a!important;outline-offset:3px;cursor:pointer!important}
+    .pg-admin-context{background:rgba(120,87,255,.14)!important;outline:3px solid #7857ff!important;outline-offset:2px!important}
+    .pg-admin-picked{outline:4px solid #168f5a!important;outline-offset:3px!important}
+    .pg-admin-picked-exact{background:rgba(22,143,90,.28)!important;outline:2px solid #168f5a!important;
+      outline-offset:2px!important;border-radius:3px!important;padding:1px 3px!important;margin:0 1px!important}`;
+  doc.head?.appendChild(style);
+}
+
+function wrapAdminPickedText(doc, range) {
+  const mark = doc.createElement('span');
+  mark.className = 'pg-admin-picked-exact';
+  try {
+    mark.appendChild(range.extractContents());
+    range.insertNode(mark);
+  } catch (e) {
+    const el = adminRangeElement(range);
+    el?.classList?.add('pg-admin-picked');
+  }
+}
+
+function adminRangeElement(range) {
+  let node = range.commonAncestorContainer;
+  if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  const el = node?.nodeType === 1 ? node : null;
+  return el?.closest?.('p, li, figcaption, blockquote, h1, h2, h3, td, th, span, a') || el;
+}
+
+function buildCitationAnchor(el, index, quote) {
+  const tag = el.tagName;
+  const text = anchorTextOf(el);
+  return {
+    index,
+    quote,
+    tag,
+    text,
+    ordinal: citationAnchorOrdinal(el, tag, text),
+    truncated: semanticTextOf(el).length > PG_ANCHOR_TEXT_MAX,
+  };
+}
+
+function citationAnchorOrdinal(el, tag, text) {
+  let n = 0;
+  const all = el.ownerDocument.getElementsByTagName(tag);
+  for (let i = 0; i < all.length; i++) {
+    if (all[i] === el) return n;
+    if (anchorTextOf(all[i]) === text) n++;
+  }
+  return n;
+}
+
+function replaceCitationQuote(answer, ordinal, quote) {
+  let n = 0;
+  const safeQuote = String(quote || '').replace(/"/g, "'");
+  return String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (m, index) =>
+    n++ === ordinal ? `[${index}:"${safeQuote}"]` : m);
+}
+
+function replaceCitationAnchor(answer, anchors, ordinal, anchor, previous) {
+  const cites = parseFindCitations(answer);
+  const cite = cites[ordinal];
+  if (!cite) return anchors || [];
+  const copy = Array.isArray(anchors) ? anchors.slice() : [];
+  const oldKey = previous ? citationAnchorKey(previous.index, previous.text) : null;
+  const oldPos = oldKey
+    ? copy.findIndex(a => citationAnchorKey(a?.index, a?.quote) === oldKey)
+    : -1;
+  const next = Object.assign({}, anchor, { index: cite.index, quote: cite.text });
+  if (oldPos >= 0) copy[oldPos] = next;
+  const nextKey = citationAnchorKey(next.index, next.quote);
+  return copy.filter((a, i) => i === oldPos || citationAnchorKey(a?.index, a?.quote) !== nextKey)
+    .concat(oldPos >= 0 ? [] : [next]);
+}
+
+function renderAdminAnswerPreview(canned, arm) {
+  const answer = canned?.answer_display || canned?.answer_raw || '';
+  const answerEl = questionPane.querySelector('.find-answer');
+  if (!answerEl) return;
+  answerEl.innerHTML = answer
+    ? renderFindAnswer(answer, arm)
+    : '<em class="q-sub">No answer was recorded for this task in this arm.</em>';
+  bindFindAnswerChips(canned, arm, parseFindCitations(answer));
+}
+
+function rebuildAdminGroundingTarget(select, draft) {
+  if (!select) return;
+  const old = select.value;
+  const cites = parseFindCitations(draft.answer_display || draft.answer_raw);
+  const evKeys = Array.from(new Set((draft.evidence || []).map(e => String(e?.key || '').trim()).filter(Boolean)));
+  select.innerHTML = cites.map((c, i) =>
+    `<option value="cite:${i}">Citation ${i + 1} · ${esc(c.text).slice(0, 80)}</option>`).join('')
+    + evKeys.map(key => `<option value="ev:${esc(key)}">Evidence · ${esc(key)}</option>`).join('');
+  if (Array.from(select.options).some(o => o.value === old)) select.value = old;
+  const imageButton = document.getElementById('admin-pick-image');
+  if (imageButton) imageButton.disabled = !evKeys.length;
+}
+
+function anchorsForAnswer(answer, anchors) {
+  const needed = new Set(parseFindCitations(answer).map(c => citationAnchorKey(c.index, c.text)));
+  return (Array.isArray(anchors) ? anchors : [])
+    .filter(a => needed.has(citationAnchorKey(a?.index, a?.quote)));
+}
+
+function slugEvidenceKey(value) {
+  return String(value || '').trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48);
+}
+
+function insertAtTextareaCursor(textarea, text) {
+  if (!textarea) return;
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? start;
+  const before = textarea.value.slice(0, start);
+  const after = textarea.value.slice(end);
+  const spacer = before && !/\s$/.test(before) ? ' ' : '';
+  textarea.value = before + spacer + text + after;
+  const pos = (before + spacer + text).length;
+  textarea.focus();
+  textarea.setSelectionRange(pos, pos);
+}
+
+function imageIdForAdminPick(doc, img) {
+  const stamped = String(img.dataset?.pgImageId || '').trim();
+  if (stamped) return stamped;
+  const images = contentImagesForEvidence(doc);
+  const idx = images.indexOf(img);
+  return idx >= 0 ? `page_image_${idx + 1}` : 'viewport';
+}
+
+function contentImagesForEvidence(doc) {
+  const NOISE = /logo|icon|avatar|sprite|badge|thumb|advert|\bads?\b|banner|sponsor|placeholder/i;
+  return Array.from(doc.querySelectorAll('img')).filter(img => {
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (w < 100 || h < 100) return false;
+    return !NOISE.test(`${img.getAttribute('src') || ''} ${img.getAttribute('alt') || ''} ${img.className || ''}`);
+  });
+}
+
+function rerenderFindGrounding(frame, canned, arm) {
+  let doc;
+  try { doc = frame?.contentDocument; } catch (e) { return; }
+  if (!doc?.body) return;
+  doc.querySelectorAll('.pageguide-highlight').forEach(el => {
+    if (el.tagName === 'SPAN') el.replaceWith(doc.createTextNode(el.textContent || ''));
+    else el.classList.remove('pageguide-highlight');
+  });
+  doc.querySelectorAll('.pageguide-context').forEach(el => el.classList.remove('pageguide-context'));
+  doc.querySelectorAll('.pageguide-highlight-imgwrap').forEach(wrap => {
+    const img = wrap.querySelector('img');
+    if (img) wrap.replaceWith(img);
+  });
+  doc.querySelectorAll('.pg-annots, .pg-annot-note').forEach(el => el.remove());
+  clearAdminPicked(doc);
+  doc.querySelectorAll('[data-pg-evidence-key]').forEach(el => { delete el.dataset.pgEvidenceKey; });
+  applyFindGrounding(frame, canned, arm);
 }
 
 /** Record the Find result, then move on. Mirrors the guide half's post-task questions. */
@@ -487,6 +1216,8 @@ function bindFindAnswerChips(canned, arm, cites) {
     chip.onclick = () => {
       const item = (canned?.evidence || [])
         .find(ev => String(ev?.key || '').trim().toLowerCase() === chip.dataset.evKey.trim().toLowerCase());
+      const f = document.getElementById('find-page');
+      if (f && item?.source_kind === 'text') focusEvidenceItem(f, item);
       openEvidenceLightbox(item, chip.dataset.evKey);
     };
   });
@@ -535,6 +1266,18 @@ function parseFindCitations(answer) {
   return out;
 }
 
+function linkedFindEvidence(answer, evidence) {
+  const linked = new Set();
+  String(answer || '').replace(/\[ev:([^\]]+)\]/g, (m, key) => {
+    const clean = String(key || '').trim();
+    if (clean) linked.add(clean);
+    return m;
+  });
+  if (!linked.size) return [];
+  return (Array.isArray(evidence) ? evidence : [])
+    .filter(item => linked.has(String(item?.key || '').trim()));
+}
+
 /**
  * The answer with its markers turned into chips — what the extension shows, rather than the raw
  * "[43:\"El pedante\"]" a participant should never see.
@@ -558,7 +1301,7 @@ function renderFindAnswer(answer, arm) {
     // superscript index. The phrase is hidden until the answer is expanded — that is what clicking
     // an answer does in the panel, and it is why a citation reads as "[1]" until asked.
     // esc() has already turned the quotes into &quot;, so the pattern matches the escaped form.
-    .replace(/\[(\d+):&quot;([^&]*)&quot;\]/g, (m, index, text) => {
+    .replace(/\[(\d+):&quot;([\s\S]*?)&quot;\]/g, (m, index, text) => {
       n++;
       return `<span class="find-cite" data-cite-text="${text}" data-cite-n="${n}"
         title="Show this on the page"
@@ -603,17 +1346,19 @@ function renderMarkdown(escaped) {
  * an index only means anything if the page is re-indexed exactly as it was at record time, and one
  * lazy image or one A/B variant moves every index. The quoted sentence is the stable handle.
  *
- * Images are cited too ([39:"Title page engraving…"]), and their quoted text is the caption or alt
- * text rather than body copy — so a text miss falls back to matching img[alt] and figure captions,
- * and marks the picture itself.
+ * Image claims should be backed by explicit [ev:key] markers. Numbered citations resolve to text
+ * or captions only; if the only match is an image alt, the replay leaves the page unmarked rather
+ * than boxing a whole figure that the final answer did not explicitly link as visual evidence.
  *
  * The non-grounded arm gets nothing. That is the arm.
  */
 function applyFindGrounding(frame, canned, arm) {
   if (arm === 'nongrounding') return;
-  const answer = canned?.answer_raw || canned?.answer_display || '';
+  const answer = canned?.answer_display || canned?.answer_raw || '';
   const cites = parseFindCitations(answer);
-  if (!cites.length) return;
+  const linkedEvidence = linkedFindEvidence(answer, canned?.evidence);
+  const hasEvidenceMarks = linkedEvidence.some(hasPageLinkedEvidence);
+  if (!cites.length && !hasEvidenceMarks) return;
 
   let doc;
   try { doc = frame.contentDocument; } catch (e) { return; }
@@ -629,6 +1374,11 @@ function applyFindGrounding(frame, canned, arm) {
     .pageguide-highlight {
       background-color: color-mix(in srgb, #7857ff 16%, transparent);
       border-radius: 3px; padding: 1px 3px; margin: 0 1px;
+      scroll-margin: 90px;
+    }
+    .pageguide-context {
+      background-color: color-mix(in srgb, #7857ff 10%, transparent);
+      border-radius: 4px;
       scroll-margin: 90px;
     }
     [data-pageguide-styled] { position: relative; }
@@ -667,11 +1417,16 @@ function applyFindGrounding(frame, canned, arm) {
     .pageguide-highlight-imgwrap > img { display: block; max-width: 100%; }`;
   doc.head?.appendChild(style);
 
-  // The locators the recorder resolved on the live page, keyed by the citation number they belong
-  // to. Absent on responses banked before anchoring existed — those fall through to text search.
-  const byIndex = new Map();
+  // The locators the recorder resolved on the live page, keyed by the full citation marker. Absent
+  // on responses banked before anchoring existed — those fall through to text search.
+  const anchorsByMarker = new Map();
   (Array.isArray(canned?.citation_anchors) ? canned.citation_anchors : [])
-    .forEach(a => { if (a && a.index != null) byIndex.set(Number(a.index), a); });
+    .forEach(a => {
+      if (!a || a.index == null) return;
+      const markerKey = citationAnchorKey(a.index, a.quote);
+      if (!anchorsByMarker.has(markerKey)) anchorsByMarker.set(markerKey, []);
+      anchorsByMarker.get(markerKey).push(a);
+    });
 
   // ONE INDEX, ONE ELEMENT. Two citations can share an index — the same paragraph quoted twice —
   // and they must land on the same place, because they ARE the same place: [N] means element N.
@@ -687,10 +1442,33 @@ function applyFindGrounding(frame, canned, arm) {
   cites.forEach(cite => {
     const key = Number(cite.index);
     const already = resolvedByIndex.get(key);
-    const el = markFindCitation(doc, cite.text, cite.index, byIndex.get(key), already);
+    const anchor = takeCitationAnchor(anchorsByMarker, cite.index, cite.text);
+    const el = markFindCitation(doc, cite.text, cite.index, anchor, already);
     if (el && !already) resolvedByIndex.set(key, el);
   });
-  drawEvidenceMarks(doc, canned);
+  drawTextEvidenceMarks(doc, linkedEvidence);
+  drawEvidenceMarks(doc, linkedEvidence);
+}
+
+function drawTextEvidenceMarks(doc, evidence) {
+  const items = (Array.isArray(evidence) ? evidence : []).filter(e => e?.source_anchor || e?.source_text);
+  items.forEach(item => {
+    const text = normText(item.source_text || item.source_anchor?.quote || '');
+    if (!text) return;
+    let el = item.source_anchor ? resolveCitationAnchor(doc, item.source_anchor) : null;
+    if (!el) el = findElementBySemanticText(doc, text) || findElementContaining(doc, text.slice(0, Math.min(40, text.length)));
+    if (!el) return;
+    const marked = markCitationElement(el, text);
+    const target = marked || el;
+    target.dataset.pgEvidenceKey = item.key || '';
+  });
+}
+
+function hasPageLinkedEvidence(item) {
+  if (!item) return false;
+  if (item.source_anchor || item.source_text) return true;
+  return item.source_kind === 'image' && item.source_image_id
+    && (item?.marks?.annotations?.length || item?.marks?.region_bbox);
 }
 
 /**
@@ -705,7 +1483,7 @@ function applyFindGrounding(frame, canned, arm) {
  * Coordinates are normalized (0..1) to the source image, so they survive the snapshot being shown
  * at any width — which is why they can be replayed here at all.
  */
-function drawEvidenceMarks(doc, canned) {
+function drawEvidenceMarks(doc, evidence) {
   // ANNOTATIONS **OR** A REGION. Most recorded evidence has no drawn shapes at all: the model
   // reports what it saw and where, and gv2BuildFindEvidence stores that as `region_bbox` with a
   // `note`, leaving `annotations` empty. PEDANT-V1, MUFC-V1 and TREE-V1 are all of this kind —
@@ -715,7 +1493,8 @@ function drawEvidenceMarks(doc, canned) {
   // answer with nothing on the page to match it, while the extension drew the box and label for the
   // same record. That difference between what the researcher approved and what a participant sees
   // is the thing this whole replay exists to prevent.
-  const items = (canned?.evidence || [])
+  const items = (Array.isArray(evidence) ? evidence : [])
+    .filter(e => e?.source_kind === 'image' && e?.source_image_id)
     .filter(e => e?.marks?.annotations?.length || e?.marks?.region_bbox);
   if (!items.length) return;
 
@@ -907,6 +1686,8 @@ function _annotLabel(doc, NS, x, y, text, colour) {
   return g;
 }
 
+const PG_ANCHOR_TEXT_MAX = 400;
+
 /** Curly quotes, odd spacing and non-breaking spaces all differ between a recorded quote and the
  *  page it came from. Compare on a normalized form so they stop mattering. */
 function normText(v) {
@@ -916,6 +1697,60 @@ function normText(v) {
     .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * normText, plus a map from each character of the normalized output back to its index in the raw
+ * input.
+ *
+ * markText finds a quote by searching the NORMALIZED text of a DOM text node, then has to wrap the
+ * match in a Range against that node's RAW text. Collapsed whitespace and a trimmed leading run both
+ * change the string's length, so an offset that is correct in the normalized string lands on the
+ * wrong character once applied to the raw one \u2014 MORE wrong the further into the node the match sits,
+ * because every collapsed run before it has shifted things left. On a caption whose source text
+ * starts with leading whitespace (common in scraped/rendered HTML), this put the wrap several
+ * characters before where the quote actually starts, splicing the end of one phrase into the middle
+ * of another \u2014 visually two captions overlaid on each other.
+ *
+ * `map[i]` is the raw index that produced the i-th character of the normalized string, so a match at
+ * normalized [hit, hit+len) becomes the raw range [map[hit], map[hit+len-1]+1).
+ */
+function normTextWithMap(v) {
+  const raw = String(v == null ? '' : v);
+  const n = raw.length;
+  let start = 0;
+  while (start < n && /\s/.test(raw[start])) start++;
+  let end = n;
+  while (end > start && /\s/.test(raw[end - 1])) end--;
+
+  let text = '';
+  const map = [];
+  let inWhitespaceRun = false;
+  for (let i = start; i < end; i++) {
+    let ch = raw[i];
+    if (ch === '\u2018' || ch === '\u2019') ch = "'";
+    else if (ch === '\u201c' || ch === '\u201d') ch = '"';
+    else if (ch === '\u00a0') ch = ' ';
+    if (/\s/.test(ch)) {
+      if (inWhitespaceRun) continue;           // collapse this run to the one space already emitted
+      inWhitespaceRun = true;
+      ch = ' ';
+    } else {
+      inWhitespaceRun = false;
+    }
+    text += ch;
+    map.push(i);
+  }
+  return { text, map };
+}
+
+function citationAnchorKey(index, quote) {
+  return `${Number(index)}:${normText(quote)}`;
+}
+
+function takeCitationAnchor(map, index, quote) {
+  const list = map.get(citationAnchorKey(index, quote));
+  return list && list.length ? list.shift() : null;
 }
 
 /**
@@ -934,10 +1769,15 @@ function normText(v) {
 function markFindCitation(doc, text, index, anchor, settled) {
   const needle = normText(text);
 
-  // 0. ALREADY SETTLED. Another citation with this same index has resolved, and [N] means element N
-  // — so this one is that element too, whatever its own wording would have matched. Reuses it
-  // instead of searching again, which is what let two [69] citations disagree.
-  if (settled) { markElement(settled, needle || String(index)); return settled; }
+  // 0. ALREADY SETTLED. Another citation with this same index resolved into the same page element.
+  // Reuse that sentence/list item as the search context, not the first inline phrase that happened
+  // to be highlighted there. Otherwise two citations in one bullet — "Mark Stevens" and
+  // "S-Cubed Capital" — both end up attached to the first span.
+  if (settled) {
+    if (normText(settled.dataset?.pgCite).toLowerCase() === needle.toLowerCase()) return settled;
+    const root = citationReuseRoot(settled, needle);
+    return markCitationElement(root, needle || String(index)) || root;
+  }
 
   // 0a. THE RECORDED LOCATOR, when the response carries one. Resolved on the live page at the moment
   // the answer was banked, while the index that issued `index` was still installed — see
@@ -952,9 +1792,13 @@ function markFindCitation(doc, text, index, anchor, settled) {
     // now too, but rows published before it did are already in the database, and a locator beats
     // every fallback below — so an unchecked bad one wins outright and silently.
     if (located && anchorHoldsQuote(located, needle)) {
-      markElement(located, needle || String(index));
+      markCitationElement(located, needle || String(index));
       return located;
     }
+    // A saved locator is the authoritative address for this citation. If it fails, the old numeric
+    // index is too stale to trust; fall through to quote/semantic search instead of marking the
+    // wrong element confidently.
+    index = null;
   }
 
   // 0b. THE STAMPED ANCHOR, when the snapshot has one. `[69:"…"]` means element 69 in the page index
@@ -964,31 +1808,97 @@ function markFindCitation(doc, text, index, anchor, settled) {
   // fallback for snapshots captured before stamping existed.
   if (index != null) {
     const anchored = doc.querySelector(`[data-pg-index="${CSS.escape(String(index))}"]`);
-    if (anchored) { markElement(anchored, needle || String(index)); return anchored; }
+    if (anchored) { markCitationElement(anchored, needle || String(index)); return anchored; }
   }
 
   if (needle.length < 4) return null;       // too short to match uniquely; a false hit is worse
 
   // 1. The whole quote inside one text node — the clean case, marked precisely.
   //
-  // Returns the CONTAINING element, not the span it made, so a sibling citation with the same index
-  // reuses the paragraph rather than a fragment of it.
+  // Returns the inline mark. Same-index sibling citations climb back to a containing sentence with
+  // citationReuseRoot rather than reusing this exact phrase.
   const hit = markText(doc, needle);
-  if (hit) return hit.parentElement || null;
+  if (hit) return hit;
+
+  // 1b. The quote crosses an inline tag (a link, an <em>, ...) and so matches no single text node —
+  // see markTextAcrossNodes. Tried before the prefix/whole-element fallback below, which is what
+  // used to tint an entire paragraph for a quote that only meant one sentence in it.
+  const crossNode = markTextAcrossNodes(doc.body, needle);
+  if (crossNode) return crossNode;
 
   // 2. A prefix inside one text node. Long enough to stay distinctive, short enough to survive the
   //    markup that split the caption up.
   for (const len of [40, 25, 15]) {
     if (needle.length <= len) continue;
     const el = findElementContaining(doc, needle.slice(0, len));
-    if (el) { markElement(el, needle); return el; }
+    if (el) return markMatchedFragmentOrContext(el, needle, needle.slice(0, len));
   }
 
-  // 3. An image whose alt text carries the quote.
+  // 3. An image whose alt text carries the quote. Prefer nearby caption text; do not outline the
+  // image itself for an ordinary numbered citation.
   const img = Array.from(doc.querySelectorAll('img'))
     .find(i => normText(i.getAttribute('alt')).includes(needle.slice(0, 25)));
-  if (img) { markImage(img, needle); return img; }
+  if (img) return markImageCitationText(img, needle);
+
+  const semantic = findElementBySemanticText(doc, needle);
+  if (semantic) { markCitationElement(semantic, needle); return semantic; }
   return null;
+}
+
+/**
+ * Mark a resolved citation. The locator may name a paragraph or caption, but the quote should still
+ * light up as the phrase the answer cited. Whole-element tint is only the fallback.
+ */
+function markCitationElement(el, needle) {
+  if (!el || el.nodeType !== 1) return null;
+  if (el.matches?.('img')) return markImageCitationText(el, needle);
+  if (el.matches?.('figure')) {
+    const caption = el.querySelector?.('figcaption, [class*="caption" i]');
+    if (caption) {
+      const marked = markCitationElement(caption, needle);
+      if (marked) return marked;
+    }
+    return null;
+  }
+  if (needle && normText(needle).length >= 4) {
+    const mark = markText(el.ownerDocument, needle, el) || markTextAcrossNodes(el, needle);
+    if (mark) return mark;
+  }
+  markElement(el, needle);
+  return el;
+}
+
+function markImageCitationText(img, needle) {
+  const figure = img.closest?.('figure');
+  const caption = figure?.querySelector?.('figcaption, [class*="caption" i]')
+    || img.parentElement?.querySelector?.('figcaption, [class*="caption" i]');
+  if (!caption) return null;
+  return markCitationElement(caption, needle);
+}
+
+function markMatchedFragmentOrContext(el, needle, fragment) {
+  const mark = markText(el.ownerDocument, fragment, el) || markTextAcrossNodes(el, fragment);
+  if (mark) {
+    mark.dataset.pgCite = needle;
+    return mark;
+  }
+  markElement(el, needle);
+  return el;
+}
+
+function citationReuseRoot(el, needle) {
+  if (!el || el.nodeType !== 1) return el;
+  const q = normText(needle).toLowerCase();
+  if (!q) return el;
+  let cur = el;
+  while (cur && cur !== el.ownerDocument.body) {
+    const text = normText(cur.textContent).toLowerCase();
+    if (text.includes(q.length > 40 ? q.slice(0, 40) : q)) {
+      if (/^(P|LI|FIGCAPTION|BLOCKQUOTE|TD|TH|H1|H2|H3)$/.test(cur.tagName)) return cur;
+    }
+    cur = cur.parentElement;
+  }
+  return el;
 }
 
 /**
@@ -1001,8 +1911,43 @@ function markFindCitation(doc, text, index, anchor, settled) {
 function anchorHoldsQuote(el, quote) {
   const q = normText(quote).toLowerCase();
   if (!q) return true;                       // nothing to disprove
-  const hay = normText(el.textContent).toLowerCase();
+  const hay = semanticTextOf(el).toLowerCase();
   return hay.includes(q.length > 40 ? q.slice(0, 40) : q);
+}
+
+function anchorTextOf(el) {
+  const ownText = normText(el?.textContent);
+  return (ownText || semanticTextOf(el)).slice(0, PG_ANCHOR_TEXT_MAX);
+}
+
+function semanticTextOf(el) {
+  if (!el || el.nodeType !== 1) return '';
+  const bits = [normText(el.textContent)];
+  const attrs = ['aria-label', 'title', 'alt'];
+  const addAttrs = (node) => attrs.forEach((name) => {
+    const value = node.getAttribute?.(name);
+    if (value) bits.push(normText(value));
+  });
+  addAttrs(el);
+  el.querySelectorAll?.('[aria-label], [title], [alt]').forEach(addAttrs);
+  return normText(bits.filter(Boolean).join(' '));
+}
+
+function citationEvidenceElement(el, quote) {
+  if (!el || el.nodeType !== 1) return el;
+  if (normText(el.textContent)) return el;
+  let cur = el.parentElement;
+  let best = el;
+  while (cur && cur !== el.ownerDocument.body) {
+    if (!anchorHoldsQuote(cur, quote)) break;
+    const text = normText(cur.textContent);
+    if (text && text.length <= 600) {
+      best = cur;
+      if (/^(TD|TH|LI|P|FIGCAPTION|FIGURE|TR)$/.test(cur.tagName)) return cur;
+    }
+    cur = cur.parentElement;
+  }
+  return best;
 }
 
 /**
@@ -1026,7 +1971,7 @@ function resolveCitationAnchor(doc, anchor) {
   const all = doc.getElementsByTagName(anchor.tag);
   const matches = [];
   for (let i = 0; i < all.length; i++) {
-    const t = normText(all[i].textContent);
+    const t = anchorTextOf(all[i]);
     // A truncated locator kept only the first PG_ANCHOR_TEXT_MAX characters, so prefix is the only
     // comparison it supports; an untruncated one must match whole, or "El pedante" would match the
     // caption that merely starts with it.
@@ -1035,7 +1980,8 @@ function resolveCitationAnchor(doc, anchor) {
   if (!matches.length) return null;
   // Out of range means the snapshot and the recording disagree about the page — better to fall
   // through to text search than to mark a confidently wrong element.
-  return matches[anchor.ordinal] || (matches.length === 1 ? matches[0] : null);
+  const el = matches[anchor.ordinal] || (matches.length === 1 ? matches[0] : null);
+  return el ? citationEvidenceElement(el, anchor?.quote || '') : null;
 }
 
 /**
@@ -1062,8 +2008,29 @@ function findElementContaining(doc, fragment) {
     normText(a.textContent).length - normText(b.textContent).length)[0] || null;
 }
 
+function findElementBySemanticText(doc, fragment) {
+  const q = normText(fragment);
+  if (q.length < 4) return null;
+  const probe = (q.length > 40 ? q.slice(0, 40) : q).toLowerCase();
+  const matches = [];
+  const all = doc.body ? doc.body.getElementsByTagName('*') : [];
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    if (!el.querySelector?.('[aria-label], [title], [alt]') && !el.matches?.('[aria-label], [title], [alt]')) continue;
+    const t = semanticTextOf(el);
+    const lower = t.toLowerCase();
+    if (!lower.includes(probe)) continue;
+    const exact = lower === probe;
+    if (!exact && t.length > Math.max(600, q.length * 8)) continue;
+    matches.push({ el, len: t.length, exact });
+  }
+  matches.sort((a, b) => Number(b.exact) - Number(a.exact) || a.len - b.len);
+  const best = matches[0]?.el || null;
+  return best ? citationEvidenceElement(best, q) : null;
+}
+
 /**
- * Highlight an element, and outline the picture it describes.
+ * Highlight a text element. Visual evidence is drawn only from explicit [ev:key] links.
  *
  * A caption is rarely a sibling of its image. On this page the marked text is a <p> inside
  * .essay__image__caption, and the <img> lives two levels further up in .essay__center-content —
@@ -1074,25 +2041,9 @@ function findElementContaining(doc, fragment) {
  * where it would confidently outline the site's logo.
  */
 function markElement(el, needle) {
-  el.classList.add('pageguide-highlight');
+  el.classList.add('pageguide-context');
   el.setAttribute('data-pageguide-styled', '');
   el.dataset.pgCite = needle;
-
-  // THE PICTURE THIS CITATION IS ABOUT — if there is one, and only if it is genuinely this one.
-  //
-  // This used to climb four ancestors and mark the first <img> anywhere beneath any of them. On an
-  // article whose sections wrap several blocks, that reaches an unrelated photograph: SVSF-V1's
-  // citation resolved correctly onto "Musk has spoken of how science fiction shaped his
-  // ambitions…", then the climb found a Cybertruck picture in a shared wrapper and outlined THAT.
-  // The data was right; the marking went looking.
-  //
-  // A caption belongs to its figure, and that is the only relationship worth honouring: an image
-  // inside the cited element, or the image of the <figure> the cited element is a caption for.
-  // Anything further away is proximity, not evidence.
-  const own = el.querySelector?.('img');
-  const figure = el.closest?.('figure');
-  const img = own || (figure ? figure.querySelector('img') : null);
-  if (img) markImage(img, needle);
 }
 
 /**
@@ -1136,9 +2087,7 @@ function focusFindCitation(frame, text, sticky = true) {
   // substring search in document order therefore sent the chip for the play to the picture of its
   // title page — the wrong evidence, pointed at confidently. Each mark records the exact quote it
   // was created for, so that is what is matched on before anything looser is tried.
-  const target = marks.find(el => normText(el.dataset.pgCite).toLowerCase() === needle)
-    || marks.find(el => normText(el.dataset.pgCite).toLowerCase().includes(needle.slice(0, 40)))
-    || marks.find(el => normText(el.textContent).toLowerCase().includes(needle.slice(0, 40)));
+  const target = bestCitationFocusTarget(marks, needle);
   if (!target) return;
 
   clearFindFocus(doc);
@@ -1154,6 +2103,36 @@ function focusFindCitation(frame, text, sticky = true) {
   if (sticky) target.scrollIntoView({ block: 'start' });
 }
 
+function bestCitationFocusTarget(marks, needle) {
+  const probe = needle.slice(0, 40);
+  const candidates = [];
+  marks.forEach(el => {
+    const cite = normText(el.dataset.pgCite).toLowerCase();
+    const text = normText(el.textContent).toLowerCase();
+    if (cite === needle) candidates.push({ el, rank: 0, len: text.length || cite.length });
+    else if (cite && cite.includes(probe)) candidates.push({ el, rank: 1, len: text.length || cite.length });
+    else if (probe && text.includes(probe)) candidates.push({ el, rank: 2, len: text.length });
+  });
+  candidates.sort((a, b) => a.rank - b.rank || a.len - b.len);
+  return candidates[0]?.el || null;
+}
+
+function focusEvidenceItem(frame, item) {
+  let doc;
+  try { doc = frame.contentDocument; } catch (e) { return; }
+  if (!doc) return;
+  const key = String(item?.key || '');
+  const text = normText(item?.source_text || item?.source_anchor?.quote || '').toLowerCase();
+  const marks = Array.from(doc.querySelectorAll('[data-pageguide-styled]'));
+  const target = marks.find(el => String(el.dataset.pgEvidenceKey || '') === key)
+    || (text ? marks.find(el => normText(el.dataset.pgCite).toLowerCase() === text) : null)
+    || (text ? marks.find(el => normText(el.textContent).toLowerCase().includes(text.slice(0, 40))) : null);
+  if (!target) return;
+  clearFindFocus(doc);
+  target.classList.add('pageguide-preview-target');
+  target.scrollIntoView({ block: 'start' });
+}
+
 /** Only one thing is ever pointed at, so the badge cannot appear twice at once. */
 function clearFindFocus(doc) {
   if (!doc) return;
@@ -1162,16 +2141,20 @@ function clearFindFocus(doc) {
 }
 
 /** Wrap the first occurrence of `needle` in a highlight. Returns whether it matched. */
-function markText(doc, needle) {
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+function markText(doc, needle, root = doc.body) {
+  const walker = doc.createTreeWalker(root || doc.body, NodeFilter.SHOW_TEXT);
   const target = normText(needle).toLowerCase();
   let node;
   while ((node = walker.nextNode())) {
-    const hit = normText(node.nodeValue).toLowerCase().indexOf(target);
-    if (hit < 0) continue;
+    // Search the NORMALIZED text, but a Range needs RAW offsets — normTextWithMap keeps the two in
+    // sync (see its comment) so the wrap lands on the actual quote instead of drifting onto
+    // whatever the raw text happens to have at that character count.
+    const { text: normed, map } = normTextWithMap(node.nodeValue);
+    const hit = normed.toLowerCase().indexOf(target);
+    if (hit < 0 || !target.length) continue;
     const range = doc.createRange();
-    range.setStart(node, hit);
-    range.setEnd(node, hit + needle.length);
+    range.setStart(node, map[hit]);
+    range.setEnd(node, map[hit + target.length - 1] + 1);
     const mark = doc.createElement('span');
     mark.className = 'pageguide-highlight';
     mark.setAttribute('data-pageguide-styled', '');
@@ -1186,6 +2169,73 @@ function markText(doc, needle) {
 }
 
 /**
+ * Flatten every text node under `root` into one string, mapping each character back to the
+ * (node, offset) that produced it — the same idea as normTextWithMap, extended across an entire
+ * subtree instead of one text node. Mirrors _pgFlattenTextWithMap in the extension's
+ * content/functions/highlight.js; the two must agree, or a locator anchored on the live page and a
+ * mark drawn from it here would disagree about which characters the quote covers.
+ */
+function flattenSubtreeWithMap(root) {
+  const doc = root.ownerDocument || document;
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let text = '';
+  const map = [];
+  let node;
+  let inWhitespaceRun = false;
+  while ((node = walker.nextNode())) {
+    if (node.parentElement?.closest?.('[data-pageguide-styled]')) continue;
+    const value = node.nodeValue || '';
+    for (let i = 0; i < value.length; i++) {
+      let ch = value[i];
+      if (ch === '‘' || ch === '’') ch = "'";
+      else if (ch === '“' || ch === '”') ch = '"';
+      else if (ch === ' ') ch = ' ';
+      if (/\s/.test(ch)) {
+        if (inWhitespaceRun) continue;
+        inWhitespaceRun = true;
+        ch = ' ';
+      } else {
+        inWhitespaceRun = false;
+      }
+      text += ch;
+      map.push({ node, offset: i });
+    }
+  }
+  return { text, map };
+}
+
+/**
+ * Wrap `needle` inside `root` even when it spans SIBLING text nodes separated by an inline tag —
+ * markText only ever searches one text node, so a quote like "near aphelion and in conjunction
+ * with the Sun" (which crosses the <a>aphelion</a> and <a>conjunction</a> links) matches nothing
+ * there. Without this, markCitationElement's only remaining move was markElement — tinting the
+ * WHOLE resolved element, which for a snapshot's paragraph is not one sentence but the entire
+ * paragraph, visually swallowing any other citation already precisely highlighted inside it.
+ */
+function markTextAcrossNodes(root, needle) {
+  if (!root) return null;
+  const target = normText(needle).toLowerCase();
+  if (!target) return null;
+  const { text, map } = flattenSubtreeWithMap(root);
+  if (!map.length) return null;
+  const hit = text.toLowerCase().indexOf(target);
+  if (hit < 0) return null;
+  const startPos = map[hit];
+  const endPos = map[hit + target.length - 1];
+  if (!startPos || !endPos) return null;
+  const doc = root.ownerDocument || document;
+  const range = doc.createRange();
+  range.setStart(startPos.node, startPos.offset);
+  range.setEnd(endPos.node, endPos.offset + 1);
+  const mark = doc.createElement('span');
+  mark.className = 'pageguide-highlight';
+  mark.setAttribute('data-pageguide-styled', '');
+  mark.dataset.pgCite = needle;
+  try { range.surroundContents(mark); } catch (e) { return null; }  // malformed/overlapping markup
+  return mark;
+}
+
+/**
  * The saved evidence crop, full size.
  *
  * Mirrors openMemoryShotLightbox in the panel: the picture, what it was saved as, and the note that
@@ -1197,6 +2247,7 @@ function openEvidenceLightbox(item, key) {
   const overlay = document.createElement('div');
   overlay.id = 'find-ev-lightbox';
   overlay.className = 'ev-lightbox';
+  const textEvidence = normText(item?.source_text || item?.source_anchor?.quote || '');
   overlay.innerHTML = `
     <div class="ev-dialog" role="dialog" aria-modal="true" aria-label="Saved evidence">
       <div class="ev-head">
@@ -1205,7 +2256,9 @@ function openEvidenceLightbox(item, key) {
       </div>
       ${item?.shot
         ? `<img src="data:image/jpeg;base64,${item.shot}" alt="${esc(item.note || key || 'evidence')}">`
-        : '<p class="ev-empty">No image was saved with this evidence.</p>'}
+        : textEvidence
+          ? `<blockquote class="ev-quote">${esc(textEvidence)}</blockquote>`
+          : '<p class="ev-empty">No image or text span was saved with this evidence.</p>'}
       ${item?.note ? `<div class="ev-note">${esc(item.note)}</div>` : ''}
     </div>`;
   overlay.addEventListener('click', (e) => {
@@ -1224,10 +2277,33 @@ function esc(v) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function cloneJSON(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function downloadJSON(value, filename) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 /** Prev/Next/Exit, for paging through the material without answering anything. */
 function adminNavHtml() {
   if (!S.state.adminReview) return '';
+  const queue = Array.isArray(S.state.queue) ? S.state.queue : [];
   return `
+    <label class="admin-task-jump">
+      <span>Jump to task</span>
+      <select id="admin-task-jump">
+        ${queue.map((task, i) => `
+          <option value="${i}"${i === S.state.idx ? ' selected' : ''}>
+            ${esc(adminTaskLabel(task, i, queue.length))}
+          </option>`).join('')}
+      </select>
+    </label>
     <div class="q-actions">
       <button class="q-btn" id="admin-prev"${S.state.idx === 0 ? ' disabled' : ''}>← Prev</button>
       <button class="q-btn q-btn-primary" id="admin-next">Next →</button>
@@ -1237,12 +2313,26 @@ function adminNavHtml() {
 
 function bindAdminNav() {
   if (!S.state.adminReview) return;
+  const jump = document.getElementById('admin-task-jump');
   const prev = document.getElementById('admin-prev');
   const next = document.getElementById('admin-next');
   const quit = document.getElementById('admin-quit');
+  if (jump) jump.onchange = () => {
+    const idx = Number(jump.value);
+    if (!Number.isFinite(idx)) return;
+    S.state.idx = Math.max(0, Math.min((S.state.queue || []).length - 1, idx));
+    S.saveReview();
+    showTask();
+  };
   if (prev) prev.onclick = () => { S.state.idx = Math.max(0, S.state.idx - 1); S.saveReview(); showTask(); };
   if (next) next.onclick = () => { S.state.idx++; S.saveReview(); showTask(); };
   if (quit) quit.onclick = () => { S.clearReview(); location.href = 'index.html'; };
+}
+
+function adminTaskLabel(task, i, total) {
+  const id = task?.id || `Task ${i + 1}`;
+  const type = task?.taskType === 'find' ? 'Find' : 'Guide';
+  return `${i + 1}/${total} · ${id} · ${type}`;
 }
 
 /**
