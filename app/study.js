@@ -171,39 +171,318 @@ async function showFindTask(task) {
   }
 
   const cites = parseFindCitations(answer);
-  questionPane.innerHTML = `
-    <div class="q-head"><span class="q-title">🔍 Find task</span></div>
-    <div class="q-progress">Task ${idx + 1}/${queue.length}${S.state.adminReview ? ' · review' : ''}</div>
-    <div class="q-body">
-      <p class="q-text">${esc(task.question || '')}</p>
-      <div class="q-card" style="margin-top:12px;">
-        <div class="q-card-head"><span class="q-badge">A</span>
-          <p class="q-text">The agent's answer${arm === 'nongrounding' ? ' (non-grounded)' : ''}</p></div>
-        <div class="find-answer">${answer
-          ? renderFindAnswer(answer, arm)
-          : '<em class="q-sub">No answer was recorded for this task in this arm.</em>'}</div>
-      </div>
-      <p class="q-sub">${S.state.adminReview ? 'Review mode — nothing is recorded.' : 'Read-only preview.'}</p>
-      ${adminNavHtml()}
-    </div>`;
-  bindAdminNav();
 
-  // Clicking a chip scrolls the snapshot to what that claim rests on — the gesture the extension
-  // gives on the live page.
-  // Clicking the answer opens its citations out into the phrases they point at — the panel's
-  // gesture, and the reason a citation reads as a bare "[1]" until asked.
+  // A REVIEWER previews; a PARTICIPANT answers. Review mode deliberately shows no questions and no
+  // timer: it exists to check the material, and a reviewer filling in Q1 sixteen times would be
+  // producing answers that look exactly like data.
+  if (S.state.adminReview) {
+    questionPane.innerHTML = `
+      <div class="q-head"><span class="q-title">🔍 Find task</span></div>
+      <div class="q-progress">Task ${idx + 1}/${queue.length} · review</div>
+      <div class="q-body">
+        <p class="q-text">${esc(task.question || '')}</p>
+        ${answerCardHtml(answer, arm)}
+        <p class="q-sub">Review mode — nothing is recorded.</p>
+        ${adminNavHtml()}
+      </div>`;
+    bindFindAnswerChips(canned, arm, cites);
+    bindAdminNav();
+    return;
+  }
+
+  renderFindQuestions(task, canned, answer, arm, cites);
+}
+
+/** The agent's recorded answer, rendered with its citations and evidence. */
+function answerCardHtml(answer, arm) {
+  return `
+    <div class="q-card" style="margin-top:12px;">
+      <div class="q-card-head"><span class="q-badge">A</span>
+        <p class="q-text">The agent's answer${arm === 'nongrounding' ? ' (non-grounded)' : ''}</p></div>
+      <div class="find-answer">${answer
+        ? renderFindAnswer(answer, arm)
+        : '<em class="q-sub">No answer was recorded for this task in this arm.</em>'}</div>
+    </div>`;
+}
+
+/**
+ * The participant's Find task: read the answer, pick one, then point at what supports it.
+ *
+ * Two stages, two timers, and no way past either without answering — see the header of
+ * app/find_task.js for why both of those matter.
+ */
+function renderFindQuestions(task, canned, answer, arm, cites) {
+  const { idx, queue } = S.state;
+  const options = window.FindTask.answerOptions(task);
+  const hops = window.FindTask.evidencePrompts(task);
+  const startedAt = Date.now();
+  let choiceElapsed = null;
+  let supportStartedAt = null;
+  let answerTimer = null;
+  let supportTimer = null;
+  const picked = [null, null];   // one evidence selection per hop
+
+  questionPane.innerHTML = `
+    <div class="q-head"><span class="q-title">🔍 Find the answer</span></div>
+    <div class="q-progress">Task ${idx + 1}/${queue.length} · 🔍 Find Information</div>
+    <div class="q-body">
+      <div class="q-task-card">${esc(task.question || '')}</div>
+
+      <div class="q-timers">
+        <div class="q-timer-row" id="q-answer-timer-row">
+          <span class="q-timer-label">🔍 Finding the answer</span>
+          <span class="q-timer" id="q-answer-timer">00:00</span>
+        </div>
+        <div class="q-timer-row" id="q-support-timer-row" hidden>
+          <span class="q-timer-label">🔎 Finding the evidence</span>
+          <span class="q-timer" id="q-support-timer">00:00</span>
+        </div>
+      </div>
+
+      ${answerCardHtml(answer, arm)}
+
+      <div class="q-card">
+        <div class="q-card-head"><span class="q-badge">Q1</span>
+          <p class="q-text">Select the answer you found:</p></div>
+        <div class="q-options" id="q-find-answer">
+          ${options.map((opt, i) => `
+            <label class="q-opt q-opt-rich">
+              <input type="radio" name="q-find-answer" value="${esc(opt)}">
+              <span class="q-opt-body"><span>${esc(opt)}</span></span>
+            </label>`).join('')}
+        </div>
+      </div>
+
+      <div id="q-support-stage" hidden>
+        ${hops.map((hop, i) => `
+          <div class="q-card">
+            <div class="q-card-head"><span class="q-badge">Q${i + 2}</span>
+              <p class="q-text">${esc(hop.prompt)}</p></div>
+            <p class="q-sub" id="q-hop-hint-${i}">${hop.kind === 'image'
+              ? 'Click the image in the page on the left.'
+              : 'Click the sentence or paragraph in the page on the left.'}</p>
+            <div class="q-picked" id="q-picked-${i}">Nothing selected yet.</div>
+            <button class="q-btn" data-pick-hop="${i}">${hop.kind === 'image'
+              ? '🖼 Pick an image' : '✏️ Pick a passage'}</button>
+          </div>`).join('')}
+      </div>
+
+      <div class="q-error-msg" id="q-error-msg" hidden></div>
+      <div class="q-actions">
+        <button class="q-btn q-btn-primary" id="q-find-next">Next →</button>
+        <button class="q-btn q-btn-primary" id="q-find-submit" hidden>Submit →</button>
+      </div>
+    </div>`;
+
+  bindFindAnswerChips(canned, arm, cites);
+
+  const $q = (id) => questionPane.querySelector(`#${id}`);
+  const errorEl = $q('q-error-msg');
+  const showError = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
+  const clearError = () => { errorEl.hidden = true; };
+
+  answerTimer = setInterval(() => {
+    $q('q-answer-timer').textContent = fmtClock(Date.now() - startedAt);
+  }, 1000);
+
+  // ── Picking evidence in the page ──
+  // The snapshot is same-origin, so a click inside it can be read. That is the whole reason the
+  // snapshot exists rather than a screenshot: the participant points at the real thing.
+  let pickingHop = null;
+  const frame = () => document.getElementById('find-page');
+
+  const setPicked = (hop, value, label) => {
+    picked[hop] = value;
+    const box = $q(`q-picked-${hop}`);
+    if (box) {
+      box.textContent = label;
+      box.classList.add('is-picked');
+    }
+  };
+
+  questionPane.querySelectorAll('[data-pick-hop]').forEach(btn => {
+    btn.onclick = () => {
+      pickingHop = Number(btn.dataset.pickHop);
+      const kind = hops[pickingHop].kind;
+      questionPane.querySelectorAll('[data-pick-hop]').forEach(b => b.classList.remove('is-picking'));
+      btn.classList.add('is-picking');
+      startPicking(frame(), kind, (value, label) => {
+        setPicked(pickingHop, value, label);
+        btn.classList.remove('is-picking');
+        pickingHop = null;
+      });
+    };
+  });
+
+  $q('q-find-next').onclick = () => {
+    const sel = questionPane.querySelector('input[name="q-find-answer"]:checked');
+    if (!sel) return showError('Please select the answer you found.');
+    clearError();
+
+    choiceElapsed = Math.max(0, Date.now() - startedAt);
+    supportStartedAt = Date.now();
+    $q('q-support-stage').hidden = false;
+    $q('q-find-next').hidden = true;
+    $q('q-find-submit').hidden = false;
+    clearInterval(answerTimer); answerTimer = null;
+    $q('q-answer-timer-row').hidden = true;
+    $q('q-support-timer-row').hidden = false;
+    supportTimer = setInterval(() => {
+      $q('q-support-timer').textContent = fmtClock(Date.now() - supportStartedAt);
+    }, 1000);
+    $q('q-support-stage').scrollIntoView({ block: 'nearest' });
+  };
+
+  $q('q-find-submit').onclick = async () => {
+    // EVERY hop, not just one. A half-answered pair cannot be reconstructed afterwards, and a
+    // participant who could submit with one blank would do it without noticing.
+    const missing = picked.findIndex(v => !v);
+    if (missing >= 0) return showError(`Please answer Q${missing + 2} — ${hops[missing].kind === 'image'
+      ? 'pick the image in the page' : 'pick the passage in the page'}.`);
+    clearError();
+
+    clearInterval(answerTimer);
+    clearInterval(supportTimer);
+    stopPicking(frame());
+
+    const sel = questionPane.querySelector('input[name="q-find-answer"]:checked');
+    await submitFindResult(task, {
+      answer: sel.value,
+      answerElapsed: Math.max(0, Date.now() - startedAt),
+      answerChoiceMs: choiceElapsed,
+      findSupportingMs: supportStartedAt == null ? null : Math.max(0, Date.now() - supportStartedAt),
+      evidenceResponses: picked.map((v, i) => ({ hop: i + 1, prompt: hops[i].prompt, kind: hops[i].kind, ...v })),
+    });
+  };
+}
+
+/** mm:ss, matching the extension's clock. */
+function fmtClock(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Let the participant click something inside the snapshot.
+ *
+ * Hover outlines what would be picked and a click takes it. Paragraph picking walks up to the
+ * nearest block so a click on one word selects the sentence it is in rather than the word — the
+ * question asks which passage, and a one-word answer could not be scored against a ground truth
+ * written as sentences.
+ */
+function startPicking(frame, kind, onPick) {
+  let doc;
+  try { doc = frame?.contentDocument; } catch (e) { return; }
+  if (!doc?.body) return;
+  stopPicking(frame);
+
+  if (!doc.getElementById('pg-pick-style')) {
+    const style = doc.createElement('style');
+    style.id = 'pg-pick-style';
+    style.textContent = `
+      .pg-pickable{outline:2px dashed #7857ff!important;outline-offset:2px;cursor:pointer!important;
+        background:rgba(120,87,255,.10)!important}
+      .pg-picked{outline:3px solid #168f5a!important;outline-offset:2px;
+        background:rgba(22,143,90,.14)!important}`;
+    doc.head?.appendChild(style);
+  }
+
+  const SEL = kind === 'image' ? 'img' : 'p, li, figcaption, blockquote, h1, h2, h3, td';
+  let hovered = null;
+
+  const over = (e) => {
+    const el = e.target.closest?.(SEL);
+    if (el === hovered) return;
+    hovered?.classList.remove('pg-pickable');
+    hovered = el;
+    hovered?.classList.add('pg-pickable');
+  };
+  const click = (e) => {
+    const el = e.target.closest?.(SEL);
+    if (!el) return;
+    e.preventDefault();
+    e.stopPropagation();
+    doc.querySelectorAll('.pg-picked').forEach(n => n.classList.remove('pg-picked'));
+    el.classList.remove('pg-pickable');
+    el.classList.add('pg-picked');
+    hovered = null;
+    const text = (el.getAttribute?.('alt') || el.textContent || '').replace(/\s+/g, ' ').trim();
+    onPick(
+      { text: text.slice(0, 600), tag: el.tagName.toLowerCase() },
+      text ? text.slice(0, 120) + (text.length > 120 ? '…' : '') : `(${el.tagName.toLowerCase()})`
+    );
+    stopPicking(frame);
+  };
+
+  doc.addEventListener('mouseover', over, true);
+  doc.addEventListener('click', click, true);
+  doc.__pgPick = { over, click };
+}
+
+function stopPicking(frame) {
+  let doc;
+  try { doc = frame?.contentDocument; } catch (e) { return; }
+  if (!doc?.__pgPick) return;
+  doc.removeEventListener('mouseover', doc.__pgPick.over, true);
+  doc.removeEventListener('click', doc.__pgPick.click, true);
+  doc.querySelectorAll('.pg-pickable').forEach(n => n.classList.remove('pg-pickable'));
+  delete doc.__pgPick;
+}
+
+/** Record the Find result, then move on. Mirrors the guide half's post-task questions. */
+async function submitFindResult(task, payload) {
+  questionPane.innerHTML = `
+    <div class="q-head"><span class="q-title">Quick questions</span></div>
+    <div class="q-body">
+      <p class="q-text">How confident are you in your answer?</p>
+      <div class="q-options" id="q-conf">
+        ${[['very', '😎 Very confident'], ['somewhat', '🙂 Somewhat confident'],
+           ['notsure', '😐 Not sure'], ['guessed', '🤷 Just guessing']]
+          .map(([v, l]) => `<label class="q-opt"><input type="radio" name="q-conf" value="${v}"><span>${l}</span></label>`).join('')}
+      </div>
+      <p class="q-text" style="margin-top:16px;">How helpful was what you were shown?</p>
+      <div class="q-options" id="q-help">
+        ${[['very', '⭐⭐⭐ Very helpful'], ['somewhat', '⭐⭐ Somewhat helpful'],
+           ['notmuch', '⭐ Not very helpful'], ['notatall', 'Not helpful at all']]
+          .map(([v, l]) => `<label class="q-opt"><input type="radio" name="q-help" value="${v}"><span>${l}</span></label>`).join('')}
+      </div>
+      <div class="q-error-msg" id="q-error-msg" hidden></div>
+      <div class="q-actions"><button class="q-btn q-btn-primary" id="q-find-done">Next task →</button></div>
+    </div>`;
+
+  document.getElementById('q-find-done').onclick = async () => {
+    const conf = questionPane.querySelector('input[name="q-conf"]:checked');
+    const help = questionPane.querySelector('input[name="q-help"]:checked');
+    const err = document.getElementById('q-error-msg');
+    if (!conf || !help) { err.textContent = 'Please answer both questions.'; err.hidden = false; return; }
+
+    const row = S.buildFindResultRow({
+      task, payload, confidence: conf.value, helpfulness: help.value,
+    });
+    S.state.results.push(row);
+    S.state.idx++;
+    if (!window.STUDY_SOURCE && !S.state.adminReview) S.saveLocal();
+    try {
+      await DB.insertStudyResult(row);
+    } catch (e) {
+      console.warn('[study] result kept locally only:', e);
+    }
+    showTask();
+  };
+}
+
+/** The citation and evidence chips inside a rendered answer. Shared by review and participant. */
+function bindFindAnswerChips(canned, arm, cites) {
   const answerEl = questionPane.querySelector('.find-answer');
   if (answerEl && cites.length) {
     answerEl.classList.add('pageguide-clickable');
     answerEl.title = 'Click to show the cited phrases';
     answerEl.onclick = (e) => {
-      if (e.target.closest('.find-cite')) return;   // a chip click is a different gesture
+      if (e.target.closest('.find-cite')) return;
       answerEl.classList.toggle('citations-expanded');
     };
   }
 
-  // Evidence opens its crop. Nothing else can be done with it honestly: the note describes the
-  // region rather than quoting it, so there is no text to find in the page.
   questionPane.querySelectorAll('.find-ev').forEach(chip => {
     chip.onclick = () => {
       const item = (canned?.evidence || [])
@@ -228,8 +507,6 @@ async function showFindTask(task) {
     chip.onclick = () => {
       const f = frame();
       if (!f) return;
-      // Only one citation is active at a time, in the answer and in the page alike — two lit
-      // phrases would say two different things were being pointed at.
       questionPane.querySelectorAll('.find-cite').forEach(c => {
         delete c.dataset.pinned;
         c.classList.remove('find-cite-active');
@@ -410,10 +687,18 @@ function drawEvidenceMarks(doc, canned) {
   const items = (canned?.evidence || []).filter(e => e?.marks?.annotations?.length);
   if (!items.length) return;
 
-  // "page_image_1" is the first content image on the page. Icons and logos are excluded by size:
-  // an annotation was drawn on something big enough to draw on.
-  const contentImages = Array.from(doc.querySelectorAll('img'))
-    .filter(img => (img.naturalWidth || img.width || 0) >= 200);
+  // "page_image_N" is the Nth image AS THE RECORDER COUNTED THEM, so the same rule has to be used
+  // here or the annotation lands on a different picture. The recorder's rule is
+  // GV2_FIND_MEDIA_MIN_PX / GV2_FIND_MEDIA_NOISE (content/utils.js): at least 100px on both sides,
+  // and not something whose URL or alt marks it as chrome. Guessing at ">= 200px" put Tesla's
+  // page_image_6 on the wrong image entirely.
+  const NOISE = /logo|icon|avatar|sprite|badge|thumb|advert|\bads?\b|banner|sponsor|placeholder/i;
+  const contentImages = Array.from(doc.querySelectorAll('img')).filter(img => {
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (w < 100 || h < 100) return false;
+    return !NOISE.test(`${img.getAttribute('src') || ''} ${img.getAttribute('alt') || ''} ${img.className || ''}`);
+  });
 
   items.forEach(item => {
     const n = Number(String(item.source_image_id || '').match(/(\d+)$/)?.[1] || 1);
@@ -542,16 +827,26 @@ function markFindCitation(doc, text) {
   if (img) markImage(img, needle);
 }
 
-/** The smallest element whose own text contains `fragment`. */
+/**
+ * The smallest element whose own text contains `fragment`, or null.
+ *
+ * BOUNDED, and that is the point. A quote that is not in the page verbatim — "Foundation series"
+ * where the page writes "*Foundation* series", split by an <em> — falls through to searching whole
+ * elements, and the smallest element containing a common word like "Foundation" can still be an
+ * entire section. Marking that says "the evidence is somewhere in these six paragraphs", which
+ * looks like a confident answer and is not one. A missing highlight is better than a wrong one, so
+ * a candidate more than ~6× the fragment is refused.
+ */
 function findElementContaining(doc, fragment) {
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
   let node;
   while ((node = walker.nextNode())) {
     if (normText(node.nodeValue).includes(fragment)) return node.parentElement;
   }
-  // Split across children: fall back to the smallest element whose combined text has it.
-  const candidates = Array.from(doc.querySelectorAll('figcaption, p, li, td, div, span, figure'))
-    .filter(el => normText(el.textContent).includes(fragment));
+  const maxLength = Math.max(160, fragment.length * 6);
+  const candidates = Array.from(doc.querySelectorAll('figcaption, p, li, td, span, h1, h2, h3'))
+    .filter(el => normText(el.textContent).includes(fragment))
+    .filter(el => normText(el.textContent).length <= maxLength);
   return candidates.sort((a, b) =>
     normText(a.textContent).length - normText(b.textContent).length)[0] || null;
 }
