@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PageGuide User Study — demo</title>
+  <link rel="stylesheet" href="styles/stimulus.css">
+  <link rel="stylesheet" href="styles/site.css">
+  <style>
+    /* Unmistakable. A demo that looks like the study is a demo someone runs a participant through. */
+    .demo-banner {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+      background: #8a5300; color: #fff;
+      font: 700 12px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: 6px 14px; display: flex; gap: 14px; align-items: center;
+    }
+    .demo-banner a { color: #ffe0a8; }
+    .demo-shift { padding-top: 29px; }
+  </style>
+</head>
+<body class="demo-shift">
+  <!--
+    THE DEMO. Three fixture trajectories, no network, nothing written anywhere.
+
+    It runs the REAL flow: app/study.js walks the queue, app/stimulus.js renders the material,
+    app/instrument.js asks the questions, and the vendored scorer grades the answers. Only the data
+    source is swapped (window.STUDY_SOURCE, read once at the top of app/study.js). A demo built as a
+    parallel implementation would drift from the study it is meant to demonstrate, and you would be
+    reviewing something no participant will ever see.
+
+    ?arm=nongrounding runs the text condition.
+  -->
+  <div class="demo-banner">
+    <span>⚠ DEMO — fixture data, nothing is saved.</span>
+    <a href="?arm=grounding">grounded</a>
+    <a href="?arm=nongrounding">non-grounded</a>
+    <a href="index.html">real study →</a>
+  </div>
+
+  <div class="task-shell">
+    <section class="task-stimulus" id="stimulus-pane">
+      <header class="tv-head">
+        <div class="tv-head-main">
+          <div class="tv-kicker">Task</div>
+          <h1 class="tv-goal" id="tv-goal">Loading…</h1>
+        </div>
+        <div class="tv-count" id="tv-count"></div>
+      </header>
+      <main class="tv-main">
+        <section class="tv-stage" id="tv-stage"></section>
+      </main>
+    </section>
+    <aside class="task-panel" id="question-pane"></aside>
+  </div>
+
+  <script src="vendor/guide_trajectories.js"></script>
+  <script src="app/session.js"></script>
+  <script src="demo/fixtures.js"></script>
+  <script>
+  // IIFE, not optional: classic scripts share one global lexical scope, and a top-level `const arm`
+  // here would collide with the `let arm` in app/stimulus.js — a parse error that kills this block
+  // silently, leaving both panes blank with nothing in the console to say why.
+  (function () {
+    // STUDY_SOURCE is set FIRST, before anything that can throw. app/study.js reads it to decide
+    // whether it is in demo mode, and a demo that failed to build its fixtures would otherwise be
+    // indistinguishable from a stray visit to study.html — it would silently redirect to the
+    // welcome screen, taking the console evidence with it. Ask how I know.
+    const byId = new Map();
+    window.STUDY_SOURCE = {
+      getStudyTrajectory: async (id) => byId.get(id) || null,
+      insertStudyResult: async (row) => { console.log('[demo] would have saved:', row); return true; },
+    };
+
+    let bank = [];
+    try {
+      bank = window.DemoFixtures.buildDemoTrajectories();
+      bank.forEach(t => byId.set(t.id, t));
+    } catch (e) {
+      document.getElementById('question-pane').innerHTML =
+        '<div class="q-body"><div class="q-error-msg">Demo fixtures failed to build:<br>'
+        + String(e && e.stack || e).replace(/</g, '&lt;') + '</div></div>';
+      return;
+    }
+
+    // Seed the session IN MEMORY only. app/study.js prefers populated in-memory state over
+    // localStorage precisely so this works without touching the key a real run uses — opening the
+    // demo must never discard the progress of a participant midway through the actual study.
+    const params = new URLSearchParams(location.search);
+    window.StudySession.state.arm = params.get('arm') === 'nongrounding' ? 'nongrounding' : 'grounding';
+    Object.assign(window.StudySession.state, {
+      participantId: 'DEMO',
+      sessionId: null,
+      queue: bank.map(t => ({ id: t.id, goal: t.goal, title: t.title, condition: t.condition })),
+      idx: 0,
+      results: [],
+    });
+  }());
+  </script>
+  <script src="app/stimulus.js"></script>
+  <script src="app/instrument.js"></script>
+  <script src="app/study.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PageGuide User Study</title>
+  <link rel="stylesheet" href="styles/site.css">
+</head>
+<body class="welcome-body">
+  <!--
+    The welcome screen. Deliberately short: everything a participant needs to know before starting
+    and nothing they will have forgotten by the first task. The instructions that matter are beside
+    the material, on the task screen, where they are needed.
+  -->
+  <main class="welcome">
+    <h1 class="welcome-title">🎓 PageGuide User Study</h1>
+
+    <p class="welcome-lead">
+      You will review what a web agent did on a series of tasks. For each one you will see the steps
+      it took and the answer it gave, then be asked whether it got the task right — and if not,
+      where it went wrong.
+    </p>
+
+    <p class="welcome-note">
+      There are no trick questions and nothing is being tested about you. We are measuring how easy
+      or hard it is to check an agent's work, so "I could not tell" is a real finding — please answer
+      from what you can actually see rather than what you can guess.
+    </p>
+
+    <label class="welcome-label" for="participant-id">Participant ID</label>
+    <input class="welcome-input" id="participant-id" type="text" placeholder="e.g. P07" autocomplete="off">
+
+    <div class="welcome-status" id="welcome-status"></div>
+
+    <button class="welcome-btn" id="start-btn">Start →</button>
+
+    <p class="welcome-fine" id="welcome-count"></p>
+  </main>
+
+  <script src="app/config.js" onerror="window.__configMissing = true"></script>
+  <script src="app/supabase.js"></script>
+  <script src="app/session.js"></script>
+  <script src="app/welcome.js"></script>
+</body>
+</html>

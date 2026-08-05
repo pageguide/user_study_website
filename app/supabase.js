@@ -1,0 +1,116 @@
+// Supabase access for the study site.
+// ===================================
+// Everything this site needs from the network, in one place: read the stimuli, write the results.
+//
+// Deliberately plain `fetch` against PostgREST rather than the supabase-js SDK. The whole site is
+// static files with no build step, and pulling in a bundled SDK to issue four HTTP requests would
+// buy nothing except a build step. This also mirrors how the extension talks to Supabase
+// (sidepanel/study.js), so the two clients fail the same way and can be debugged the same way.
+
+const CFG = (typeof window !== 'undefined' && window.STUDY_CONFIG) || {};
+
+/** Is there a usable configuration at all? The example file's placeholders do not count. */
+function supabaseConfigured() {
+  const url = String(CFG.SUPABASE_URL || '');
+  const key = String(CFG.SUPABASE_ANON_KEY || '');
+  return !!url && !!key && !url.startsWith('YOUR_') && !key.startsWith('YOUR_');
+}
+
+function headers(prefer) {
+  const h = {
+    'Content-Type': 'application/json',
+    apikey: CFG.SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${CFG.SUPABASE_ANON_KEY}`,
+  };
+  if (prefer) h.Prefer = prefer;
+  return h;
+}
+
+async function get(path) {
+  if (!supabaseConfigured()) throw new Error('Supabase is not configured — copy app/config.example.js to app/config.js.');
+  const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/${path}`, { headers: headers() });
+  if (!res.ok) {
+    throw new Error(`Supabase ${res.status} on ${path}: ${await res.text().catch(() => '')}`);
+  }
+  return res.json();
+}
+
+/**
+ * Insert one row.
+ *
+ * Mirrors the extension's supabaseInsert, including its retry: `return=representation` adds a
+ * RETURNING clause that RLS rejects when there is no anon SELECT policy on the table, which fails
+ * the WHOLE insert rather than just the read-back. Retrying with `return=minimal` still creates the
+ * row — we simply cannot capture its id.
+ */
+async function insert(table, data, { wantRow = false } = {}) {
+  if (!supabaseConfigured()) return null;
+  try {
+    const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/${table}`, {
+      method: 'POST',
+      headers: headers(wantRow ? 'return=representation' : 'return=minimal'),
+      body: JSON.stringify(data),
+    });
+    if (res.ok) {
+      if (!wantRow) return true;
+      const json = await res.json().catch(() => null);
+      return (Array.isArray(json) && json[0]) || true;
+    }
+    if (wantRow && (res.status === 401 || res.status === 403)) {
+      const retry = await fetch(`${CFG.SUPABASE_URL}/rest/v1/${table}`, {
+        method: 'POST',
+        headers: headers('return=minimal'),
+        body: JSON.stringify(data),
+      });
+      return retry.ok ? true : null;
+    }
+    console.error(`[study] Supabase ${res.status} on ${table}:`, await res.text().catch(() => ''));
+    return null;
+  } catch (e) {
+    console.warn(`[study] Supabase insert into ${table} failed:`, e);
+    return null;
+  }
+}
+
+// ── Stimuli ──
+// The trajectory LIST comes back without `arms`, because arms carries the base64 screenshots and a
+// 16-trajectory bank would be tens of megabytes to build a queue out of. The full record is fetched
+// one at a time, when the participant reaches it.
+
+const TRAJECTORY_LIST_COLUMNS = 'id,goal,title,condition,in_study,captured_at';
+
+/** Every trajectory the study should show, in capture order — the participant's queue. */
+async function listStudyTrajectories() {
+  const rows = await get(
+    `study_guide_trajectories?select=${TRAJECTORY_LIST_COLUMNS}&in_study=is.true&order=captured_at.asc`
+  );
+  return Array.isArray(rows) ? rows : [];
+}
+
+/** One trajectory in full, screenshots included. ~1.5MB for a nine-step run. */
+async function getStudyTrajectory(id) {
+  const rows = await get(`study_guide_trajectories?select=*&id=eq.${encodeURIComponent(id)}&limit=1`);
+  return (Array.isArray(rows) && rows[0]) || null;
+}
+
+// ── Results ──
+
+async function insertStudySession(participantId, conditionLabel) {
+  const row = await insert('study_sessions', {
+    participant_id: participantId,
+    condition_order: conditionLabel,
+  }, { wantRow: true });
+  return (row && row.id) || null;
+}
+
+async function insertStudyResult(record) {
+  return insert('study_task_results', record);
+}
+
+window.StudyDB = {
+  supabaseConfigured,
+  listStudyTrajectories,
+  getStudyTrajectory,
+  insertStudySession,
+  insertStudyResult,
+};

@@ -1,0 +1,305 @@
+/* The study site — layout and the question pane.
+   ==============================================
+   The stimulus pane brings its own stylesheet (styles/stimulus.css, ported verbatim from the
+   extension) so what a participant reads on the left is pixel-for-pixel what an extension
+   participant reads. This file owns everything around it: the shell, the welcome screen, and the
+   right-hand pane standing in for the PageGuide side panel. */
+
+:root {
+  --accent: #7857ff;
+  --accent-dark: #5b3fd6;
+  --ink: #16161a;
+  --muted: rgba(0, 0, 0, 0.55);
+  --line: rgba(0, 0, 0, 0.12);
+  --panel-bg: #f4f4f8;
+  --card: #fff;
+  --ok: #0f6b43;
+  --bad: #a52020;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: var(--ink);
+  background: #fff;
+}
+
+/* ── The two panes ───────────────────────────────────────────────────────────────
+   Left flexible, right fixed at the side panel's real width. The proportions are not decoration:
+   a participant on the site should be working under the same constraints as one in the extension,
+   or the two datasets differ in reading conditions rather than in grounding. Each pane scrolls on
+   its own so the questions stay put while the steps are read. */
+.task-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.task-stimulus {
+  overflow-y: auto;
+  background: #fff;
+  border-right: 1px solid var(--line);
+}
+
+.task-panel {
+  overflow-y: auto;
+  background: var(--panel-bg);
+  border-left: 1px solid var(--line);
+}
+
+/* Below ~900px the two-pane comparison stops working at all: the stimulus is the thing that needs
+   width. Stack rather than shrink, material first. */
+@media (max-width: 900px) {
+  .task-shell { grid-template-columns: 1fr; height: auto; overflow: visible; }
+  .task-stimulus, .task-panel { overflow: visible; border: 0; }
+  .task-panel { border-top: 2px solid var(--line); }
+}
+
+.tv-done {
+  padding: 60px 32px;
+  font-size: 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ── The question pane ───────────────────────────────────────────────────────── */
+.q-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.q-title { font-weight: 800; font-size: 15px; }
+
+.q-progress {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+}
+
+.q-body { padding: 16px; }
+.q-loading { padding: 24px 16px; color: var(--muted); }
+
+.q-task-card {
+  background: #efe9ff;
+  border: 1px solid rgba(120, 87, 255, 0.28);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.q-timers { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.q-timer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.q-timer-label { font-size: 12px; font-weight: 700; color: var(--muted); }
+.q-timer {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--accent-dark);
+  font-variant-numeric: tabular-nums;   /* so the seconds do not shift the label as they tick */
+}
+
+.q-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.q-card-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.q-badge {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 800;
+  flex: none;
+}
+.q-text { margin: 0; font-weight: 700; }
+.q-sub { font-size: 12px; font-weight: 500; color: var(--muted); }
+.q-label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.q-optional { color: var(--muted); }
+
+.q-options { display: flex; flex-direction: column; gap: 6px; }
+
+.q-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  background: #fafafc;
+}
+.q-opt:hover { border-color: rgba(120, 87, 255, 0.5); }
+.q-opt input { accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+/* :has is what lets the whole row light up from the input inside it, with no JS keeping a class in
+   sync — one less thing that can be left stale when the pane re-renders. */
+.q-opt:has(input:checked) {
+  border-color: var(--accent);
+  background: #f1ecff;
+}
+
+.q-opt-rich { align-items: flex-start; }
+.q-opt-body { display: flex; flex-direction: column; gap: 2px; }
+.q-opt-name { font-weight: 700; }
+.q-opt-detail { font-size: 12px; color: var(--muted); }
+
+.q-error-block {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 4px;
+  background: #fafafc;
+}
+.q-error-block .q-opt { border: 0; background: transparent; }
+.q-error-num {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: rgba(120, 87, 255, 0.14);
+  color: var(--accent-dark);
+  font-size: 11px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+}
+.q-opt-none { background: transparent; }
+
+.q-error-steps { padding: 0 12px 10px; }
+.q-step-picks { display: flex; flex-wrap: wrap; gap: 5px; }
+/* Steps are buttons, never a text field — see the comment in instrument.js. */
+.q-step {
+  min-width: 30px;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font: 700 12px/1.5 inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  cursor: pointer;
+}
+.q-step:hover { border-color: var(--accent); color: var(--accent-dark); }
+.q-step.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.q-field {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+.q-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(120, 87, 255, 0.16);
+}
+
+.q-error-msg {
+  background: rgba(211, 47, 47, 0.1);
+  border: 1px solid rgba(211, 47, 47, 0.3);
+  color: var(--bad);
+  border-radius: 8px;
+  padding: 8px 11px;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 10px 0;
+}
+
+.q-actions { display: flex; gap: 8px; margin-top: 14px; }
+.q-btn {
+  flex: 1;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 10px;
+  padding: 11px 14px;
+  font: 800 14px/1.2 inherit;
+  cursor: pointer;
+}
+.q-btn:hover { border-color: var(--accent); color: var(--accent-dark); }
+.q-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.q-btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
+
+/* ── Welcome ─────────────────────────────────────────────────────────────────── */
+.welcome-body { background: var(--panel-bg); }
+.welcome {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 64px 24px;
+}
+.welcome-title { font-size: 30px; margin: 0 0 18px; }
+.welcome-lead { font-size: 17px; }
+.welcome-note {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.welcome-label { display: block; margin: 22px 0 6px; font-weight: 800; font-size: 13px; }
+.welcome-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 13px;
+  font: inherit;
+  background: #fff;
+}
+.welcome-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(120, 87, 255, 0.16);
+}
+.welcome-btn {
+  margin-top: 18px;
+  width: 100%;
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  padding: 13px;
+  font: 800 15px/1.2 inherit;
+  cursor: pointer;
+}
+.welcome-btn:hover:not(:disabled) { background: var(--accent-dark); }
+.welcome-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.welcome-status:empty { display: none; }
+.welcome-status {
+  margin-top: 14px;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.05);
+}
+.welcome-status-bad { background: rgba(211, 47, 47, 0.1); color: var(--bad); }
+.welcome-fine { margin-top: 12px; font-size: 12px; color: var(--muted); text-align: center; }

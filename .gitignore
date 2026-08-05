@@ -1,0 +1,6 @@
+# Real credentials. app/config.example.js is committed; this file is not.
+# Only ever holds the ANON key — the service-role key must never be in a file served to
+# participants. See the note at the top of app/config.example.js.
+app/config.js
+
+.DS_Store

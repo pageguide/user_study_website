@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PageGuide User Study — review the task</title>
+  <link rel="stylesheet" href="styles/stimulus.css">
+  <link rel="stylesheet" href="styles/site.css">
+</head>
+<body>
+  <!--
+    THE TASK SCREEN, in two panes.
+
+    LEFT — the material: what the agent did, at a size where it can be checked. In the extension
+    this is a whole browser tab, because the side panel is ~400px wide and a participant is being
+    asked whether the agent clicked the right thing: at panel width a cart badge and a wishlist
+    badge are the same handful of pixels.
+
+    RIGHT — the instrument: the task, one timer and the questions, styled as the PageGuide side
+    panel it stands in for. It carries nothing a participant is asked to judge, so the two panes
+    never repeat each other.
+
+    The proportions are the real ones on purpose. A participant on the website should be working
+    under the same constraints as one in the extension, or the two datasets are measuring different
+    reading conditions rather than different grounding conditions.
+  -->
+  <div class="task-shell">
+    <section class="task-stimulus" id="stimulus-pane">
+      <header class="tv-head">
+        <div class="tv-head-main">
+          <div class="tv-kicker">Task</div>
+          <h1 class="tv-goal" id="tv-goal">Loading…</h1>
+        </div>
+        <div class="tv-count" id="tv-count"></div>
+      </header>
+      <main class="tv-main">
+        <section class="tv-stage" id="tv-stage">
+          <div class="tv-empty">Loading the steps…</div>
+        </section>
+      </main>
+    </section>
+
+    <aside class="task-panel" id="question-pane">
+      <div class="q-loading">Loading…</div>
+    </aside>
+  </div>
+
+  <!-- Vendored verbatim from the extension: the question vocabularies, the arm strip and the
+       scoring all come from here, so the website cannot drift into being a different study. -->
+  <script src="vendor/guide_trajectories.js"></script>
+  <script src="app/config.js" onerror="window.__configMissing = true"></script>
+  <script src="app/supabase.js"></script>
+  <script src="app/session.js"></script>
+  <script src="app/stimulus.js"></script>
+  <script src="app/instrument.js"></script>
+  <script src="app/study.js"></script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PageGuide User Study — layout preview</title>
+  <link rel="stylesheet" href="styles/stimulus.css">
+  <link rel="stylesheet" href="styles/site.css">
+</head>
+<body>
+  <!--
+    A DEV FIXTURE, not part of the study.
+
+    Renders the task screen from a hard-coded trajectory so the layout, the arm gate and the
+    question flow can be checked with no Supabase configured and no participant involved. Add
+    ?arm=nongrounding to see what the text condition withholds.
+
+    Deliberately its own page rather than a mode on study.html: a fixture that shares a file with
+    the real thing is a fixture that can be reached by accident.
+  -->
+  <div class="task-shell">
+    <section class="task-stimulus" id="stimulus-pane">
+      <header class="tv-head">
+        <div class="tv-head-main">
+          <div class="tv-kicker">Task</div>
+          <h1 class="tv-goal" id="tv-goal">Loading…</h1>
+        </div>
+        <div class="tv-count" id="tv-count"></div>
+      </header>
+      <main class="tv-main">
+        <section class="tv-stage" id="tv-stage"></section>
+      </main>
+    </section>
+    <aside class="task-panel" id="question-pane"></aside>
+  </div>
+
+  <script src="vendor/guide_trajectories.js"></script>
+  <script src="app/stimulus.js"></script>
+  <script src="app/instrument.js"></script>
+  <script>
+  // WRAPPED, and not optional. Classic <script> tags share ONE global lexical scope, so a top-level
+  // `const arm` here collides with the `let arm` inside app/stimulus.js — and a duplicate
+  // declaration is a PARSE error, which kills this entire block before a line of it runs, with no
+  // exception to catch and nothing in the console once the page has settled. The page renders, both
+  // panes stay empty, and nothing says why. (This is the same trap the extension warns about at the
+  // top of study/trajectory_view.js.)
+  (function () {
+    // A 1×1 JPEG: enough to prove a screenshot slot is wired without shipping a fixture image.
+    const SHOT = '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
+
+    const RECORD = {
+      id: 'preview-1',
+      goal: 'Locate the 1 closest parking spot near Samford Hall and 1 closest parking spot near RBD library',
+      title: 'Parking near Samford Hall',
+      condition: 'visual',
+      ground_truth: {
+        correctness: 'failure',
+        problems: ['incomplete'],
+        problem: '',
+        errors: [{ type: 'wrong_target', steps: [4] }],
+        no_error: false,
+      },
+      arms: {
+        grounding: {
+          initial_state: { screenshot: SHOT, url: 'https://map.example/campus' },
+          final_state: { screenshot: SHOT, url: 'https://map.example/campus?parking' },
+          steps: [
+            { n: 1, instruction: "Type 'Samford Hall' into the search bar to locate it on the map.", screenshot: SHOT },
+            { n: 2, instruction: "Click on 'Samford Hall' from the search results.", screenshot: SHOT },
+            { n: 3, instruction: "Click on the 'Parking' category to display parking locations on the map.", screenshot: SHOT },
+            { n: 4, instruction: "Click on 'Samford Gravel Lot' to view its location near Samford Hall.", screenshot: SHOT },
+            { n: 5, instruction: "Click the search bar and type 'RBD Library' to find its location.", screenshot: SHOT },
+          ],
+          answer: 'The closest parking spot to Samford Hall is the Samford Gravel Lot.',
+          answer_evidence: [],
+          answer_segments: [],
+          trail: {
+            summary: 'I searched for Samford Hall, opened the parking layer, and compared the nearby lots.',
+            milestones: [
+              { step: 3, text: 'Opened the parking layer.' },
+              { step: 4, text: 'Chose the Samford Gravel Lot.' },
+            ],
+          },
+          questions: window.GUIDE_STUDY_QUESTIONS,
+        },
+        nongrounding: null,
+      },
+    };
+
+    const armName = new URLSearchParams(location.search).get('arm') === 'nongrounding'
+      ? 'nongrounding' : 'grounding';
+
+    window.Stimulus.mountStimulus(RECORD, armName, {
+      goal: document.getElementById('tv-goal'),
+      count: document.getElementById('tv-count'),
+      stage: document.getElementById('tv-stage'),
+    });
+
+    window.Instrument.mountInstrument({
+      root: document.getElementById('question-pane'),
+      steps: window.Stimulus.stimulusSteps(),
+      index: 0,
+      total: 3,
+      goal: RECORD.goal,
+      onSubmit: (timings) => {
+        // The fixture's payoff: the answer AND what it scored, so the scoring can be eyeballed
+        // against a trajectory whose ground truth is right there in this file.
+        const score = window._scoreGuideAnswer(timings.guideAnswer, RECORD.ground_truth);
+        document.getElementById('question-pane').innerHTML =
+          '<div class="q-head"><span class="q-title">Preview — submitted</span></div>'
+          + '<div class="q-body"><p class="q-text">Answer</p>'
+          + `<pre class="q-field" style="white-space:pre-wrap">${JSON.stringify(timings.guideAnswer, null, 2)}</pre>`
+          + '<p class="q-text" style="margin-top:14px;">Scored against the ground truth</p>'
+          + `<pre class="q-field" style="white-space:pre-wrap">${JSON.stringify(score, null, 2)}</pre></div>`;
+      },
+    });
+  }());
+  </script>
+</body>
+</html>
