@@ -1078,12 +1078,21 @@ function markElement(el, needle) {
   el.setAttribute('data-pageguide-styled', '');
   el.dataset.pgCite = needle;
 
-  let node = el;
-  for (let depth = 0; depth < 4 && node; depth++) {
-    const img = node.querySelector?.('img');
-    if (img) { markImage(img, needle); return; }
-    node = node.parentElement;
-  }
+  // THE PICTURE THIS CITATION IS ABOUT — if there is one, and only if it is genuinely this one.
+  //
+  // This used to climb four ancestors and mark the first <img> anywhere beneath any of them. On an
+  // article whose sections wrap several blocks, that reaches an unrelated photograph: SVSF-V1's
+  // citation resolved correctly onto "Musk has spoken of how science fiction shaped his
+  // ambitions…", then the climb found a Cybertruck picture in a shared wrapper and outlined THAT.
+  // The data was right; the marking went looking.
+  //
+  // A caption belongs to its figure, and that is the only relationship worth honouring: an image
+  // inside the cited element, or the image of the <figure> the cited element is a caption for.
+  // Anything further away is proximity, not evidence.
+  const own = el.querySelector?.('img');
+  const figure = el.closest?.('figure');
+  const img = own || (figure ? figure.querySelector('img') : null);
+  if (img) markImage(img, needle);
 }
 
 /**
