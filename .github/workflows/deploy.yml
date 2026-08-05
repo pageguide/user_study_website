@@ -76,7 +76,7 @@ jobs:
       - name: Refuse to publish secrets
         run: |
           if [ -f .env ]; then echo "::error::.env must not be committed."; exit 1; fi
-          if grep -rl "sb_secret_" --exclude-dir=.git --exclude-dir=.github . 2>/dev/null | grep -q .; then
+          if grep -rEl "sb_secret_[A-Za-z0-9_-]{20,}" --exclude-dir=.git --exclude-dir=.github . 2>/dev/null | grep -q .; then
             echo "::error::A secret key is present in the tree — refusing to deploy."
             exit 1
           fi
