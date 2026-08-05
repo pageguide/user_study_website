@@ -58,11 +58,37 @@ function configProblem(env) {
     return 'SUPABASE_SECRET_KEY holds the PUBLISHABLE key (sb_publishable_…), which cannot write '
       + 'stimuli. Copy the secret key (sb_secret_…) from Project Settings → API.';
   }
-  if (!key.startsWith('sb_secret_') && !key.startsWith('eyJ')) {
+  if (key.startsWith('eyJ')) {
+    // A JWT, but WHICH one? The anon key is also a JWT beginning "eyJ", so accepting any of them
+    // let the anon key through — and an anon key does not fail loudly here, it fails at the far end
+    // as "42501 new row violates row-level security policy", once per row, with nothing pointing
+    // back at the key. The role is right there in the payload; read it rather than guess.
+    const role = _jwtRole(key);
+    if (role && role !== 'service_role') {
+      return `SUPABASE_SECRET_KEY holds a "${role}" JWT, not the service_role one. An anon key `
+        + 'passes every check here and is then refused by RLS on every insert (42501). Copy the '
+        + 'service_role key from Project Settings → API.';
+    }
+    return null;
+  }
+  if (!key.startsWith('sb_secret_')) {
     return 'SUPABASE_SECRET_KEY does not look like a Supabase secret key (expected sb_secret_… or a '
       + 'service_role JWT).';
   }
   return null;
+}
+
+/** The `role` claim of a JWT, or null if it cannot be read. Payload only — no verification. */
+function _jwtRole(token) {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    const json = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const role = JSON.parse(json)?.role;
+    return typeof role === 'string' ? role : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 /** Which column(s) make a row unique, per table — so re-publishing replaces rather than duplicates. */
@@ -101,6 +127,18 @@ async function publishTable(env, table, rows) {
     const id = row.task_id || row.id || '(unnamed)';
     try {
       let res = await post(row);
+      // 52x is Cloudflare saying the database never answered — the project is down or saturated,
+      // not the row's fault. Every remaining row would fail the same way, and each attempt is more
+      // load on something already struggling, so the whole table is abandoned rather than retried.
+      // A megabyte-scale snapshot insert on a small instance is quite capable of causing this.
+      if (res.status >= 520 && res.status <= 530) {
+        out.failed++;
+        out.failedIds.push(id);
+        out.firstError = `${res.status} the database did not respond — the project is down or `
+          + 'overloaded. Stop publishing, let it recover, and check the project status in the '
+          + 'Supabase dashboard before trying again.';
+        return out;
+      }
       // 57014 is Postgres cancelling on statement_timeout, and a page snapshot is megabytes — the
       // insert is genuinely slow, not wrong. Worth exactly one retry: it usually lands, and a
       // permanent failure fails the same way twice rather than being retried forever.
@@ -140,7 +178,9 @@ function explain(error) {
   }
   if (t.includes('42501')) {
     return 'Postgres 42501: row-level security refused the write, so the key was treated as anon. '
-      + 'Check SUPABASE_SECRET_KEY holds the sb_secret_… key, not the publishable one.';
+      + 'The stimulus tables are anon-READ only by design. Check SUPABASE_SECRET_KEY holds the '
+      + 'service_role / sb_secret_… key — note the ANON key is also a JWT starting "eyJ", so the '
+      + 'two are easy to swap, and swapping them looks exactly like this.';
   }
   if (t.includes('PGRST205') || t.includes('Could not find the table')) {
     return 'That table does not exist yet — run supabase_schema.sql in the Supabase SQL editor.';
