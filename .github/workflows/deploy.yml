@@ -76,8 +76,15 @@ jobs:
       - name: Refuse to publish secrets
         run: |
           if [ -f .env ]; then echo "::error::.env must not be committed."; exit 1; fi
-          if grep -rEl "sb_secret_[A-Za-z0-9_-]{20,}" --exclude-dir=.git --exclude-dir=.github . 2>/dev/null | grep -q .; then
+          # Placeholders are excluded, or this step fails on its own documentation: README and
+          # .env.example both write sb_secret_… to say which key goes where, and the scan cannot
+          # tell that apart from a real one by shape alone. A run of x's is never a real key.
+          HITS=$(grep -rIn -E "sb_secret_[A-Za-z0-9_-]{20,}" \
+                   --exclude-dir=.git --exclude-dir=.github . 2>/dev/null \
+                 | grep -viE "sb_secret_(x+|\.\.\.|your|placeholder)" || true)
+          if [ -n "$HITS" ]; then
             echo "::error::A secret key is present in the tree — refusing to deploy."
+            echo "$HITS" | head -5
             exit 1
           fi
 
