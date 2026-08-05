@@ -667,7 +667,7 @@ function applyFindGrounding(frame, canned, arm) {
     .pageguide-highlight-imgwrap > img { display: block; max-width: 100%; }`;
   doc.head?.appendChild(style);
 
-  cites.forEach(cite => markFindCitation(doc, cite.text));
+  cites.forEach(cite => markFindCitation(doc, cite.text, cite.index));
   drawEvidenceMarks(doc, canned);
 }
 
@@ -701,8 +701,13 @@ function drawEvidenceMarks(doc, canned) {
   });
 
   items.forEach(item => {
-    const n = Number(String(item.source_image_id || '').match(/(\d+)$/)?.[1] || 1);
-    const img = contentImages[n - 1];
+    const id = String(item.source_image_id || '');
+    // The stamped id first: it came from gv2BuildFindImageCatalog, which is the same function that
+    // wrote source_image_id — so the two cannot disagree. Counting images here has to guess at the
+    // recorder's filtering rule, and guessing put Tesla's page_image_6 on a different picture.
+    const stamped = id && doc.querySelector(`[data-pg-image-id="${CSS.escape(id)}"]`);
+    const n = Number(id.match(/(\d+)$/)?.[1] || 1);
+    const img = stamped || contentImages[n - 1];
     if (!img) return;
     overlayAnnotations(doc, img, item.marks.annotations, item.key);
   });
@@ -806,8 +811,19 @@ function normText(v) {
  * Whatever matches, a picture beside it is outlined too — for an image citation the picture is the
  * evidence, and highlighting only its caption would point next to the thing rather than at it.
  */
-function markFindCitation(doc, text) {
+function markFindCitation(doc, text, index) {
   const needle = normText(text);
+
+  // 0. THE STAMPED ANCHOR, when the snapshot has one. `[69:"…"]` means element 69 in the page index
+  // at record time, and the capture writes that index onto the element (_pgStampAnchors,
+  // content/functions/page_snapshot.js). Exact, so none of the guessing below is needed — and the
+  // guessing is what put "Foundation series" on the wrong paragraph. Everything after this is the
+  // fallback for snapshots captured before stamping existed.
+  if (index != null) {
+    const anchored = doc.querySelector(`[data-pg-index="${CSS.escape(String(index))}"]`);
+    if (anchored) { markElement(anchored, needle || String(index)); return; }
+  }
+
   if (needle.length < 4) return;            // too short to match uniquely; a false hit is worse
 
   // 1. The whole quote inside one text node — the clean case, marked precisely.
