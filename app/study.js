@@ -690,7 +690,17 @@ function applyFindGrounding(frame, canned, arm) {
  * at any width — which is why they can be replayed here at all.
  */
 function drawEvidenceMarks(doc, canned) {
-  const items = (canned?.evidence || []).filter(e => e?.marks?.annotations?.length);
+  // ANNOTATIONS **OR** A REGION. Most recorded evidence has no drawn shapes at all: the model
+  // reports what it saw and where, and gv2BuildFindEvidence stores that as `region_bbox` with a
+  // `note`, leaving `annotations` empty. PEDANT-V1, MUFC-V1 and TREE-V1 are all of this kind —
+  // {x:0, y:0, w:1, h:1}, meaning "this whole picture", with the note explaining what to look at.
+  //
+  // Filtering on annotations alone dropped every one of them, so the [ev:key] chip appeared in the
+  // answer with nothing on the page to match it, while the extension drew the box and label for the
+  // same record. That difference between what the researcher approved and what a participant sees
+  // is the thing this whole replay exists to prevent.
+  const items = (canned?.evidence || [])
+    .filter(e => e?.marks?.annotations?.length || e?.marks?.region_bbox);
   if (!items.length) return;
 
   // "page_image_N" is the Nth image AS THE RECORDER COUNTED THEM, so the same rule has to be used
@@ -731,7 +741,7 @@ function drawEvidenceMarks(doc, canned) {
     // No stamp and no number is not "image 1", it is unknown. Same reasoning as above.
     const img = stamped || (digits ? contentImages[Number(digits) - 1] : null);
     if (!img) { skipped.push(item.key || id); return; }
-    overlayAnnotations(doc, img, item.marks.annotations, item.key);
+    overlayAnnotations(doc, img, item.marks.annotations, item.key, item.marks);
   });
 
   // Said out loud rather than swallowed. An [ev:key] chip in the answer with no mark on the page is
@@ -742,8 +752,14 @@ function drawEvidenceMarks(doc, canned) {
   }
 }
 
-/** Position an SVG over one image and draw its annotations into it. */
-function overlayAnnotations(doc, img, annotations, key) {
+/**
+ * Position an SVG over one image and draw its marks into it.
+ *
+ * `marks` carries the region fallback: when the model reported WHERE it looked but drew no shapes,
+ * the region is the evidence and the note is what it says. That is the common case, not the edge —
+ * see drawEvidenceMarks.
+ */
+function overlayAnnotations(doc, img, annotations, key, marks) {
   const host = img.parentElement?.classList.contains('pageguide-highlight-imgwrap')
     ? img.parentElement
     : (() => { markImage(img, key || ''); return img.parentElement; })();
@@ -757,7 +773,52 @@ function overlayAnnotations(doc, img, annotations, key) {
   svg.setAttribute('style',
     'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible');
 
-  annotations.forEach(a => {
+  // The region, when there are no shapes to draw. Outlined and labelled with the note, matching
+  // what pageguideShowEvidenceAnnotations does on the live page for exactly this case — the
+  // researcher approved that rendering, so a participant must get the same one.
+  const shapes = Array.isArray(annotations) ? annotations : [];
+  const region = marks?.region_bbox;
+  if (!shapes.length && region && Number.isFinite(region.w) && Number.isFinite(region.h)) {
+    const r = doc.createElementNS(NS, 'rect');
+    r.setAttribute('x', (region.x || 0) * 100);
+    r.setAttribute('y', (region.y || 0) * 100);
+    r.setAttribute('width', region.w * 100);
+    r.setAttribute('height', region.h * 100);
+    r.setAttribute('fill', 'none');
+    r.setAttribute('stroke', '#ff2d78');
+    r.setAttribute('stroke-width', '0.8');
+    r.setAttribute('vector-effect', 'non-scaling-stroke');
+    svg.appendChild(r);
+    // The note IS the evidence here — without it the box says "look at this picture" and no more.
+    //
+    // Drawn as HTML rather than SVG <text>, unlike the shape labels above. This svg is
+    // preserveAspectRatio="none" so that a normalized bbox lands correctly on any aspect ratio,
+    // and that same stretch distorts glyphs horizontally — survivable for a one-word tag, not for
+    // a full sentence. HTML also wraps, which SVG text does not, and these notes are sentences.
+    const label = String(marks.note || '').trim();
+    if (label) {
+      const bar = doc.createElement('div');
+      bar.className = 'pg-annot-note';
+      bar.textContent = label;
+      bar.setAttribute('style', [
+        'position:absolute',
+        `left:${(region.x || 0) * 100}%`,
+        `top:${(region.y || 0) * 100}%`,
+        `max-width:${Math.max(30, region.w * 100)}%`,
+        // Above the region normally, but INSIDE it when the region starts at the very top — which
+        // is the whole-image case, where sitting above means sitting outside the picture and
+        // getting clipped by whatever the snapshot puts there.
+        (region.y || 0) > 0.05 ? 'transform:translateY(-100%)' : '',
+        'background:#ff2d78', 'color:#fff',
+        'font:700 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        'padding:4px 8px', 'border-radius:4px',
+        'pointer-events:none', 'z-index:2',
+      ].join(';'));
+      host.appendChild(bar);
+    }
+  }
+
+  shapes.forEach(a => {
     const colour = a.color || '#ff2d78';
     if (a.type === 'ellipse' && a.bbox) {
       const e = doc.createElementNS(NS, 'ellipse');
