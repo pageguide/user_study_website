@@ -706,17 +706,40 @@ function drawEvidenceMarks(doc, canned) {
     return !NOISE.test(`${img.getAttribute('src') || ''} ${img.getAttribute('alt') || ''} ${img.className || ''}`);
   });
 
+  const skipped = [];
   items.forEach(item => {
     const id = String(item.source_image_id || '');
+
+    // VIEWPORT EVIDENCE CANNOT BE PLACED, and must not be guessed at.
+    //
+    // Its bbox is a fraction of the browser viewport at record time, offset into DOCUMENT space
+    // (gv2EvidenceDocRect, content/functions/highlight.js) — not a fraction of any image. The
+    // snapshot reflows at a different width, so those coordinates point somewhere else entirely.
+    //
+    // The old rule fell through to `contentImages[n - 1]` with n defaulting to 1, because
+    // "viewport" has no trailing digits — so every viewport item was drawn confidently over the
+    // FIRST picture on the page. That is a wrong answer presented as a right one, which is worse
+    // than an absent mark: a participant has no way to tell it is wrong, and the citation text
+    // beside it makes it look corroborated.
+    if (!id || id === 'viewport') { skipped.push(item.key || '?'); return; }
+
     // The stamped id first: it came from gv2BuildFindImageCatalog, which is the same function that
     // wrote source_image_id — so the two cannot disagree. Counting images here has to guess at the
     // recorder's filtering rule, and guessing put Tesla's page_image_6 on a different picture.
-    const stamped = id && doc.querySelector(`[data-pg-image-id="${CSS.escape(id)}"]`);
-    const n = Number(id.match(/(\d+)$/)?.[1] || 1);
-    const img = stamped || contentImages[n - 1];
-    if (!img) return;
+    const stamped = doc.querySelector(`[data-pg-image-id="${CSS.escape(id)}"]`);
+    const digits = id.match(/(\d+)$/)?.[1];
+    // No stamp and no number is not "image 1", it is unknown. Same reasoning as above.
+    const img = stamped || (digits ? contentImages[Number(digits) - 1] : null);
+    if (!img) { skipped.push(item.key || id); return; }
     overlayAnnotations(doc, img, item.marks.annotations, item.key);
   });
+
+  // Said out loud rather than swallowed. An [ev:key] chip in the answer with no mark on the page is
+  // a broken promise to the participant, and silently drawing nothing is how it went unnoticed.
+  if (skipped.length) {
+    console.warn('[study] evidence marks that could not be placed:', skipped.join(', '),
+      '— re-capture the page in the extension so the images carry data-pg-image-id stamps.');
+  }
 }
 
 /** Position an SVG over one image and draw its annotations into it. */
