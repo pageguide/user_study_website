@@ -107,10 +107,54 @@ async function insertStudyResult(record) {
   return insert('study_task_results', record);
 }
 
+// ── The Find half ──
+// The site cannot RUN a Find task: that needs the extension on a live page to index it, highlight
+// citations and let a participant pick sentences off it. What it can do is show the material —
+// the question, the page it lives on, the agent's recorded answer for the arm, and the options —
+// which is what a reviewer needs when checking wording, and what admin mode exists for.
+
+async function listStudyTasks() {
+  const rows = await get('study_tasks?select=*&task_type=eq.find&in_study=is.true&order=task_index.asc');
+  return Array.isArray(rows) ? rows : [];
+}
+
+/** The recorded agent answer for one task in one arm, or null when it was never banked. */
+async function getCannedResponse(taskId, condition) {
+  const rows = await get('study_canned_responses?select=*'
+    + `&task_id=eq.${encodeURIComponent(taskId)}&condition=eq.${encodeURIComponent(condition)}&limit=1`);
+  return (Array.isArray(rows) && rows[0]) || null;
+}
+
+/**
+ * The frozen page for one Find task, or null.
+ *
+ * Fetched one at a time and never with the task list: an inlined article is megabytes, so pulling
+ * ten of them to build a queue would cost tens of megabytes before the first question is on screen.
+ *
+ * TWO TASKS CAN SHARE ONE PAGE. MUFC-V1 and MUFC-V1-TEXT are the same Wikipedia article asked under
+ * the two Find conditions, and the snapshot is only captured and published once — so a task with no
+ * row of its own falls back to whatever was captured for the same URL. Storing it twice would waste
+ * megabytes and, worse, let the two copies drift, which would make the conditions differ in the
+ * page itself rather than only in the grounding.
+ *
+ * @param {string} taskId
+ * @param {string} [url] - the task's page, for the shared-snapshot fallback
+ */
+async function getTaskPage(taskId, url) {
+  const own = await get(`study_task_pages?select=*&task_id=eq.${encodeURIComponent(taskId)}&limit=1`);
+  if (Array.isArray(own) && own[0]) return own[0];
+  if (!url) return null;
+  const shared = await get(`study_task_pages?select=*&url=eq.${encodeURIComponent(url)}&limit=1`);
+  return (Array.isArray(shared) && shared[0]) || null;
+}
+
 window.StudyDB = {
+  getTaskPage,
   supabaseConfigured,
   listStudyTrajectories,
   getStudyTrajectory,
+  listStudyTasks,
+  getCannedResponse,
   insertStudySession,
   insertStudyResult,
 };

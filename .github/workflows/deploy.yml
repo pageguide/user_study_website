@@ -1,0 +1,97 @@
+# Deploy the study site to GitHub Pages.
+#
+# THE ONE RULE: this workflow writes app/config.js, and that file is SERVED TO PARTICIPANTS.
+# Everything in it is public the moment the site is live. So it may hold the ANON key and nothing
+# else — never the secret key.
+#
+# The secret key is not needed here at all. It belongs to scripts/publish.mjs, which runs on the
+# researcher's own machine from a local .env. Supabase refuses that key from any browser anyway
+# ("Forbidden use of secret API key in browser"), so a secret key on this site could not even do
+# the thing someone might add it for.
+#
+# Repository secrets required (Settings → Secrets and variables → Actions):
+#   SUPABASE_URL       e.g. https://xxxx.supabase.co
+#   SUPABASE_ANON_KEY  the publishable / anon key — the one that is meant to be in a browser
+#
+# ⚠ If SUPABASE_SECRET_KEY is stored in this repository, delete it. Nothing here reads it, and a
+#   secret sitting in a repo that deploys a public site is one careless edit away from shipping.
+
+name: Deploy study site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # app/config.js is gitignored — it holds credentials and must not live in the repo — so the
+      # deploy writes it. Without this step the site loads and says "not configured", which is what
+      # a Pages deploy of this repo does today.
+      - name: Write app/config.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::error::SUPABASE_URL and SUPABASE_ANON_KEY must be set as repository secrets."
+            exit 1
+          fi
+          # Fail loudly rather than shipping a site that silently writes nowhere.
+          case "$SUPABASE_ANON_KEY" in
+            sb_secret_*|*service_role*)
+              echo "::error::That is the SECRET key. app/config.js is served to participants — use the anon/publishable key."
+              exit 1 ;;
+          esac
+          cat > app/config.js <<EOF
+          // Generated at deploy time from repository secrets. Do not commit.
+          // ANON KEY ONLY: this file is served to every participant.
+          window.STUDY_CONFIG = {
+            SUPABASE_URL: '${SUPABASE_URL}',
+            SUPABASE_ANON_KEY: '${SUPABASE_ANON_KEY}',
+            HALF: 'guide',
+            ARM_ASSIGNMENT: 'url',
+          };
+          EOF
+
+      # The vendored module must match the extension's, or the site quietly becomes a different
+      # study. It is committed, so this only checks the copy in the repo is internally sound.
+      - name: Check the vendored module is present
+        run: test -s vendor/guide_trajectories.js
+
+      # Nothing that belongs on a researcher's machine should reach the public site.
+      - name: Refuse to publish secrets
+        run: |
+          if [ -f .env ]; then echo "::error::.env must not be committed."; exit 1; fi
+          if grep -rl "sb_secret_" --exclude-dir=.git --exclude-dir=.github . 2>/dev/null | grep -q .; then
+            echo "::error::A secret key is present in the tree — refusing to deploy."
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -27,19 +27,26 @@
       from what you can actually see rather than what you can guess.
     </p>
 
-    <label class="welcome-label" for="participant-id">Participant ID</label>
-    <input class="welcome-input" id="participant-id" type="text" placeholder="e.g. P07" autocomplete="off">
+    <label class="welcome-label" for="participant-id">Participant ID
+      <span class="q-sub">optional — leave blank to stay anonymous</span></label>
+    <input class="welcome-input" id="participant-id" type="text" placeholder="anon" autocomplete="off">
 
     <div class="welcome-status" id="welcome-status"></div>
 
     <button class="welcome-btn" id="start-btn">Start →</button>
 
     <p class="welcome-fine" id="welcome-count"></p>
+
+    <!-- The reviewer's door. Deliberately plain and at the bottom: a participant should be able to
+         ignore it, and it grants no privilege over the data — its one real power is to NOT write. -->
+    <button class="admin-door" id="admin-btn">Admin</button>
+    <section class="admin-panel" id="admin-panel" hidden></section>
   </main>
 
   <script src="app/config.js" onerror="window.__configMissing = true"></script>
   <script src="app/supabase.js"></script>
   <script src="app/session.js"></script>
+  <script src="app/admin.js"></script>
   <script src="app/welcome.js"></script>
 </body>
 </html>

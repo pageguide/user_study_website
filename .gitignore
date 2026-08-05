@@ -4,3 +4,6 @@
 app/config.js
 
 .DS_Store
+
+# Publish-helper credentials — the secret key lives here and is never committed.
+.env

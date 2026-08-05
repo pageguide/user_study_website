@@ -13,6 +13,21 @@ const S = window.StudySession;
 // participant gets — rather than a parallel implementation that could drift from it.
 const DB = window.STUDY_SOURCE || window.StudyDB;
 
+/** The guide stimulus shell — the same markup study.html ships, rebuilt after a Find task. */
+function renderGuideShell() {
+  stimulusPane.innerHTML = `
+    <header class="tv-head">
+      <div class="tv-head-main">
+        <div class="tv-kicker">Task</div>
+        <h1 class="tv-goal" id="tv-goal">Loading…</h1>
+      </div>
+      <div class="tv-count" id="tv-count"></div>
+    </header>
+    <main class="tv-main">
+      <section class="tv-stage" id="tv-stage"></section>
+    </main>`;
+}
+
 function panelMessage(html) {
   questionPane.innerHTML = `<div class="q-body">${html}</div>`;
 }
@@ -23,7 +38,9 @@ async function boot() {
   // otherwise share one storage key, and opening the demo would silently discard the progress of a
   // participant who was midway through the actual study.
   const seeded = S.state.participantId && Array.isArray(S.state.queue) && S.state.queue.length;
-  const saved = seeded ? S.state : S.loadLocal();
+  // A review session is checked first and lives in its own sessionStorage key, so entering review
+  // mode never disturbs a participant partway through the real study on the same machine.
+  const saved = seeded ? S.state : (S.loadReview() || S.loadLocal());
   if (!saved || !saved.participantId || !Array.isArray(saved.queue) || !saved.queue.length) {
     // A demo says outright what is wrong. Bouncing it to the welcome screen would hide the actual
     // fault behind a redirect, which is exactly how this took three attempts to diagnose.
@@ -50,6 +67,7 @@ async function showTask() {
 
   const task = queue[idx];
   panelMessage('<p class="q-text">Loading the next task…</p>');
+  if (task.taskType === 'find') return showFindTask(task);
 
   let record = null;
   try {
@@ -67,6 +85,11 @@ async function showTask() {
     return showTask();
   }
 
+  // REBUILD THE SHELL EVERY TIME. A Find task replaces this pane wholesale (it renders a framed
+  // page, not a step list), so after one of those the elements mountStimulus targets no longer
+  // exist — and a guide task following a find task rendered into nothing until the page was
+  // reloaded. Rebuilding is cheap and removes the ordering dependency entirely.
+  renderGuideShell();
   window.Stimulus.mountStimulus(record, arm, {
     goal: document.getElementById('tv-goal'),
     count: document.getElementById('tv-count'),
@@ -82,7 +105,626 @@ async function showTask() {
     goal: record.goal || record.title || '',
     onSubmit: (timings) => askPostQuestions(task, record, timings),
   });
+  if (S.state.adminReview) {
+    questionPane.insertAdjacentHTML('beforeend', adminNavHtml());
+    bindAdminNav();
+  }
   questionPane.scrollTop = 0;
+}
+
+/**
+ * A FIND task, as far as a website can show one.
+ *
+ * The site cannot RUN a Find task: that needs the extension on a live page to index it, highlight
+ * the citations and let a participant pick sentences off it. What it can show is the material — the
+ * question, the page, and the agent's recorded answer for this arm — which is what a reviewer
+ * checking wording needs, and is the whole reason admin mode exists.
+ *
+ * Said outright rather than mocked up, because a preview that pretended to be the task would be
+ * reviewed as though it were.
+ */
+async function showFindTask(task) {
+  const { arm, idx, queue } = S.state;
+  let canned = null;
+  let page = null;
+  try {
+    canned = await DB.getCannedResponse(task.id, arm);
+  } catch (e) {
+    console.warn('[study] no recorded answer for', task.id, e.message);
+  }
+  try {
+    if (DB.getTaskPage) page = await DB.getTaskPage(task.id, task.url);
+  } catch (e) {
+    console.warn('[study] no captured page for', task.id, e.message);
+  }
+
+  const answer = canned?.answer_display || canned?.answer_raw || '';
+
+  stimulusPane.innerHTML = `
+    <header class="tv-head">
+      <div class="tv-head-main">
+        <div class="tv-kicker">Find task${task.type ? ` · ${esc(task.type)}` : ''}</div>
+        <h1 class="tv-goal">${esc(task.question || task.title || '')}</h1>
+      </div>
+    </header>
+    <main class="tv-main">${page?.html
+      ? '<iframe class="find-page" id="find-page" title="The page this question is about"></iframe>'
+      : `<div class="tv-col">
+          <div class="tv-section-title"><span>The page</span></div>
+          <p class="tv-answer">${task.url
+            ? `<a href="${esc(task.url)}" target="_blank" rel="noreferrer">${esc(task.url)}</a>`
+            : 'No page recorded.'}</p>
+          <p class="tv-warn">No snapshot has been captured for this task yet, so the page cannot be
+            shown here. Capture it from the extension's Find recorder (📄 Capture page), then
+            publish. The live URL cannot be embedded: most sites refuse to be framed, and a
+            cross-origin frame cannot be scripted, so nothing could be highlighted in it.</p>
+        </div>`}</main>`;
+
+  // SAME-ORIGIN ON PURPOSE. srcdoc gives the frame this page's origin, which is the entire reason
+  // the snapshot exists: a cross-origin frame cannot be indexed, highlighted or scrolled, so the
+  // grounded arm would have nothing to show. The snapshot carries its own restrictive CSP and had
+  // its scripts stripped at capture, so nothing in it runs.
+  if (page?.html) {
+    const frame = document.getElementById('find-page');
+    frame.srcdoc = page.html;
+    frame.addEventListener('load', () => applyFindGrounding(frame, canned, arm), { once: true });
+  }
+
+  const cites = parseFindCitations(answer);
+  questionPane.innerHTML = `
+    <div class="q-head"><span class="q-title">🔍 Find task</span></div>
+    <div class="q-progress">Task ${idx + 1}/${queue.length}${S.state.adminReview ? ' · review' : ''}</div>
+    <div class="q-body">
+      <p class="q-text">${esc(task.question || '')}</p>
+      <div class="q-card" style="margin-top:12px;">
+        <div class="q-card-head"><span class="q-badge">A</span>
+          <p class="q-text">The agent's answer${arm === 'nongrounding' ? ' (non-grounded)' : ''}</p></div>
+        <div class="find-answer">${answer
+          ? renderFindAnswer(answer, arm)
+          : '<em class="q-sub">No answer was recorded for this task in this arm.</em>'}</div>
+      </div>
+      <p class="q-sub">${S.state.adminReview ? 'Review mode — nothing is recorded.' : 'Read-only preview.'}</p>
+      ${adminNavHtml()}
+    </div>`;
+  bindAdminNav();
+
+  // Clicking a chip scrolls the snapshot to what that claim rests on — the gesture the extension
+  // gives on the live page.
+  // Clicking the answer opens its citations out into the phrases they point at — the panel's
+  // gesture, and the reason a citation reads as a bare "[1]" until asked.
+  const answerEl = questionPane.querySelector('.find-answer');
+  if (answerEl && cites.length) {
+    answerEl.classList.add('pageguide-clickable');
+    answerEl.title = 'Click to show the cited phrases';
+    answerEl.onclick = (e) => {
+      if (e.target.closest('.find-cite')) return;   // a chip click is a different gesture
+      answerEl.classList.toggle('citations-expanded');
+    };
+  }
+
+  // Evidence opens its crop. Nothing else can be done with it honestly: the note describes the
+  // region rather than quoting it, so there is no text to find in the page.
+  questionPane.querySelectorAll('.find-ev').forEach(chip => {
+    chip.onclick = () => {
+      const item = (canned?.evidence || [])
+        .find(ev => String(ev?.key || '').trim().toLowerCase() === chip.dataset.evKey.trim().toLowerCase());
+      openEvidenceLightbox(item, chip.dataset.evKey);
+    };
+  });
+
+  // Hover names it, click goes to it — the two gestures the panel already gives a citation.
+  questionPane.querySelectorAll('.find-cite').forEach(chip => {
+    const frame = () => document.getElementById('find-page');
+    chip.onmouseenter = () => {
+      const f = frame();
+      if (f) focusFindCitation(f, chip.dataset.citeText || '', false);
+      chip.classList.add('find-cite-active');
+    };
+    chip.onmouseleave = () => {
+      const f = frame();
+      if (!chip.dataset.pinned) chip.classList.remove('find-cite-active');
+      try { if (f && !chip.dataset.pinned) clearFindFocus(f.contentDocument); } catch (e) {}
+    };
+    chip.onclick = () => {
+      const f = frame();
+      if (!f) return;
+      // Only one citation is active at a time, in the answer and in the page alike — two lit
+      // phrases would say two different things were being pointed at.
+      questionPane.querySelectorAll('.find-cite').forEach(c => {
+        delete c.dataset.pinned;
+        c.classList.remove('find-cite-active');
+      });
+      chip.dataset.pinned = '1';
+      chip.classList.add('find-cite-active');
+      focusFindCitation(f, chip.dataset.citeText || '', true);
+    };
+  });
+}
+
+/**
+ * Pull the grounding markers out of a recorded answer.
+ *
+ * Two kinds, both produced by the extension and both meaningful here:
+ *   [N:"quoted text"]  a citation — N indexes the element on the page, and the QUOTED TEXT is what
+ *                      was said there. The text is what survives; see markFindCitations.
+ *   [ev:key]           saved visual evidence, matched against canned.evidence by key.
+ */
+function parseFindCitations(answer) {
+  const out = [];
+  String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (m, index, text) => {
+    out.push({ index: Number(index), text });
+    return m;
+  });
+  return out;
+}
+
+/**
+ * The answer with its markers turned into chips — what the extension shows, rather than the raw
+ * "[43:\"El pedante\"]" a participant should never see.
+ *
+ * The non-grounded arm gets the markers STRIPPED instead: that arm is defined by their absence, and
+ * a raw marker left in the prose would be worse than either — it would tell a non-grounded
+ * participant that something was cited while giving them no way to check it.
+ */
+function renderFindAnswer(answer, arm) {
+  const raw = String(answer || '');
+  if (arm === 'nongrounding') {
+    return renderMarkdown(esc(window.stripNonGroundingMarkers
+      ? window.stripNonGroundingMarkers(raw)
+      : raw.replace(/\[\d+:"[^"]*"\]/g, '').replace(/\s*\[ev:[^\]]+\]/g, '').replace(/\s+([.,;:!?])/g, '$1')));
+  }
+
+  let n = 0;
+  let e = 0;
+  const withChips = esc(raw)
+    // The extension's own markup (parseCitations, sidepanel/panel.js): the cited PHRASE, then a
+    // superscript index. The phrase is hidden until the answer is expanded — that is what clicking
+    // an answer does in the panel, and it is why a citation reads as "[1]" until asked.
+    // esc() has already turned the quotes into &quot;, so the pattern matches the escaped form.
+    .replace(/\[(\d+):&quot;([^&]*)&quot;\]/g, (m, index, text) => {
+      n++;
+      return `<span class="find-cite" data-cite-text="${text}" data-cite-n="${n}"
+        title="Show this on the page"
+        ><span class="citation-text">${text}</span><sup class="citation-index">[${n}]</sup></span>`;
+    })
+    // [ev:key] is SAVED VISUAL EVIDENCE: a crop of the region the claim rests on, taken at record
+    // time. Its `note` is a description rather than a quotation, so it cannot be found in the page
+    // by text — the crop itself is the evidence, and opening it is the only thing that reliably
+    // shows what was meant. Rendered as its own numbered series, so it is not mistaken for a
+    // citation into the page.
+    .replace(/\[ev:([^\]]+)\]/g, (m, key) => {
+      e++;
+      return `<button type="button" class="find-ev" data-ev-key="${key}"
+        title="Open the saved evidence for this claim">📎<sup class="citation-index">[E${e}]</sup></button>`;
+    });
+
+  return renderMarkdown(withChips);
+}
+
+/**
+ * The markdown an answer is written in, as the panel renders it.
+ *
+ * An agent's answer contains **bold** — "the planet name … is **Jupiter**" — and shown raw those
+ * asterisks are visible noise in the middle of the sentence a participant is being asked to judge.
+ * Bold first, then single-asterisk italics, in that order: doing italics first would eat one
+ * asterisk from every pair and turn **Jupiter** into *Jupiter*.
+ *
+ * Runs on ALREADY-ESCAPED text, so the only tags in the result are the ones added here.
+ */
+function renderMarkdown(escaped) {
+  return String(escaped || '')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+}
+
+/**
+ * Mark what the answer cited, inside the snapshot, for the grounded arm only.
+ *
+ * This is what the whole snapshot exists for: the frame is same-origin, so its document can be
+ * walked and marked. Matching is on the QUOTED TEXT from each [N:"…"] marker, not on the index N —
+ * an index only means anything if the page is re-indexed exactly as it was at record time, and one
+ * lazy image or one A/B variant moves every index. The quoted sentence is the stable handle.
+ *
+ * Images are cited too ([39:"Title page engraving…"]), and their quoted text is the caption or alt
+ * text rather than body copy — so a text miss falls back to matching img[alt] and figure captions,
+ * and marks the picture itself.
+ *
+ * The non-grounded arm gets nothing. That is the arm.
+ */
+function applyFindGrounding(frame, canned, arm) {
+  if (arm === 'nongrounding') return;
+  const answer = canned?.answer_raw || canned?.answer_display || '';
+  const cites = parseFindCitations(answer);
+  if (!cites.length) return;
+
+  let doc;
+  try { doc = frame.contentDocument; } catch (e) { return; }
+  if (!doc?.body) return;
+
+  // THE EXTENSION'S OWN STYLING, copied from content/content.css rather than approximated. A
+  // participant who saw the live page in the extension and the snapshot here must be looking at the
+  // same thing: the same tint on a cited phrase, the same outline on a cited picture, and the same
+  // "PageGuide highlight" badge when one is pointed at. A second visual language for the same idea
+  // would be one more difference between the arms that nobody is measuring.
+  const style = doc.createElement('style');
+  style.textContent = `
+    .pageguide-highlight {
+      background-color: color-mix(in srgb, #7857ff 16%, transparent);
+      border-radius: 3px; padding: 1px 3px; margin: 0 1px;
+      scroll-margin: 90px;
+    }
+    [data-pageguide-styled] { position: relative; }
+    [data-pageguide-styled]:hover,
+    .pageguide-preview-target {
+      outline: 2px solid #7857ff !important;
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px rgba(120,87,255,.14), 0 12px 32px rgba(120,87,255,.22) !important;
+      background-color: color-mix(in srgb, #7857ff 38%, transparent);
+    }
+    /* The badge the live page shows, to the pixel: same words, same pill, same dot. */
+    [data-pageguide-styled]:hover::after,
+    .pageguide-preview-target::after {
+      content: 'PageGuide highlight';
+      position: absolute; left: 0; bottom: calc(100% + 8px);
+      z-index: 2147483647;
+      padding: 6px 9px 6px 24px;
+      border: 1px solid rgba(155,132,255,.36);
+      border-radius: 999px;
+      background:
+        radial-gradient(circle at 12px 50%, transparent 0 3px, #b89cff 3px 5px, transparent 5px),
+        rgba(32,26,55,.96);
+      color: #fff;
+      box-shadow: 0 14px 34px rgba(50,35,100,.25);
+      font: 700 11px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    /* A cited picture is outlined rather than tinted — a tint over an engraving hides the engraving,
+       which is the thing being asked about. */
+    .pageguide-highlight-img {
+      outline: 2px solid #7857ff; outline-offset: 3px; border-radius: 2px; scroll-margin: 90px;
+    }
+    /* The wrapper must lay out like the image it holds, or marking one would reflow the article. */
+    .pageguide-highlight-imgwrap { display: inline-block; position: relative; max-width: 100%; line-height: 0; }
+    .pageguide-highlight-imgwrap > img { display: block; max-width: 100%; }`;
+  doc.head?.appendChild(style);
+
+  cites.forEach(cite => markFindCitation(doc, cite.text));
+  drawEvidenceMarks(doc, canned);
+}
+
+/**
+ * Draw the saved evidence annotations onto the picture they were drawn on.
+ *
+ * This is what the extension shows and the site was missing. Evidence for an image claim is not
+ * "highlight the whole image" — it is a labelled ellipse round the spaceman, a box round the
+ * lettering, an arrow to what it is reaching for. Marking the element instead pointed at the right
+ * picture while saying nothing about WHERE in it, which for a question like "what is the spaceman
+ * doing to the ship?" is most of the answer withheld.
+ *
+ * Coordinates are normalized (0..1) to the source image, so they survive the snapshot being shown
+ * at any width — which is why they can be replayed here at all.
+ */
+function drawEvidenceMarks(doc, canned) {
+  const items = (canned?.evidence || []).filter(e => e?.marks?.annotations?.length);
+  if (!items.length) return;
+
+  // "page_image_1" is the first content image on the page. Icons and logos are excluded by size:
+  // an annotation was drawn on something big enough to draw on.
+  const contentImages = Array.from(doc.querySelectorAll('img'))
+    .filter(img => (img.naturalWidth || img.width || 0) >= 200);
+
+  items.forEach(item => {
+    const n = Number(String(item.source_image_id || '').match(/(\d+)$/)?.[1] || 1);
+    const img = contentImages[n - 1];
+    if (!img) return;
+    overlayAnnotations(doc, img, item.marks.annotations, item.key);
+  });
+}
+
+/** Position an SVG over one image and draw its annotations into it. */
+function overlayAnnotations(doc, img, annotations, key) {
+  const host = img.parentElement?.classList.contains('pageguide-highlight-imgwrap')
+    ? img.parentElement
+    : (() => { markImage(img, key || ''); return img.parentElement; })();
+  if (!host || host.querySelector('.pg-annots')) return;
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = doc.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'pg-annots');
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('style',
+    'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible');
+
+  annotations.forEach(a => {
+    const colour = a.color || '#ff2d78';
+    if (a.type === 'ellipse' && a.bbox) {
+      const e = doc.createElementNS(NS, 'ellipse');
+      e.setAttribute('cx', (a.bbox.x + a.bbox.w / 2) * 100);
+      e.setAttribute('cy', (a.bbox.y + a.bbox.h / 2) * 100);
+      e.setAttribute('rx', (a.bbox.w / 2) * 100);
+      e.setAttribute('ry', (a.bbox.h / 2) * 100);
+      e.setAttribute('fill', 'none');
+      e.setAttribute('stroke', colour);
+      e.setAttribute('stroke-width', '0.6');
+      e.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(e);
+      if (a.label) svg.appendChild(_annotLabel(doc, NS, a.bbox.x * 100, a.bbox.y * 100 - 2, a.label, colour));
+    } else if ((a.type === 'box' || a.type === 'rect') && a.bbox) {
+      const r = doc.createElementNS(NS, 'rect');
+      r.setAttribute('x', a.bbox.x * 100);
+      r.setAttribute('y', a.bbox.y * 100);
+      r.setAttribute('width', a.bbox.w * 100);
+      r.setAttribute('height', a.bbox.h * 100);
+      r.setAttribute('fill', 'none');
+      r.setAttribute('stroke', colour);
+      r.setAttribute('stroke-width', '0.6');
+      r.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(r);
+      if (a.label) svg.appendChild(_annotLabel(doc, NS, a.bbox.x * 100, a.bbox.y * 100 - 2, a.label, colour));
+    } else if (a.type === 'arrow' && a.from && a.to) {
+      const l = doc.createElementNS(NS, 'line');
+      l.setAttribute('x1', a.from.x * 100); l.setAttribute('y1', a.from.y * 100);
+      l.setAttribute('x2', a.to.x * 100);   l.setAttribute('y2', a.to.y * 100);
+      l.setAttribute('stroke', colour);
+      l.setAttribute('stroke-width', '0.8');
+      l.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(l);
+      if (a.label) svg.appendChild(_annotLabel(doc, NS, a.to.x * 100, a.to.y * 100 - 2, a.label, colour));
+    }
+  });
+
+  host.appendChild(svg);
+}
+
+/** A label chip on an annotation, in the annotation's own colour. */
+function _annotLabel(doc, NS, x, y, text, colour) {
+  const g = doc.createElementNS(NS, 'g');
+  const t = doc.createElementNS(NS, 'text');
+  t.setAttribute('x', x);
+  t.setAttribute('y', Math.max(2, y));
+  t.setAttribute('fill', '#fff');
+  t.setAttribute('font-size', '2.6');
+  t.setAttribute('font-weight', '700');
+  t.setAttribute('paint-order', 'stroke');
+  t.setAttribute('stroke', colour);
+  t.setAttribute('stroke-width', '2.2');
+  t.setAttribute('stroke-linejoin', 'round');
+  t.textContent = text;
+  g.appendChild(t);
+  return g;
+}
+
+/** Curly quotes, odd spacing and non-breaking spaces all differ between a recorded quote and the
+ *  page it came from. Compare on a normalized form so they stop mattering. */
+function normText(v) {
+  return String(v == null ? '' : v)
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Mark one cited passage inside the snapshot.
+ *
+ * The hard case is a CAPTION. A cited image carries text like "Title page engraving from Francesco
+ * Belo's El pedante (1538)", and a caption is almost always split across elements — the play title
+ * sits in its own <em> or <a>, so no single text node holds the whole string and an exact match
+ * finds nothing. That is why this falls back to progressively shorter prefixes and then marks the
+ * CONTAINING ELEMENT rather than a sub-range: the goal is to show the participant where the claim
+ * came from, and the whole caption is a better answer than nothing.
+ *
+ * Whatever matches, a picture beside it is outlined too — for an image citation the picture is the
+ * evidence, and highlighting only its caption would point next to the thing rather than at it.
+ */
+function markFindCitation(doc, text) {
+  const needle = normText(text);
+  if (needle.length < 4) return;            // too short to match uniquely; a false hit is worse
+
+  // 1. The whole quote inside one text node — the clean case, marked precisely.
+  if (markText(doc, needle)) return;
+
+  // 2. A prefix inside one text node. Long enough to stay distinctive, short enough to survive the
+  //    markup that split the caption up.
+  for (const len of [40, 25, 15]) {
+    if (needle.length <= len) continue;
+    const el = findElementContaining(doc, needle.slice(0, len));
+    if (el) { markElement(el, needle); return; }
+  }
+
+  // 3. An image whose alt text carries the quote.
+  const img = Array.from(doc.querySelectorAll('img'))
+    .find(i => normText(i.getAttribute('alt')).includes(needle.slice(0, 25)));
+  if (img) markImage(img, needle);
+}
+
+/** The smallest element whose own text contains `fragment`. */
+function findElementContaining(doc, fragment) {
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (normText(node.nodeValue).includes(fragment)) return node.parentElement;
+  }
+  // Split across children: fall back to the smallest element whose combined text has it.
+  const candidates = Array.from(doc.querySelectorAll('figcaption, p, li, td, div, span, figure'))
+    .filter(el => normText(el.textContent).includes(fragment));
+  return candidates.sort((a, b) =>
+    normText(a.textContent).length - normText(b.textContent).length)[0] || null;
+}
+
+/**
+ * Highlight an element, and outline the picture it describes.
+ *
+ * A caption is rarely a sibling of its image. On this page the marked text is a <p> inside
+ * .essay__image__caption, and the <img> lives two levels further up in .essay__center-content —
+ * so checking only the parent or a <figure> finds nothing. The walk climbs until an ancestor
+ * contains an image, which is what "the picture this caption belongs to" actually means in markup.
+ *
+ * BOUNDED at four levels on purpose: keep climbing and every caption eventually reaches <body>,
+ * where it would confidently outline the site's logo.
+ */
+function markElement(el, needle) {
+  el.classList.add('pageguide-highlight');
+  el.setAttribute('data-pageguide-styled', '');
+  el.dataset.pgCite = needle;
+
+  let node = el;
+  for (let depth = 0; depth < 4 && node; depth++) {
+    const img = node.querySelector?.('img');
+    if (img) { markImage(img, needle); return; }
+    node = node.parentElement;
+  }
+}
+
+/**
+ * Mark a cited image — via a WRAPPER, because an image cannot carry the badge itself.
+ *
+ * ::before and ::after do not render on replaced elements, and <img> is one. The badge is a
+ * ::after, so putting the class on the image gives an outline and no label: the picture is pointed
+ * at with nothing saying why, which is the one thing the badge exists to say. Wrapping the image in
+ * an inline-block span gives the pseudo-element something it can actually attach to.
+ */
+function markImage(img, needle) {
+  if (img.parentElement?.classList.contains('pageguide-highlight-imgwrap')) return;  // already marked
+  const doc = img.ownerDocument;
+  const wrap = doc.createElement('span');
+  wrap.className = 'pageguide-highlight-imgwrap pageguide-highlight-img';
+  wrap.setAttribute('data-pageguide-styled', '');
+  wrap.dataset.pgCite = needle;
+  img.parentNode.insertBefore(wrap, img);
+  wrap.appendChild(img);
+}
+
+/**
+ * Point at a citation inside the snapshot — the panel's own gesture.
+ *
+ * Mirrors pageguidePreviewIndex in the extension: the cited thing is scrolled into view and given
+ * `.pageguide-preview-target`, which is what draws the outline and the "PageGuide highlight" badge.
+ * Same class, same CSS, so it reads as the identical affordance rather than a lookalike.
+ *
+ * @param {boolean} sticky - true on click (stays until the next one), false on hover (transient)
+ */
+function focusFindCitation(frame, text, sticky = true) {
+  let doc;
+  try { doc = frame.contentDocument; } catch (e) { return; }
+  if (!doc) return;
+
+  const needle = normText(text).toLowerCase();
+  const marks = Array.from(doc.querySelectorAll('[data-pageguide-styled]'));
+
+  // EXACT FIRST. One citation's text is often a substring of another's: "El pedante" is the play,
+  // and it also appears inside "Title page engraving from Francesco Belo's El pedante (1538)". A
+  // substring search in document order therefore sent the chip for the play to the picture of its
+  // title page — the wrong evidence, pointed at confidently. Each mark records the exact quote it
+  // was created for, so that is what is matched on before anything looser is tried.
+  const target = marks.find(el => normText(el.dataset.pgCite).toLowerCase() === needle)
+    || marks.find(el => normText(el.dataset.pgCite).toLowerCase().includes(needle.slice(0, 40)))
+    || marks.find(el => normText(el.textContent).toLowerCase().includes(needle.slice(0, 40)));
+  if (!target) return;
+
+  clearFindFocus(doc);
+  target.classList.add('pageguide-preview-target');
+  // block:'start', not 'center'. A cited engraving is often taller than the frame, and centring a
+  // tall element puts its TOP off-screen — which is precisely where the "PageGuide highlight" badge
+  // sits, so the label naming the thing would be the one part scrolled out of view. 'start' plus
+  // the 90px scroll-margin in the injected CSS leaves exactly enough room above it for the badge.
+  // NO SMOOTH BEHAVIOUR. Inside a srcdoc iframe, scrollIntoView({behavior:'smooth'}) silently does
+  // nothing at all — measured: 0px moved with smooth, 394px with the default. It fails without an
+  // error, so the chip appears to do nothing and the citation is never reached. An instant jump
+  // that works beats an animation that does not.
+  if (sticky) target.scrollIntoView({ block: 'start' });
+}
+
+/** Only one thing is ever pointed at, so the badge cannot appear twice at once. */
+function clearFindFocus(doc) {
+  if (!doc) return;
+  doc.querySelectorAll('.pageguide-preview-target')
+    .forEach(el => el.classList.remove('pageguide-preview-target'));
+}
+
+/** Wrap the first occurrence of `needle` in a highlight. Returns whether it matched. */
+function markText(doc, needle) {
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const target = normText(needle).toLowerCase();
+  let node;
+  while ((node = walker.nextNode())) {
+    const hit = normText(node.nodeValue).toLowerCase().indexOf(target);
+    if (hit < 0) continue;
+    const range = doc.createRange();
+    range.setStart(node, hit);
+    range.setEnd(node, hit + needle.length);
+    const mark = doc.createElement('span');
+    mark.className = 'pageguide-highlight';
+    mark.setAttribute('data-pageguide-styled', '');
+    mark.dataset.pgCite = needle;
+    try { range.surroundContents(mark); } catch (e) { return false; }  // spans elements: leave it
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The saved evidence crop, full size.
+ *
+ * Mirrors openMemoryShotLightbox in the panel: the picture, what it was saved as, and the note that
+ * says why it backs the claim. An evidence marker whose crop never made it says so rather than
+ * opening an empty box — a chip that does nothing reads as broken, not as empty.
+ */
+function openEvidenceLightbox(item, key) {
+  document.getElementById('find-ev-lightbox')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'find-ev-lightbox';
+  overlay.className = 'ev-lightbox';
+  overlay.innerHTML = `
+    <div class="ev-dialog" role="dialog" aria-modal="true" aria-label="Saved evidence">
+      <div class="ev-head">
+        <span>📎 Saved evidence${key ? ` — ${esc(key)}` : ''}</span>
+        <button type="button" class="ev-close" aria-label="Close">×</button>
+      </div>
+      ${item?.shot
+        ? `<img src="data:image/jpeg;base64,${item.shot}" alt="${esc(item.note || key || 'evidence')}">`
+        : '<p class="ev-empty">No image was saved with this evidence.</p>'}
+      ${item?.note ? `<div class="ev-note">${esc(item.note)}</div>` : ''}
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.ev-close')) overlay.remove();
+  });
+  document.addEventListener('keydown', function onKey(e) {
+    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); }
+  });
+  document.body.appendChild(overlay);
+}
+
+/** Minimal escaping for the Find preview; the stimulus pane has its own for the guide half. */
+function esc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/** Prev/Next/Exit, for paging through the material without answering anything. */
+function adminNavHtml() {
+  if (!S.state.adminReview) return '';
+  return `
+    <div class="q-actions">
+      <button class="q-btn" id="admin-prev"${S.state.idx === 0 ? ' disabled' : ''}>← Prev</button>
+      <button class="q-btn q-btn-primary" id="admin-next">Next →</button>
+    </div>
+    <div class="q-actions"><button class="q-btn" id="admin-quit">Leave review</button></div>`;
+}
+
+function bindAdminNav() {
+  if (!S.state.adminReview) return;
+  const prev = document.getElementById('admin-prev');
+  const next = document.getElementById('admin-next');
+  const quit = document.getElementById('admin-quit');
+  if (prev) prev.onclick = () => { S.state.idx = Math.max(0, S.state.idx - 1); S.saveReview(); showTask(); };
+  if (next) next.onclick = () => { S.state.idx++; S.saveReview(); showTask(); };
+  if (quit) quit.onclick = () => { S.clearReview(); location.href = 'index.html'; };
 }
 
 /**
@@ -131,15 +773,22 @@ function askPostQuestions(task, record, timings) {
     });
     S.state.results.push(row);
     S.state.idx++;
-    if (!window.STUDY_SOURCE) S.saveLocal();   // a demo leaves no trace in the participant's storage
+    if (!window.STUDY_SOURCE && !S.state.adminReview) S.saveLocal();
 
-    // Written now rather than batched at the end: a participant who closes the tab three tasks in
-    // should leave three rows behind, not none. A failed write keeps the local copy, which the
-    // final screen can still export.
-    try {
-      await DB.insertStudyResult(row);
-    } catch (e) {
-      console.warn('[study] result kept locally only:', e);
+    // ADMIN REVIEW WRITES NOTHING. A reviewer clicking through sixteen tasks to check wording would
+    // otherwise leave sixteen rows indistinguishable from a participant who answered impossibly
+    // fast, and no column would say otherwise.
+    if (S.state.adminReview) {
+      console.log('[admin] would have saved:', row);
+    } else {
+      // Written now rather than batched at the end: a participant who closes the tab three tasks in
+      // should leave three rows behind, not none. A failed write keeps the local copy, which the
+      // final screen can still export.
+      try {
+        await DB.insertStudyResult(row);
+      } catch (e) {
+        console.warn('[study] result kept locally only:', e);
+      }
     }
 
     showTask();

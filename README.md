@@ -37,10 +37,33 @@ migrates `study_task_results` with the `score_*` columns.
 > swallowed — the study keeps running while nothing reaches Supabase. Run the SQL before the next
 > participant, not after.
 
-**2. Upload the stimuli.** In the extension: ⋯ → 🧭 Record Guide User Study → ⬆ on a trajectory.
-Only trajectories ticked for inclusion appear in the study.
+**2. Set up the publish helper.**
 
-**3. Configure.**
+```bash
+cp .env.example .env
+# fill in SUPABASE_URL and SUPABASE_SECRET_KEY (sb_secret_… from Project Settings → API)
+node scripts/publish.mjs --serve
+```
+
+The secret key lives in `.env` and never leaves that terminal. It cannot go in the browser at all:
+Supabase refuses it from any browser context —
+
+> `401 "Forbidden use of secret API key in browser"`
+
+— and a Chrome side panel is a browser. That is why publishing is split in two: the extension builds
+the bundle, this helper does the privileged write.
+
+**3. Publish.** With the helper running, in the extension: ⋯ → 🧭 Record Guide User Study →
+**⬆ Publish to web**. It publishes both halves — guide trajectories and the Find questions, answers
+and ground truth — and reports per table. Only trajectories ticked for inclusion are sent.
+
+No terminal to hand? **⬇ Export instead** writes the same bundle to a file:
+
+```bash
+node scripts/publish.mjs ~/Downloads/study_stimuli.json
+```
+
+**4. Configure the site.**
 
 ```bash
 cp app/config.example.js app/config.js
@@ -48,10 +71,9 @@ cp app/config.example.js app/config.js
 ```
 
 The **anon** key is the only key that belongs here — this file is served to participants, so treat
-everything in it as public. Uploading uses a service-role key entered in the extension and held in
-memory for that session only.
+everything in it as public. The secret key belongs in `.env`, read only by the publish helper.
 
-**4. Serve.**
+**5. Serve.**
 
 ```bash
 python3 -m http.server 8000

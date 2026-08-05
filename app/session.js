@@ -31,7 +31,13 @@ function resolveArm(params) {
   return 'grounding';
 }
 
-/** The label written to `condition`, matching what the extension records for the same arm. */
+/**
+ * The condition, and there are exactly two of it: `grounding` | `nongrounding`.
+ *
+ * Matches studyConditionLabel in the extension byte for byte. Nothing about WHICH CLIENT produced
+ * the row belongs in this column — that is a different fact, and it lives in task_data.source.
+ * Mixing the two is how the same two conditions ended up recorded under five different strings.
+ */
 function conditionLabel(arm) {
   return arm === 'nongrounding' ? 'nongrounding' : 'grounding';
 }
@@ -46,6 +52,36 @@ function saveLocal() {
       idx: state.idx, results: state.results, queue: state.queue,
     }));
   } catch (e) { /* private mode, quota — not worth failing the study over */ }
+}
+
+const REVIEW_KEY = 'pageguide_web_study_review';
+
+/**
+ * The admin review session, kept apart from the participant's.
+ *
+ * sessionStorage under its OWN key, for two reasons: it must survive the navigation from the
+ * welcome screen to the task screen, and it must not touch `pageguide_web_study_session` — a
+ * reviewer opening review mode would otherwise discard the progress of a participant midway
+ * through the real study on the same machine.
+ */
+function saveReview() {
+  try {
+    sessionStorage.setItem(REVIEW_KEY, JSON.stringify({
+      participantId: state.participantId, arm: state.arm, queue: state.queue,
+      idx: state.idx, results: state.results, adminReview: true,
+    }));
+  } catch (e) { /* ignore */ }
+}
+
+function loadReview() {
+  try {
+    const raw = sessionStorage.getItem(REVIEW_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+function clearReview() {
+  try { sessionStorage.removeItem(REVIEW_KEY); } catch (e) { /* ignore */ }
 }
 
 function loadLocal() {
@@ -130,4 +166,7 @@ function buildResultRow({ task, record, timings, confidence, helpfulness }) {
   };
 }
 
-window.StudySession = { state, resolveArm, conditionLabel, saveLocal, loadLocal, clearLocal, buildResultRow };
+window.StudySession = {
+  state, resolveArm, conditionLabel, saveLocal, loadLocal, clearLocal, buildResultRow,
+  saveReview, loadReview, clearReview,
+};

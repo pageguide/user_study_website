@@ -303,3 +303,175 @@ body {
 }
 .welcome-status-bad { background: rgba(211, 47, 47, 0.1); color: var(--bad); }
 .welcome-fine { margin-top: 12px; font-size: 12px; color: var(--muted); text-align: center; }
+
+
+/* ── Admin ──────────────────────────────────────────────────────────────────────
+   A reviewer's controls, not a participant's. Quiet at the bottom of the welcome screen so it can
+   be ignored, and unmistakable once open so nobody reviews for ten minutes under the impression
+   they are collecting data. */
+.admin-door {
+  display: block;
+  margin: 28px auto 0;
+  border: 0;
+  background: none;
+  color: rgba(0, 0, 0, 0.35);
+  font: 600 12px/1.4 inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.admin-door:hover { color: var(--accent-dark); }
+
+.admin-panel {
+  margin-top: 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid #8a5300;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.admin-title { font-weight: 800; margin-bottom: 10px; }
+.admin-warn {
+  background: rgba(201, 122, 0, 0.14);
+  color: #8a5300;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font: 700 11px/1.6 inherit;
+  margin-left: 6px;
+}
+.admin-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.admin-chip {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font: 700 12px/1.5 inherit;
+  color: var(--muted);
+  cursor: pointer;
+}
+.admin-chip:hover { border-color: var(--accent); color: var(--accent-dark); }
+.admin-chip-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.admin-exit {
+  display: block;
+  margin: 10px auto 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 600 12px/1.4 inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* The frozen page a Find task is about. Fills its pane: the participant is reading an article, and
+   a letterboxed article is a different reading task from the one the extension arm gets. */
+.find-page {
+  width: 100%;
+  height: 100%;
+  min-height: 80vh;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+
+/* Citation chips in a Find answer. Numbered, like the extension's — a claim and the thing backing
+   it stay attached, and clicking one scrolls the snapshot to it. */
+.find-answer { line-height: 1.7; }
+
+/* A citation is a superscript index sitting in the prose, exactly as the panel renders one — NOT a
+   round chip. It was a filled purple pill with the index tinted purple inside it, so the number was
+   invisible against its own background and every citation read as a blank blob. */
+.find-cite {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background-color 0.12s;
+}
+.find-cite .citation-text { display: none; }
+.find-cite .citation-index {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--accent);
+  margin-left: 1px;
+  vertical-align: super;
+  line-height: 0;
+}
+.find-cite:hover .citation-index { color: var(--accent-dark); }
+
+/* The active citation is lit in the ANSWER as well as in the page, so a participant can see which
+   claim the highlight belongs to without holding the number in their head. */
+.find-cite-active {
+  background: rgba(120, 87, 255, 0.2);
+  box-shadow: 0 0 0 2px rgba(120, 87, 255, 0.35);
+}
+.find-cite-active .citation-index { color: var(--accent-dark); }
+
+.find-answer.citations-expanded .find-cite .citation-text {
+  display: inline;
+  background: rgba(120, 87, 255, 0.14);
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-right: 1px;
+  /* A cited phrase can be a whole caption, so it WILL wrap. Without cloning the decoration the
+     background paints as one box spanning every line it touches — which lands on top of the lines
+     between, exactly as it did before this was added. */
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.find-answer strong { font-weight: 800; }
+.find-answer code {
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 0.92em;
+}
+
+.find-ev {
+  margin-left: 3px;
+  font-size: 12px;
+  opacity: 0.75;
+  cursor: default;
+}
+
+.pageguide-clickable { cursor: pointer; }
+
+/* Saved evidence: a numbered marker that opens its crop. Distinct from a citation index, because it
+   points at a picture taken at record time rather than at a place in the page. */
+.find-ev {
+  border: 0;
+  background: none;
+  padding: 0 1px;
+  font: inherit;
+  font-size: 0.95em;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.find-ev .citation-index { color: #8a5300; font-weight: 800; }
+.find-ev:hover { background: rgba(201, 122, 0, 0.14); }
+
+.ev-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(16, 14, 26, 0.68);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.ev-dialog {
+  background: #fff;
+  border-radius: 12px;
+  max-width: min(900px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+  padding: 14px;
+}
+.ev-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+.ev-close { border: 0; background: none; font-size: 22px; cursor: pointer; color: var(--muted); }
+.ev-dialog img { max-width: 100%; display: block; border-radius: 8px; }
+.ev-note { margin-top: 10px; font-size: 13px; color: var(--muted); }
+.ev-empty { color: var(--muted); font-size: 13px; }
