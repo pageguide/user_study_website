@@ -946,7 +946,15 @@ function markFindCitation(doc, text, index, anchor, settled) {
   // including snapshots captured before anchoring existed, and re-capturing cannot strip it off.
   if (anchor && anchor.tag && anchor.text) {
     const located = resolveCitationAnchor(doc, anchor);
-    if (located) { markElement(located, needle || String(index)); return located; }
+    // THE QUOTE MUST BE IN IT. An anchor derived through a stale index resolves perfectly and points
+    // at the wrong paragraph — SVSF-V1's [70] landed on "The novels are genuinely extraordinary…",
+    // which does not contain "Book covers: Isaac Asimov's…" anywhere. The recorder validates this
+    // now too, but rows published before it did are already in the database, and a locator beats
+    // every fallback below — so an unchecked bad one wins outright and silently.
+    if (located && anchorHoldsQuote(located, needle)) {
+      markElement(located, needle || String(index));
+      return located;
+    }
   }
 
   // 0b. THE STAMPED ANCHOR, when the snapshot has one. `[69:"…"]` means element 69 in the page index
@@ -981,6 +989,20 @@ function markFindCitation(doc, text, index, anchor, settled) {
     .find(i => normText(i.getAttribute('alt')).includes(needle.slice(0, 25)));
   if (img) { markImage(img, needle); return img; }
   return null;
+}
+
+/**
+ * Does this element actually carry the quoted text?
+ *
+ * Mirrors `_pgAnchorHolds` in content/functions/citation_anchors.js, including its 40-character
+ * prefix rule: a citation's quote is the model's rendering of what it read and may end in an
+ * ellipsis or clip a trailing clause, so demanding the whole string rejects good matches.
+ */
+function anchorHoldsQuote(el, quote) {
+  const q = normText(quote).toLowerCase();
+  if (!q) return true;                       // nothing to disprove
+  const hay = normText(el.textContent).toLowerCase();
+  return hay.includes(q.length > 40 ? q.slice(0, 40) : q);
 }
 
 /**
