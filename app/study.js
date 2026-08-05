@@ -667,7 +667,13 @@ function applyFindGrounding(frame, canned, arm) {
     .pageguide-highlight-imgwrap > img { display: block; max-width: 100%; }`;
   doc.head?.appendChild(style);
 
-  cites.forEach(cite => markFindCitation(doc, cite.text, cite.index));
+  // The locators the recorder resolved on the live page, keyed by the citation number they belong
+  // to. Absent on responses banked before anchoring existed — those fall through to text search.
+  const byIndex = new Map();
+  (Array.isArray(canned?.citation_anchors) ? canned.citation_anchors : [])
+    .forEach(a => { if (a && a.index != null) byIndex.set(Number(a.index), a); });
+
+  cites.forEach(cite => markFindCitation(doc, cite.text, cite.index, byIndex.get(Number(cite.index))));
   drawEvidenceMarks(doc, canned);
 }
 
@@ -811,10 +817,20 @@ function normText(v) {
  * Whatever matches, a picture beside it is outlined too — for an image citation the picture is the
  * evidence, and highlighting only its caption would point next to the thing rather than at it.
  */
-function markFindCitation(doc, text, index) {
+function markFindCitation(doc, text, index, anchor) {
   const needle = normText(text);
 
-  // 0. THE STAMPED ANCHOR, when the snapshot has one. `[69:"…"]` means element 69 in the page index
+  // 0a. THE RECORDED LOCATOR, when the response carries one. Resolved on the live page at the moment
+  // the answer was banked, while the index that issued `index` was still installed — see
+  // content/functions/citation_anchors.js. Preferred over the stamped anchor because it travels with
+  // the ANSWER rather than with one capture: it resolves against a snapshot taken at any time,
+  // including snapshots captured before anchoring existed, and re-capturing cannot strip it off.
+  if (anchor && anchor.tag && anchor.text) {
+    const located = resolveCitationAnchor(doc, anchor);
+    if (located) { markElement(located, needle || String(index)); return; }
+  }
+
+  // 0b. THE STAMPED ANCHOR, when the snapshot has one. `[69:"…"]` means element 69 in the page index
   // at record time, and the capture writes that index onto the element (_pgStampAnchors,
   // content/functions/page_snapshot.js). Exact, so none of the guessing below is needed — and the
   // guessing is what put "Foundation series" on the wrong paragraph. Everything after this is the
@@ -841,6 +857,39 @@ function markFindCitation(doc, text, index) {
   const img = Array.from(doc.querySelectorAll('img'))
     .find(i => normText(i.getAttribute('alt')).includes(needle.slice(0, 25)));
   if (img) markImage(img, needle);
+}
+
+/**
+ * Find the element a recorded locator names, or null.
+ *
+ * Counts (tag, flattened text) occurrences the same way the recorder did — see `_pgAnchorOrdinal`
+ * in content/functions/citation_anchors.js. The two must agree exactly, which is why both walk the
+ * whole document in order and both compare COLLAPSED textContent rather than text nodes:
+ *
+ *   • flattening is what makes "<i>Foundation</i> series" match the quote "Foundation series",
+ *     which no text-node search can do;
+ *   • the ordinal is what separates the inner "El pedante" from the caption that contains it,
+ *     which no substring search can do.
+ *
+ * Null is a normal outcome — a locator from a differently-pruned capture may not resolve — and the
+ * caller falls through to text search rather than marking nothing.
+ */
+function resolveCitationAnchor(doc, anchor) {
+  const want = String(anchor.text || '');
+  if (!want) return null;
+  const all = doc.getElementsByTagName(anchor.tag);
+  const matches = [];
+  for (let i = 0; i < all.length; i++) {
+    const t = normText(all[i].textContent);
+    // A truncated locator kept only the first PG_ANCHOR_TEXT_MAX characters, so prefix is the only
+    // comparison it supports; an untruncated one must match whole, or "El pedante" would match the
+    // caption that merely starts with it.
+    if (anchor.truncated ? t.startsWith(want) : t === want) matches.push(all[i]);
+  }
+  if (!matches.length) return null;
+  // Out of range means the snapshot and the recording disagree about the page — better to fall
+  // through to text search than to mark a confidently wrong element.
+  return matches[anchor.ordinal] || (matches.length === 1 ? matches[0] : null);
 }
 
 /**
