@@ -256,9 +256,10 @@
         place: 'bottom',
         title: 'The question, and what this task shows you',
         body: 'The question is what the agent was asked — most have two parts, so read it first. '
-          + 'Under it, the badge says <b>Grounded</b> or <b>Non-grounded</b>: half your tasks mark '
-          + 'the evidence behind the answer, half mark nothing. That is the condition being studied, '
-          + 'not a broken page, and the ⓘ explains it on every task.',
+          + 'Under it, the badge says <b>Grounded</b> or <b>Non-grounded</b>. Grounded marks the '
+          + 'evidence in both places: highlighted in the page, and cited in the answer. '
+          + 'Non-grounded marks it in neither. That is the condition being studied, not a broken '
+          + 'page, and the ⓘ explains it on every task.',
       },
       {
         target: '#find-page',
@@ -281,13 +282,29 @@
         // The exploring comes BEFORE the answer, not after it. Asked afterwards it is advice nobody
         // can act on — the answer is already given, and "have another look" reads as "you got it
         // wrong". Asked first it is just how the task is done.
-        target: '#find-page',
-        also: ['#q-find-answer'],
-        place: 'left',
+        //
+        // THE ANSWER CARD IS THE PRIMARY TARGET, and the card sits above it rather than beside it:
+        // this step needs the page, the agent's answer and the options all legible at once, and a
+        // card placed against the page covered the very thing the step is pointing at.
+        target: '.find-answer',
+        also: [
+          '#find-page',
+          '#q-find-answer',
+          // Nothing until an option is ticked, then the button they are told to press.
+          () => (document.querySelector('input[name="q-find-answer"]:checked')
+            ? document.getElementById('q-find-next') : null),
+        ],
+        refresh: onAnswerChange('input[name="q-find-answer"]'),
+        // Against the page, not the answer: everything this step names — the answer, the options,
+        // the button — lives in the 420px pane on the right, and a card placed there covers one of
+        // them whichever way it is turned.
+        tipTarget: '#find-page',
+        place: 'inside-right',
         title: 'Read it, then answer',
-        body: 'Now do the task: find the answer in the page, choose the matching option on the '
-          + 'right, and press <b>Next</b> under it. Take as long as you like — nothing is locked in '
-          + 'until you press Next.',
+        body: 'Now do the task. The agent\'s answer is <b>clickable</b>: click it to reveal the '
+          + 'phrases it cited, and click a numbered chip to jump to that sentence in the page — the '
+          + 'quickest way to check a claim against what it was based on. Then choose the matching '
+          + 'option below and press <b>Next</b>. Nothing is locked in until you do.',
         wait: onRevealed('#q-support-stage'),
         satisfied: () => !!document.getElementById('q-support-stage') && !document.getElementById('q-support-stage').hidden,
       },
@@ -322,9 +339,10 @@
         place: 'bottom',
         title: 'The task, and what this one shows you',
         body: 'You are not answering this question yourself — you are judging whether the agent did '
-          + 'what it was asked. The badge says <b>Grounded</b> or <b>Non-grounded</b>: half your '
-          + 'tasks come with the pages the agent acted on, half are words only. That is the '
-          + 'condition being studied, not a broken page.',
+          + 'what it was asked. The badge says <b>Grounded</b> or <b>Non-grounded</b>. Grounded '
+          + 'gives you the agent\'s evidence twice over: the page behind each step, and marks on '
+          + 'the claims it saw. Non-grounded gives you neither — words only. That is the condition '
+          + 'being studied, not a broken page.',
       },
       {
         target: '.tv-journey',
@@ -345,9 +363,24 @@
           + 'between deciding that something is wrong and finding where.',
       },
       {
-        target: '.tv-journey',
-        also: ['#q-correct'],
-        place: 'right',
+        // THE WHOLE PANE, not just the journey: the verdict is judged from the before/after pair,
+        // the steps, the answer and the trail together, and dimming three of the four says the
+        // judgement can be made from the step list alone.
+        target: '#stimulus-pane',
+        also: [
+          '#q-correct',
+          // Both appear as the participant answers: the problem list when "No" reveals it, and the
+          // button once there is a verdict to move on from.
+          () => (document.getElementById('q-problem-wrap')?.hidden === false
+            ? document.getElementById('q-problems') : null),
+          () => (document.querySelector('input[name="q-correct"]:checked')
+            ? document.getElementById('q-next') : null),
+        ],
+        refresh: onAnswerChange('input[name="q-correct"], input[name="q-problem"]'),
+        // Inside the pane, low and to the right: everything this step names — the verdict, the
+        // problem list, the button — is in the pane on the right, and a card placed against a
+        // full-height target lands on top of one of them whichever way it is turned.
+        place: 'inside-bottom',
         title: 'Look first, then give your verdict',
         body: 'Now do the task: check the steps and the screenshots against the answer, then say on '
           + 'the right whether the agent completed it. Saying no asks what kind of problem it was — '
@@ -463,12 +496,12 @@
         <dl class="tut-compare">
           <div><dt>Grounded</dt>
             <dd>${isFind
-              ? 'The sentences behind the answer are highlighted in the page, and the answer carries numbered citations.'
-              : 'Hover a step for the page the agent was acting on, and click it for a full-size view.'}</dd></div>
+              ? 'The sentences behind the answer are highlighted in the page, AND the answer carries numbered citations that jump to them.'
+              : 'Every step comes with the page the agent was acting on, AND the answer marks the claims it backed with something it saw.'}</dd></div>
           <div><dt>Non-grounded</dt>
             <dd>${isFind
-              ? 'Nothing is marked in the page, and the answer is plain text — the page itself is still all there to read.'
-              : 'The steps are words only: nothing to hover, nothing to open. The before and after pictures stay.'}</dd></div>
+              ? 'Neither: nothing is marked in the page, and the answer is plain text with no citations to follow. The page itself is still all there to read.'
+              : 'Neither: the steps are words only, and the answer carries no evidence marks either. The before and after pictures stay.'}</dd></div>
         </dl>
         <p class="q-sub">Everything else is identical, questions included. If you cannot tell what
           the answer was based on, say so — that is a real answer and a useful one.</p>
@@ -496,17 +529,19 @@
       isFind ? {
         target: '#find-page',
         place: 'left',
-        title: 'The same page, unmarked',
-        body: 'Compare this with the task you just did: not a single highlight, and no numbered '
-          + 'chips in the answer. The page is still entirely readable — you are simply the one '
-          + 'finding the sentence. That is the whole difference, and it is deliberate.',
+        title: 'The same page, unmarked — and the same answer, uncited',
+        body: 'Compare this with the task you just did. Two things are gone, not one: not a single '
+          + 'highlight in the page, and no numbered chips in the answer beside it. The page is '
+          + 'still entirely readable — you are simply the one finding the sentence, with nothing '
+          + 'saying which one the agent used. That is the whole difference, and it is deliberate.',
       } : {
         target: '.tv-journey',
         place: 'right',
-        title: 'The same steps, without the pictures',
-        body: 'Compare this with the task you just did: the steps are all still here, but there is '
-          + 'nothing to hover and nothing to open. That is the whole difference — and it is the '
-          + 'thing the study is trying to measure, so it is deliberate.',
+        title: 'The same steps, without the pictures — and an answer with nothing behind it',
+        body: 'Compare this with the task you just did. Two things are gone, not one: the steps are '
+          + 'all still here but there is nothing to hover and nothing to open, and the answer below '
+          + 'them no longer marks which of its claims it actually saw. That is the whole difference '
+          + '— and it is the thing the study is trying to measure, so it is deliberate.',
       },
     ]);
   }
@@ -651,6 +686,7 @@
   let dimRect = null;
   let tip = null;
   let tour = null;
+  let tipAnchor = null;
   let frame = 0;
   const holes = [];   // [{target, el, hole, ring, action}] — index 0 is the step's own target
 
@@ -721,15 +757,18 @@
 
   function stopTour() {
     if (tour?.cleanup) { try { tour.cleanup(); } catch (e) { /* ignore */ } }
+    if (tour?.refreshCleanup) { try { tour.refreshCleanup(); } catch (e) { /* ignore */ } }
     tour = null;
     if (frame) { cancelAnimationFrame(frame); frame = 0; }
     clearHoles();
+    tipAnchor = null;
     if (layer) layer.classList.remove('is-on', 'is-waiting');
   }
 
   function go(direction) {
     if (!tour) return;
     if (tour.cleanup) { try { tour.cleanup(); } catch (e) { /* ignore */ } tour.cleanup = null; }
+    if (tour.refreshCleanup) { try { tour.refreshCleanup(); } catch (e) { /* ignore */ } tour.refreshCleanup = null; }
     let i = tour.i + direction;
     while (i >= 0 && i < tour.steps.length && tour.steps[i].skipIf?.()) i += direction;
     if (i < 0) return go(1);
@@ -765,14 +804,11 @@
     tip.querySelector('.tut-tip-next').hidden = !!step.wait;
     layer.classList.toggle('is-waiting', !!step.wait);
 
-    // Every part the step needs gets its own hole, so nothing it is asking somebody to use is left
-    // sitting in the dim. The step's own target is first — it is what the card is placed against.
-    clearHoles();
-    if (el) addHole(step.target, el, !!step.wait);
-    for (const also of (step.also || [])) {
-      const alsoEl = await resolveTarget(also, 1200);
-      if (alsoEl) addHole(also, alsoEl, !!step.wait);
-    }
+    await buildHoles(step, el);
+    // A step can place its card against something OTHER than its spotlight. Needed where the two
+    // pull in opposite directions: the answer card is what this step is pointing at, so a card
+    // placed against it lands on top of it.
+    tipAnchor = step.tipTarget ? (await resolveTarget(step.tipTarget, 1200)) : null;
     layer.classList.add('is-on');
 
     if (el?.scrollIntoView) {
@@ -790,6 +826,30 @@
     frame = requestAnimationFrame(track);
 
     if (step.wait) tour.cleanup = step.wait(advanceOnce());
+    // A step whose parts appear as the participant works — the Next button once an answer is
+    // chosen, the problem list once "No" is ticked — re-cuts its holes rather than leaving the new
+    // control sitting in the dim under an instruction that names it.
+    if (step.refresh) {
+      tour.refreshCleanup = step.refresh(() => {
+        if (tour?.steps[tour.i] === step) buildHoles(step, el);
+      });
+    }
+  }
+
+  /**
+   * Cut a hole for every part this step needs, so nothing it asks somebody to use is left dim.
+   *
+   * The step's own target is first — it is what the card is placed against. An `also` entry that
+   * resolves to nothing is simply skipped, which is what makes a control that does not exist yet
+   * (the Next button before an answer is chosen) cost nothing here.
+   */
+  async function buildHoles(step, el) {
+    clearHoles();
+    if (el) addHole(step.target, el, !!step.wait);
+    for (const also of (step.also || [])) {
+      const alsoEl = await resolveTarget(also, 1200);
+      if (alsoEl) addHole(also, alsoEl, !!step.wait);
+    }
   }
 
   /**
@@ -853,7 +913,9 @@
       h.ring.style.height = `${r.height + pad * 2}px`;
     });
 
-    const rect = rectOf(step.target, el);
+    const rect = tipAnchor
+      ? rectOf(step.tipTarget, tipAnchor)
+      : rectOf(step.target, el);
     if (!rect || (!rect.width && !rect.height)) {
       // Nothing to point at (yet): centre the card rather than place it against a 0×0 rect.
       tip.style.top = `${Math.max(16, (vh - tip.offsetHeight) / 2)}px`;
@@ -870,6 +932,11 @@
     if (step.place === 'right') left = rect.left + rect.width + gap;
     if (step.place === 'bottom') { left = rect.left; top = rect.top + rect.height + gap; }
     if (step.place === 'top') { left = rect.left; top = rect.top - th - gap; }
+    // INSIDE the target rather than beside it. The page fills its half of the screen, so there is
+    // no "beside" left to place a card in — and the fallback below would push it onto the question
+    // pane, which is the one place this step needs kept clear.
+    if (step.place === 'inside-right') { left = rect.left + rect.width - tw - gap; top = rect.top + gap; }
+    if (step.place === 'inside-bottom') { left = rect.left + gap; top = rect.top + rect.height - th - gap; }
     // Fall back to the other side rather than off-screen — the question pane is 420px wide, so a
     // card placed to its left has room while one placed to its right does not.
     if (left < 8) left = Math.min(rect.left + rect.width + gap, window.innerWidth - tw - 8);
@@ -967,6 +1034,15 @@
         observer.observe(box, { attributes: true, attributeFilter: ['class'] });
       });
       return () => observer.disconnect();
+    };
+  }
+
+  /** Re-cut the step's holes whenever something inside the question pane changes. */
+  function onAnswerChange(selector) {
+    return (refresh) => {
+      const handler = (e) => { if (e.target.matches?.(selector)) setTimeout(refresh, 80); };
+      document.addEventListener('change', handler);
+      return () => document.removeEventListener('change', handler);
     };
   }
 

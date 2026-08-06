@@ -120,11 +120,12 @@ const CONDITION_COPY = {
     },
     nongrounding: {
       label: 'Non-grounded',
-      note: 'no screenshots for the agent\'s steps',
-      hint: 'This task deliberately shows no step screenshots: the agent\'s actions are described in '
-        + 'words only, and there is nothing to hover or click. Nothing is missing or broken — that is '
-        + 'the condition. The before and after pictures of the page are still shown, as they are in '
-        + 'every task. Judge from what is here, and if you cannot tell what happened, say so.',
+      note: 'no screenshots, and no evidence behind the answer',
+      hint: 'This task deliberately withholds the agent\'s evidence, in both places it would appear: '
+        + 'the steps are described in words only, with nothing to hover or click, and the answer '
+        + 'carries no numbered chips or marked phrases either. Nothing is missing or broken — that '
+        + 'is the condition. The before and after pictures of the page are still shown, as they are '
+        + 'in every task. Judge from what is here, and if you cannot tell what happened, say so.',
     },
   },
   find: {
@@ -136,10 +137,11 @@ const CONDITION_COPY = {
     },
     nongrounding: {
       label: 'Non-grounded',
-      note: 'no evidence is marked on the page',
-      hint: 'This task deliberately marks no evidence: the agent\'s answer is text only, and nothing '
-        + 'on the page is highlighted for you. Nothing is missing or broken — that is the condition. '
-        + 'The page itself is still there to read. If you cannot tell what the answer was based on, '
+      note: 'no marks on the page, no citations in the answer',
+      hint: 'This task deliberately withholds the agent\'s evidence, in both places it would appear: '
+        + 'nothing on the page is highlighted for you, and the answer carries no citations to click '
+        + 'either — it is plain text. Nothing is missing or broken — that is the condition. The page '
+        + 'itself is still entirely there to read. If you cannot tell what the answer was based on, '
         + 'say so.',
     },
   },
@@ -338,26 +340,21 @@ function progressText() {
 async function showFindTask(task) {
   const { idx, queue } = S.state;
   const arm = S.taskArm ? S.taskArm(task) : S.conditionLabel(task?.arm || S.state.arm);
-  let canned = null;
-  let page = null;
-  let groundTruth = null;
-  try {
-    canned = await dataSource(task).getCannedResponse(task.id, arm);
-  } catch (e) {
-    console.warn('[study] no recorded answer for', task.id, e.message);
-  }
-  try {
-    groundTruth = await loadFindGroundTruth(task);
-  } catch (e) {
-    console.warn('[study] could not load ground truth for', task.id, e.message);
-    groundTruth = { error: e?.message || String(e), task_id: task.id };
-  }
-  try {
-    const source = dataSource(task);
-    if (source.getTaskPage) page = await source.getTaskPage(task.id, task.url);
-  } catch (e) {
-    console.warn('[study] no captured page for', task.id, e.message);
-  }
+  const source = dataSource(task);
+  const [cannedRes, groundTruthRes, pageRes] = await Promise.allSettled([
+    source.getCannedResponse ? source.getCannedResponse(task.id, arm) : Promise.resolve(null),
+    loadFindGroundTruth(task),
+    source.getTaskPage ? source.getTaskPage(task.id, task.url) : Promise.resolve(null),
+  ]);
+
+  const canned = cannedRes.status === 'fulfilled' ? cannedRes.value : null;
+  if (cannedRes.status === 'rejected') console.warn('[study] no recorded answer for', task.id, cannedRes.reason?.message);
+
+  const groundTruth = groundTruthRes.status === 'fulfilled' ? groundTruthRes.value : { error: groundTruthRes.reason?.message || String(groundTruthRes.reason), task_id: task.id };
+  if (groundTruthRes.status === 'rejected') console.warn('[study] could not load ground truth for', task.id, groundTruthRes.reason?.message);
+
+  const page = pageRes.status === 'fulfilled' ? pageRes.value : null;
+  if (pageRes.status === 'rejected') console.warn('[study] no captured page for', task.id, pageRes.reason?.message);
 
   const answer = canned?.answer_display || canned?.answer_raw || '';
 
