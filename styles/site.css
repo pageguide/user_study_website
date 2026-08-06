@@ -420,17 +420,19 @@ body {
 }
 .welcome-label { display: block; margin: 22px 0 6px; font-weight: 800; font-size: 13px; }
 .welcome-id-toggle {
-  margin-top: 18px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--card);
+  display: block;
+  margin: 14px auto 0;
+  border: 0;
+  background: transparent;
   color: var(--muted);
-  padding: 8px 10px;
+  padding: 4px 6px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
+  text-decoration: underline;
   cursor: pointer;
+  opacity: 0.68;
 }
-.welcome-id-toggle:hover { border-color: var(--accent); color: var(--text); }
+.welcome-id-toggle:hover { color: var(--text); opacity: 1; }
 .welcome-id-field[hidden] { display: none; }
 .welcome-input {
   width: 100%;
