@@ -1528,9 +1528,34 @@ function postTaskQuestionsHtml(doneId) {
           ${POST_TASK_HELPFULNESS.map(([v, l]) => opt('q-help', v, l)).join('')}
         </div>
       </section>
+      <!-- OPTIONAL, and last. The scales say how confident and how useful; they cannot say WHICH
+           part helped, and "the screenshots settled it but the trail contradicted them" is the
+           sentence that explains a whole cell of the results. Optional because a required box gets
+           "n/a" typed into it, which is worse than empty. -->
+      <section class="q-post-section">
+        <div class="q-post-section-head">
+          <span class="q-badge q-badge-quiet">3</span>
+          <p class="q-text">Anything worth noting? <span class="q-sub">optional</span></p>
+        </div>
+        <p class="q-sub q-post-note-hint">What helped you decide, what got in the way, or anything
+          that felt off. A few words is plenty.</p>
+        <textarea class="q-field q-post-note" id="q-notes" rows="3"
+          placeholder="e.g. the screenshots settled it — or, nothing here told me what the agent clicked"></textarea>
+      </section>
       <div class="q-error-msg" id="q-error-msg" hidden></div>
       <div class="q-actions"><button class="q-btn q-btn-primary" id="${doneId}">Next task →</button></div>
     </div>`;
+}
+
+/**
+ * What the participant typed in the optional note, trimmed, or null.
+ *
+ * Null rather than '' so an untouched box is distinguishable from one someone deliberately cleared —
+ * and so a column of empty strings does not read as "everyone had nothing to say".
+ */
+function postTaskNotes() {
+  const value = (document.getElementById('q-notes')?.value || '').trim();
+  return value ? value.slice(0, 2000) : null;
 }
 
 /** Record the Find result, then move on. Mirrors the guide half's post-task questions. */
@@ -1548,7 +1573,7 @@ async function submitFindResult(task, payload) {
     done.disabled = true;
 
     const row = S.buildFindResultRow({
-      task, payload, confidence: conf.value, helpfulness: help.value,
+      task, payload, confidence: conf.value, helpfulness: help.value, notes: postTaskNotes(),
     });
     S.state.results.push(row);
     S.state.idx++;
@@ -2812,7 +2837,7 @@ function askPostQuestions(task, record, timings) {
     done.disabled = true;
 
     const row = S.buildResultRow({
-      task, record, timings, confidence: conf.value, helpfulness: help.value,
+      task, record, timings, confidence: conf.value, helpfulness: help.value, notes: postTaskNotes(),
     });
     S.state.results.push(row);
     S.state.idx++;

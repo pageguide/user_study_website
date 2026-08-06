@@ -245,6 +245,15 @@ body {
   font-weight: 650;
 }
 
+/* The optional note. A hollow badge, because a solid one beside the two required questions reads as
+   a third thing that must be answered — and a box someone fills in to get past it is noise. */
+.q-badge-quiet {
+  background: rgba(120, 87, 255, 0.14);
+  color: var(--accent-dark);
+}
+.q-post-note-hint { margin: -6px 0 8px; }
+.q-post-note { min-height: 64px; }
+
 .q-error-block {
   border: 1px solid var(--line);
   border-radius: 10px;

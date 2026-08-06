@@ -133,7 +133,7 @@ function resultKey(task, taskType) {
  * Build the clean browser result row. Guide scoring still uses the vendored _scoreGuideAnswer so
  * the measure is computed by the same code as the extension.
  */
-function buildResultRow({ task, record, timings, confidence, helpfulness }) {
+function buildResultRow({ task, record, timings, confidence, helpfulness, notes }) {
   const scored = window._scoreGuideAnswer(timings.guideAnswer, record?.ground_truth) || {};
   const score = (key) => (scored[key] === undefined ? null : scored[key]);
   const questionIndex = state.results.filter(r => r.task_type === 'guide').length;
@@ -180,6 +180,7 @@ function buildResultRow({ task, record, timings, confidence, helpfulness }) {
     question_or_task: record?.goal || task.goal || '',
     confidence: confidence || null,
     helpfulness: helpfulness || null,
+    notes: notes || null,
   };
 }
 
@@ -192,7 +193,7 @@ function buildResultRow({ task, record, timings, confidence, helpfulness }) {
  * task's recorded answer, because the option text is what the participant clicked and the task file
  * is what it must match.
  */
-function buildFindResultRow({ task, payload, confidence, helpfulness }) {
+function buildFindResultRow({ task, payload, confidence, helpfulness, notes }) {
   const questionIndex = state.results.filter(r => r.task_type === 'find').length;
   const chosen = String(payload.answer || '').trim().toLowerCase();
   const correct = String(task?.answer || '').trim().toLowerCase();
@@ -241,6 +242,7 @@ function buildFindResultRow({ task, payload, confidence, helpfulness }) {
     question_or_task: task?.question || '',
     confidence: confidence || null,
     helpfulness: helpfulness || null,
+    notes: notes || null,
   };
 }
 

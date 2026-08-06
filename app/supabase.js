@@ -85,20 +85,27 @@ async function insert(table, data, { wantRow = false } = {}) {
   }
 }
 
-async function upsert(table, data, conflictColumn) {
-  if (!supabaseConfigured()) return null;
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.detail] - return {ok, status, error} instead of true/null, for callers that
+ *   need to act on WHY a write failed rather than only that it did.
+ */
+async function upsert(table, data, conflictColumn, opts = {}) {
+  const fail = (status, error) => (opts.detail ? { ok: false, status, error } : null);
+  if (!supabaseConfigured()) return fail(0, 'Supabase is not configured.');
   try {
     const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/${table}?on_conflict=${encodeURIComponent(conflictColumn)}`, {
       method: 'POST',
       headers: headers('resolution=merge-duplicates,return=minimal'),
       body: JSON.stringify(data),
     });
-    if (res.ok) return true;
-    console.error(`[study] Supabase ${res.status} on ${table} upsert:`, await res.text().catch(() => ''));
-    return null;
+    if (res.ok) return opts.detail ? { ok: true, status: res.status, error: '' } : true;
+    const body = await res.text().catch(() => '');
+    console.error(`[study] Supabase ${res.status} on ${table} upsert:`, body);
+    return fail(res.status, body);
   } catch (e) {
     console.warn(`[study] Supabase upsert into ${table} failed:`, e);
-    return null;
+    return fail(0, e?.message || String(e));
   }
 }
 
@@ -158,7 +165,7 @@ const STUDY_TASK_RESULT_COLUMNS = new Set([
   'score_evidence_exact', 'score_evidence_hop_exact',
   'score_verdict_correct', 'score_problem_precision', 'score_problem_recall', 'score_problem_exact',
   'score_type_precision', 'score_type_recall', 'score_step_precision', 'score_step_recall',
-  'score_step_exact', 'score_no_error_agreement', 'confidence', 'helpfulness',
+  'score_step_exact', 'score_no_error_agreement', 'confidence', 'helpfulness', 'notes',
 ]);
 
 function normalizeStudyResultRecord(record) {
@@ -169,8 +176,28 @@ function normalizeStudyResultRecord(record) {
   return clean;
 }
 
+/**
+ * One result row.
+ *
+ * RETRIES ONCE WITHOUT `notes`. The optional note needs a column that supabase_results_v2.sql adds,
+ * and a site deployed before that migration is run would otherwise have PostgREST reject the whole
+ * row — losing the answer, the timings and the scores over a free-text box nobody had to fill in.
+ * The note is the least valuable field in the row; it is the one that should be dropped when the
+ * schema is behind, loudly, rather than taking the measurements down with it.
+ */
 async function insertStudyResult(record) {
-  return upsert('study_task_results_v2', normalizeStudyResultRecord(record), 'result_key');
+  const row = normalizeStudyResultRecord(record);
+  const res = await upsert('study_task_results_v2', row, 'result_key', { detail: true });
+  if (res.ok) return true;
+
+  const missingNotes = /notes/.test(res.error || '') && /column|schema cache/i.test(res.error || '');
+  if (!missingNotes || !Object.prototype.hasOwnProperty.call(row, 'notes')) return null;
+
+  console.warn('[study] this database has no `notes` column yet — saving the row without the note. '
+    + 'Run supabase_results_v2.sql in the Supabase SQL editor to keep participants\' notes.');
+  const { notes, ...withoutNotes } = row;
+  const retry = await upsert('study_task_results_v2', withoutNotes, 'result_key', { detail: true });
+  return retry.ok ? true : null;
 }
 
 async function updateCannedResponseGrounding(taskId, condition, patch) {
