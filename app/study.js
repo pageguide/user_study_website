@@ -750,8 +750,23 @@ function startPicking(frame, kind, onPick) {
   let moveFrame = 0;
   let lastMove = null;
 
+  function findImageTarget(target) {
+    if (!target) return null;
+    if (target.tagName === 'IMG') return target;
+    if (target.closest) {
+      const parentImg = target.closest('img');
+      if (parentImg) return parentImg;
+      const container = target.closest('a, figure, .thumb, .thumbinner, .media, [class*="image" i], [class*="thumb" i], [data-pageguide-styled], .pageguide-highlight-imgwrap');
+      if (container) {
+        const childImg = container.querySelector('img');
+        if (childImg) return childImg;
+      }
+    }
+    return null;
+  }
+
   const over = (e) => {
-    const el = kind === 'image' ? e.target.closest?.(SEL) : e.target.closest?.('td, th');
+    const el = kind === 'image' ? findImageTarget(e.target) : e.target.closest?.('td, th');
     if (el === hovered) return;
     hovered?.classList.remove('pg-pickable');
     hovered = el;
@@ -776,7 +791,7 @@ function startPicking(frame, kind, onPick) {
     const sentenceHit = kind === 'image' ? null : e.target.closest?.('.pg-pick-sentence-hit');
     const pickedFromHit = sentenceHit?.__pgPickSentence || null;
     const el = kind === 'image'
-      ? e.target.closest?.(SEL)
+      ? findImageTarget(e.target)
       : (pickedFromHit?.block || e.target.closest?.(SEL));
     if (!el) return;
     e.preventDefault();
