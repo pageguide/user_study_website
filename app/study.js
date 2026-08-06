@@ -528,8 +528,13 @@ function startPicking(frame, kind, onPick) {
     const hit = e.target.closest?.('.pg-pick-sentence-hit');
     clearPickPreview(doc);
     clearSentenceHitHover(doc);
-    if (!hit?.__pgPickSentence) return;
-    setSentenceHitHover(doc, hit.__pgPickSentence.group);
+    if (hit?.__pgPickSentence) {
+      setSentenceHitHover(doc, hit.__pgPickSentence.group);
+      return;
+    }
+    if (!block) return;
+    const pickedPassage = sentencePickFromClick(doc, block, e.clientX, e.clientY);
+    if (pickedPassage?.range) wrapPickPreviewSentence(doc, pickedPassage.range);
   };
   const click = (e) => {
     const sentenceHit = kind === 'image' ? null : e.target.closest?.('.pg-pick-sentence-hit');
