@@ -105,8 +105,8 @@ const TUTORIAL_FIND_DEBRIEF = {
   why: 'Both halves of the question have to be right: the year AND the number of branches. Three of '
     + 'the four options get one half right, which is what makes reading the page worth the time.',
   hops: [
-    { label: 'First part — the year', text: TUTORIAL_FIND_HOP_1 },
-    { label: 'Second part — the branches', text: TUTORIAL_FIND_HOP_2 },
+    { label: 'First part: the year', text: TUTORIAL_FIND_HOP_1 },
+    { label: 'Second part: the branches', text: TUTORIAL_FIND_HOP_2 },
   ],
   closing: 'In the real tasks the answer will not always be right, and half of them will show you no '
     + 'highlights at all. Point at what you actually used.',
@@ -114,15 +114,15 @@ const TUTORIAL_FIND_DEBRIEF = {
 
 // ── The Guide practice ───────────────────────────────────────────────────────────────────────────
 // One clear, findable failure, with the evidence for it visible in the step screenshots: at step 3
-// the agent opened the Halloway Farm stop — which closes at 4pm — while looking for the branch open
-// LATEST, and then reported a "Riverbend Central Annex" that appears nowhere in the list.
+// the agent SAYS it is clicking 'Riverbend East' and instead opens the Halloway Farm stop — which
+// closes at 4pm — and then reports a "Riverbend Central Annex" that appears nowhere in the list.
 //
-// THE ERROR IS `mismatch`, NOT `wrong_target`, and the distinction is the reason this task is the
-// practice one. The vendored vocabulary defines wrong target as "clicked the wrong element" — a
-// misclick — and the agent clicked exactly the row its own instruction named. What is wrong is the
-// choice: an action that is perfectly valid on the page and does not serve the goal, which is the
-// definition of action–goal mismatch. Getting a participant to see that difference once, on a task
-// that costs nothing, is worth more than another walkthrough of the buttons.
+// THE ERROR IS `wrong_target`, and the step is legible as one without argument: the instruction
+// names one row, the highlight in the screenshot sits on a different row, and the final URL says
+// `?branch=halloway`. The vendored vocabulary defines wrong target as "clicked the wrong element",
+// which is exactly what happened — the participant can check the claim against the picture rather
+// than reason about intent. Practising on an unambiguous one is what makes the judgement call
+// cheap; the real tasks supply the arguable cases.
 
 const TUTORIAL_GUIDE_ROWS = [
   'Mill Street (Main) — Fri 9am – 9pm',
@@ -150,7 +150,7 @@ function buildTutorialGuideRecord() {
       correctness: 'failure',
       problems: ['hallucinated_result'],
       problem: 'It reported a "Riverbend Central Annex" that appears nowhere in the hours list.',
-      errors: [{ type: 'mismatch', steps: [3] }],
+      errors: [{ type: 'wrong_target', steps: [3] }],
       no_error: false,
     },
     arms: {
@@ -166,7 +166,7 @@ function buildTutorialGuideRecord() {
         steps: [
           { n: 1, instruction: "Type 'Riverbend Library' into the search bar.", screenshot: tutorialShot(1, -1) },
           { n: 2, instruction: "Open the 'Hours' tab to compare the branches.", screenshot: tutorialShot(2, -1) },
-          { n: 3, instruction: "Click 'Halloway Farm stop' to check its Friday hours.", screenshot: tutorialShot(3, 2) },
+          { n: 3, instruction: "Click 'Riverbend East' to check its Friday hours.", screenshot: tutorialShot(3, 2) },
           { n: 4, instruction: 'Report the branch that is open latest.', screenshot: tutorialShot(4, 2) },
         ],
         answer: 'The branch open latest on a Friday is the Riverbend Central Annex, which closes at 9pm.',
@@ -200,18 +200,20 @@ const TUTORIAL_GUIDE_TASK = {
 const TUTORIAL_GUIDE_DEBRIEF = {
   verdict: false,
   problems: ['hallucinated_result'],
-  errorType: 'mismatch',
-  errorLabel: 'action–goal mismatch',
+  errorType: 'wrong_target',
+  errorLabel: 'wrong target / misclick',
   step: 3,
-  why: 'The agent reported the "Riverbend Central Annex" — and no such branch appears anywhere in '
+  why: 'The agent reported the "Riverbend Central Annex", and no such branch appears anywhere in '
     + 'the hours list it was looking at. It made the result up, so it did not complete the task.',
-  where: 'Step 3 is where it went wrong: the agent opened the Halloway Farm stop, which closes at '
-    + '4pm, while looking for the branch open latest. Mill Street (Main) is the one open until 9pm.',
-  nuance: 'That is an action–goal mismatch rather than a wrong target: the agent clicked exactly the '
-    + 'row its own instruction named, so nothing was misclicked — the choice simply did not serve '
-    + 'the goal. "Wrong target" is for clicking something other than what was intended.',
-  closing: 'Two separate judgements, and the second is the harder one: noticing something is wrong, '
-    + 'then pointing at the step where it happened.',
+  where: 'Step 3 says "Click \'Riverbend East\'", but the row highlighted in the screenshot is the '
+    + 'Halloway Farm stop, and the page it lands on is ?branch=halloway. So it read the wrong '
+    + 'row\'s hours of 1pm to 4pm, when Mill Street (Main) is the one open until 9pm.',
+  nuance: 'That is a wrong target rather than an action–goal mismatch: opening a branch\'s hours is '
+    + 'exactly the right kind of move here, and the agent simply hit a different row than the one '
+    + 'it named. "Action–goal mismatch" is for an action that lands where it intended and still '
+    + 'does not serve the goal.',
+  closing: 'Three separate judgements, and the last two are the harder ones: noticing something is '
+    + 'wrong, pointing at the step, then naming the kind of error.',
 };
 
 // ── The data source ──────────────────────────────────────────────────────────────────────────────

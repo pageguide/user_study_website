@@ -385,10 +385,13 @@ async function showFindTask(task) {
   // its scripts stripped at capture, so nothing in it runs.
   if (page?.html) {
     const frame = document.getElementById('find-page');
+    // Kept so the frame can be rebuilt if it ever ends up somewhere else: see sealSnapshot.
+    frame.__pgSnapshotHtml = page.html;
     frame.srcdoc = page.html;
     frame.addEventListener('load', () => {
       taskTelemetry?.addIframe(frame);
       applyFindGrounding(frame, canned, arm);
+      sealSnapshot(frame);
     }, { once: true });
   }
 
@@ -568,23 +571,60 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   };
 
 
+  // The hint under each question doubles as that question's feedback line, so a click that could
+  // not be read is answered where the participant is already looking rather than in a shared error
+  // bar at the bottom of the pane.
+  const hintText = hops.map((hop, i) => $q(`q-hop-hint-${i}`)?.textContent || '');
+  const setHint = (hop, message) => {
+    const el = $q(`q-hop-hint-${hop}`);
+    if (!el) return;
+    el.textContent = message == null ? hintText[hop] : message;
+    el.classList.toggle('is-warn', message != null);
+  };
+
+  const disarm = (btn, hop) => {
+    btn.classList.remove('is-picking');
+    btn.textContent = btn.dataset.idleText || 'Pick evidence';
+    setHint(hop, null);
+    if (pickingHop === hop) pickingHop = null;
+  };
+
   questionPane.querySelectorAll('[data-pick-hop]').forEach(btn => {
     btn.dataset.idleText = btn.textContent;
-    btn.onclick = () => {
-      pickingHop = Number(btn.dataset.pickHop);
-      const kind = hops[pickingHop].kind;
+    btn.onclick = async () => {
+      const hop = Number(btn.dataset.pickHop);
+      const kind = hops[hop].kind;
+      // Whatever was armed before is not armed now, and its card should stop saying it is.
       questionPane.querySelectorAll('[data-pick-hop]').forEach(b => {
-        b.classList.remove('is-picking');
-        if (b.dataset.idleText) b.textContent = b.dataset.idleText;
+        if (b !== btn) disarm(b, Number(b.dataset.pickHop));
       });
+      pickingHop = hop;
       btn.classList.add('is-picking');
       btn.textContent = kind === 'image' ? 'Click image evidence' : 'Click sentence evidence';
-      startPicking(frame(), kind, (value, label) => {
-        setPicked(pickingHop, value, label);
-        btn.classList.remove('is-picking');
-        btn.textContent = btn.dataset.idleText || 'Pick evidence';
-        pickingHop = null;
-      });
+      setHint(hop, null);
+
+      const armPicking = () => startPicking(
+        frame(),
+        kind,
+        (value, label) => {
+          setPicked(hop, value, label);
+          disarm(btn, hop);
+        },
+        (why) => setHint(hop, why),
+      );
+
+      // A frame that has left the snapshot cannot be read from, and used to fail here in silence:
+      // the button lit up, nothing in the page responded, and only a reload brought it back.
+      if (armPicking()) return;
+      btn.textContent = 'Restoring the page…';
+      await restoreSnapshot(frame(), canned, arm);
+      if (armPicking()) {
+        btn.textContent = kind === 'image' ? 'Click image evidence' : 'Click sentence evidence';
+        return;
+      }
+      disarm(btn, hop);
+      showError('The page could not be reopened for picking. Please reload this tab and start the '
+        + 'task again.');
     };
   });
 
@@ -705,17 +745,84 @@ function fmtClock(ms) {
 }
 
 /**
+ * The snapshot's document, or null if the frame is no longer showing the snapshot.
+ *
+ * A frame that has navigated to a real site is cross-origin, and every read of contentDocument
+ * throws — which is why this is the one accessor everything else goes through.
+ */
+function snapshotDoc(frame) {
+  try {
+    const doc = frame?.contentDocument;
+    return doc?.body ? doc : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * NOTHING INSIDE THE SNAPSHOT MAY NAVIGATE IT.
+ *
+ * The snapshot is a real captured page, links and all, mounted with srcdoc so it shares this
+ * origin — which is the only reason it can be highlighted and picked in at all. One click on a link
+ * inside it and the frame is on the live site: cross-origin, unreadable, and every later
+ * contentDocument read throws. The visible symptom was a Pick evidence button that did nothing at
+ * all, for the rest of the task, because startPicking bailed on that throw and said nothing. A
+ * reload put the snapshot back, which is exactly why reloading "fixed" it.
+ *
+ * Clicks are killed on the capture phase, so this runs before the picking handler and before the
+ * browser's default. Picking still works because it reads the click rather than following it.
+ */
+function sealSnapshot(frame) {
+  const doc = snapshotDoc(frame);
+  if (!doc || doc.__pgSealed) return;
+  doc.__pgSealed = true;
+  doc.addEventListener('click', (e) => {
+    const link = e.target.closest?.('a[href]');
+    if (!link) return;
+    const href = link.getAttribute('href') || '';
+    // In-page anchors are harmless and are sometimes the only way to reach the evidence.
+    if (href.startsWith('#')) return;
+    e.preventDefault();
+  }, true);
+  doc.addEventListener('submit', (e) => e.preventDefault(), true);
+}
+
+/**
+ * Put the snapshot back after the frame has left it, and hand back the document.
+ *
+ * Belt to sealSnapshot's braces: a navigation this file did not anticipate (a meta refresh, a
+ * middle-click, a frame busted by something in the captured markup) leaves the participant stuck on
+ * a screen whose questions cannot be answered, and the task is unrecoverable without a reload that
+ * loses the timers. Rebuilding from the html already in hand costs one frame load.
+ */
+function restoreSnapshot(frame, canned, arm) {
+  return new Promise((resolve) => {
+    const html = frame?.__pgSnapshotHtml;
+    if (!frame || !html) return resolve(null);
+    frame.addEventListener('load', () => {
+      applyFindGrounding(frame, canned, arm);
+      sealSnapshot(frame);
+      resolve(snapshotDoc(frame));
+    }, { once: true });
+    frame.srcdoc = html;
+  });
+}
+
+/**
  * Let the participant click something inside the snapshot.
  *
  * Hover outlines what would be picked and a click takes it. Paragraph picking walks up to the
  * nearest block so a click on one word selects the sentence it is in rather than the word — the
  * question asks which passage, and a one-word answer could not be scored against a ground truth
  * written as sentences.
+ *
+ * Returns whether picking was actually armed, so a caller can tell "the participant is now picking"
+ * apart from "there was nothing to pick in" instead of leaving a dead button on screen. `onMiss` is
+ * called when a click lands somewhere no passage can be read from; picking stays armed.
  */
-function startPicking(frame, kind, onPick) {
-  let doc;
-  try { doc = frame?.contentDocument; } catch (e) { return; }
-  if (!doc?.body) return;
+function startPicking(frame, kind, onPick, onMiss) {
+  const doc = snapshotDoc(frame);
+  if (!doc) return false;
   stopPicking(frame);
 
   if (!doc.getElementById('pg-pick-style')) {
@@ -787,13 +894,25 @@ function startPicking(frame, kind, onPick) {
       if (pickedPassage?.range) wrapPickPreviewSentence(doc, pickedPassage.range);
     });
   };
+  // NO CLICK IS EVER SWALLOWED. Every path out of here either takes a pick or says why it could
+  // not: a click that quietly did nothing was indistinguishable from a broken button, and the
+  // participant's only move was to press Pick evidence again and get the same nothing.
+  const miss = (e, why) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onMiss?.(why);
+  };
   const click = (e) => {
     const sentenceHit = kind === 'image' ? null : e.target.closest?.('.pg-pick-sentence-hit');
     const pickedFromHit = sentenceHit?.__pgPickSentence || null;
     const el = kind === 'image'
       ? findImageTarget(e.target)
-      : (pickedFromHit?.block || e.target.closest?.(SEL));
-    if (!el) return;
+      : (pickedFromHit?.block || e.target.closest?.(SEL) || nearestTextBlock(e.target, SEL, e.clientX, e.clientY));
+    if (!el) {
+      return miss(e, kind === 'image'
+        ? 'That is not an image. Click one of the pictures in the page.'
+        : 'There is no text there. Click a sentence in the page.');
+    }
     e.preventDefault();
     e.stopPropagation();
     clearPickedPassage(doc);
@@ -801,7 +920,7 @@ function startPicking(frame, kind, onPick) {
     hovered = null;
     const pickedPassage = kind === 'image' ? null : (pickedFromHit || tableCellPick(el) || sentencePickFromClick(doc, el, e.clientX, e.clientY));
     if (kind !== 'image' && !pickedPassage?.range && !pickedPassage?.cell) {
-      return;
+      return miss(e, 'Could not read a sentence there. Try clicking nearer the middle of one.');
     }
     if (pickedPassage?.range) wrapPickedSentence(doc, pickedPassage.range);
     else el.classList.add('pg-picked');
@@ -829,6 +948,38 @@ function startPicking(frame, kind, onPick) {
     moveFrame = 0;
     lastMove = null;
   } };
+  return true;
+}
+
+/**
+ * The block a click meant, when the click did not land on one.
+ *
+ * A captured page is full of text that lives in none of the tags the picker looks for: infobox
+ * `div`s, bare `span`s inside a caption, a stray text node between paragraphs. Requiring an exact
+ * hit on `p`/`li`/`td` made those regions silently unpickable, which reads as a broken button
+ * rather than as "not that bit".
+ *
+ * UNDER THE POINTER, NOT MERELY NEARBY. The candidate has to be one the click actually landed
+ * inside — searching a container for its first text block would answer a click on the page
+ * background with the first paragraph of the document, which is worse than refusing: it is a
+ * confident wrong pick, recorded as if the participant had chosen it.
+ */
+function nearestTextBlock(target, selector, x, y) {
+  if (!target || target.nodeType !== 1) return null;
+  const hit = (el) => {
+    if (!el || !normText(el.textContent || '').length) return false;
+    const r = el.getBoundingClientRect?.();
+    return !!r && r.width > 0 && r.height > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  };
+  let el = target;
+  for (let hops = 0; el && el.nodeType === 1 && hops < 8; hops++, el = el.parentElement) {
+    const own = el.closest?.(selector);
+    if (own && hit(own)) return own;
+    const inside = Array.from(el.querySelectorAll?.(selector) || []).find(hit);
+    if (inside) return inside;
+    if (el.tagName === 'BODY' || el.tagName === 'HTML') break;
+  }
+  return null;
 }
 
 function pickDisplayLabel(text, locator, kind) {

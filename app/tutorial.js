@@ -65,14 +65,14 @@
       <div class="tut-hero">
         <p class="tut-eyebrow">Before you start</p>
         <h1 class="tut-title">A quick walkthrough</h1>
-        <p class="tut-lead">Two practice tasks — one of each kind you are about to see — with the
+        <p class="tut-lead">Two practice tasks, one of each kind you are about to see, with the
           parts of the screen pointed out as you go. Nothing here is recorded, and neither practice
           task is one of your eight.</p>
         <ol class="tut-list">
           <li><strong>Where everything is.</strong> The page and the agent's answer on one side, the
             questions on the other.</li>
           <li><strong>How to answer.</strong> Choosing a verdict, then saying <em>where</em> it went
-            wrong — the two are asked separately and timed separately.</li>
+            wrong. Those two are asked separately and timed separately.</li>
           <li><strong>How to point at evidence.</strong> On a Find task you click the sentence or the
             picture in the page itself.</li>
         </ol>
@@ -87,7 +87,7 @@
         <div class="q-actions tut-welcome-actions">
           <button class="q-btn q-btn-primary" id="tut-start">Show me how it works →</button>
           <button class="q-btn" id="tut-skip-all">${tut.previewOnly
-            ? 'Back to the welcome screen' : 'Skip — start the study'}</button>
+            ? 'Back to the welcome screen' : 'Skip, start the study'}</button>
         </div>
       </div>`;
 
@@ -251,37 +251,38 @@
 
   function findTour() {
     return [
+      // FOUR STEPS, and the first two are the orientation: what you are looking at, and what is
+      // marked on it. Merging them is a straight win — each named one part of a screen the
+      // participant is already looking at, and a card that has to be dismissed three times before
+      // anything can be done is read less carefully, not more.
       {
         target: '.tv-head',
+        also: ['.q-timer-chip'],
         place: 'bottom',
-        title: 'The question, and what this task shows you',
-        body: 'The question is what the agent was asked — most have two parts, so read it first. '
-          + 'Under it, the badge says <b>Grounded</b> or <b>Non-grounded</b>. Grounded marks the '
-          + 'evidence in both places: highlighted in the page, and cited in the answer. '
-          + 'Non-grounded marks it in neither. That is the condition being studied, not a broken '
-          + 'page, and the ⓘ explains it on every task.',
+        title: 'The question, the badge, and the clock',
+        body: 'The question is what the agent was asked, and most have two parts, so read it first. '
+          + 'The badge under it says <b>Grounded</b> (evidence highlighted in the page and cited in '
+          + 'the answer) or <b>Non-grounded</b> (neither), which is the condition being studied and '
+          + 'not a broken page. The timer measures how hard this is to check, not how fast you are.',
       },
       {
         target: '#find-page',
-        place: 'left',
-        title: 'The page, and what is marked on it',
-        body: 'The real page, frozen — scroll it, read it, search it. This task is grounded, so the '
-          + 'sentences the agent leaned on are highlighted for you. Worth checking rather than '
-          + 'trusting: a highlight says the agent used this, not that it read it correctly.',
-      },
-      {
-        target: '.find-answer',
-        also: ['.q-timer-chip'],
-        place: 'left',
-        title: "The agent's answer, and the clock",
-        body: 'What the agent reported, with its citations as numbered chips — click the answer to '
-          + 'expand them. The timer measures how hard this is to check, not how fast you are, and it '
-          + 'restarts once: deciding and hunting are timed separately.',
+        also: ['.find-answer'],
+        // Under the answer card, not beside the page: both holes together fill the width, so a card
+        // placed against either one lands on top of the other. The strip below the answer is the one
+        // patch of screen this step is not asking anybody to look at.
+        tipTarget: '.find-answer',
+        place: 'bottom',
+        title: 'The page, and what the agent said about it',
+        body: 'The real page, frozen, so you can scroll it, read it and search it. This task is '
+          + 'grounded, so the sentences the agent leaned on are highlighted, and its answer on the '
+          + 'right carries numbered citations back to them. Worth checking rather than trusting: a '
+          + 'highlight says the agent used a sentence, not that it read it correctly.',
       },
       {
         // The exploring comes BEFORE the answer, not after it. Asked afterwards it is advice nobody
-        // can act on — the answer is already given, and "have another look" reads as "you got it
-        // wrong". Asked first it is just how the task is done.
+        // can act on, since the answer is already given and "have another look" reads as "you got
+        // it wrong". Asked first it is just how the task is done.
         //
         // THE ANSWER CARD IS THE PRIMARY TARGET, and the card sits above it rather than beside it:
         // this step needs the page, the agent's answer and the options all legible at once, and a
@@ -295,37 +296,30 @@
             ? document.getElementById('q-find-next') : null),
         ],
         refresh: onAnswerChange('input[name="q-find-answer"]'),
-        // Against the page, not the answer: everything this step names — the answer, the options,
-        // the button — lives in the 420px pane on the right, and a card placed there covers one of
+        // Against the page, not the answer: everything this step names (the answer, the options,
+        // the button) lives in the 420px pane on the right, and a card placed there covers one of
         // them whichever way it is turned.
         tipTarget: '#find-page',
         place: 'inside-right',
         title: 'Read it, then answer',
-        body: 'Now do the task. The agent\'s answer is <b>clickable</b>: click it to reveal the '
-          + 'phrases it cited, and click a numbered chip to jump to that sentence in the page — the '
-          + 'quickest way to check a claim against what it was based on. Then choose the matching '
-          + 'option below and press <b>Next</b>. Nothing is locked in until you do.',
+        body: 'Now do the task. The agent\'s answer is <b>clickable</b>: click it for the phrases it '
+          + 'cited, then a numbered chip to jump to that sentence in the page. Choose the matching '
+          + 'option below and press <b>Next</b>.',
         wait: onRevealed('#q-support-stage'),
         satisfied: () => !!document.getElementById('q-support-stage') && !document.getElementById('q-support-stage').hidden,
       },
+      // Picking the evidence and submitting are one step, because they are one motion: the Submit
+      // button is revealed with the evidence stage and refuses to go anywhere until both picks are
+      // in, so the button itself already says what a separate coachmark would have said.
       {
         target: '#find-page',
-        also: ['#q-support-stage'],
+        also: ['#q-support-stage', '#q-find-submit'],
         place: 'left',
-        title: 'Now point at what proves it',
-        body: 'One piece of evidence per part of the question. Press <b>✏️ Pick evidence</b>, then '
-          + 'click the sentence <em>in the page</em> that told you the answer; hovering shows what '
-          + 'would be picked. Do that for both.',
-        wait: onAllPicked(),
-        satisfied: () => allPicked(),
-      },
-      {
-        target: '#q-find-submit',
-        place: 'left',
-        title: 'Submit, and two quick follow-ups',
-        body: 'Nothing can be left blank — the button says what is missing. After it come the same '
-          + 'two questions every task ends with: how confident you were, how useful what you were '
-          + 'shown turned out to be, and an optional box for anything worth saying.',
+        title: 'Point at what proves it, then submit',
+        body: 'One piece of evidence per part of the question: press <b>✏️ Pick evidence</b>, then '
+          + 'click the sentence <em>in the page</em> that told you the answer, and do that for both. '
+          + 'Nothing can be left blank, so the Submit button says what is still missing. After it '
+          + 'come the same two questions every task ends with, on confidence and helpfulness.',
         wait: onClick('#q-find-submit'),
         satisfied: () => !document.getElementById('q-find-submit'),
       },
@@ -334,33 +328,30 @@
 
   function guideTour() {
     return [
+      // Four steps here too, and for the same reason: the second one covers the whole left pane at
+      // once, which is how a participant actually reads it — steps, before-and-after and the claim
+      // together, rather than three cards naming three neighbouring boxes.
       {
         target: '.tv-head',
+        also: ['.q-timer-chip'],
         place: 'bottom',
-        title: 'The task, and what this one shows you',
-        body: 'You are not answering this question yourself — you are judging whether the agent did '
-          + 'what it was asked. The badge says <b>Grounded</b> or <b>Non-grounded</b>. Grounded '
-          + 'gives you the agent\'s evidence twice over: the page behind each step, and marks on '
-          + 'the claims it saw. Non-grounded gives you neither — words only. That is the condition '
-          + 'being studied, not a broken page.',
+        title: 'The task, the badge, and the clock',
+        body: 'You are not answering this question yourself, you are judging whether the agent did '
+          + 'what it was asked. <b>Grounded</b> gives you its evidence twice over, as the page '
+          + 'behind each step and as marks on the claims it saw, while <b>Non-grounded</b> gives '
+          + 'you words only. The timer restarts once, between deciding something is wrong and '
+          + 'finding where.',
       },
       {
         target: '.tv-journey',
-        also: ['.tv-states'],
+        also: ['.tv-states', '.tv-answer'],
         place: 'right',
-        title: 'What it did',
-        body: 'Every action, in order — and because this one is grounded, hovering a step shows the '
-          + 'page the agent was looking at when it acted, with a click for full size. Above it, the '
-          + 'page before and after: the quickest way to see whether the job got done.',
-      },
-      {
-        target: '.tv-answer',
-        also: ['.q-timer-chip'],
-        place: 'right',
-        title: 'What it claims it did',
-        body: 'The claim you are judging. Read it against the steps: an answer can confidently name '
-          + 'something that appears nowhere on the page it was looking at. The timer restarts once, '
-          + 'between deciding that something is wrong and finding where.',
+        title: 'What it did, and what it claims it did',
+        body: 'Every action in order, and because this one is grounded, hovering a step shows the '
+          + 'page the agent was looking at when it acted, with a click for full size. Above the '
+          + 'steps sit the page before and after, the quickest way to see whether the job got done. '
+          + 'Below them is the claim you are judging, and an answer can confidently name something '
+          + 'that appears nowhere on the page it was looking at.',
       },
       {
         // THE WHOLE PANE, not just the journey: the verdict is judged from the before/after pair,
@@ -377,38 +368,34 @@
             ? document.getElementById('q-next') : null),
         ],
         refresh: onAnswerChange('input[name="q-correct"], input[name="q-problem"]'),
-        // Inside the pane, low and to the right: everything this step names — the verdict, the
-        // problem list, the button — is in the pane on the right, and a card placed against a
+        // Inside the pane, low and to the right: everything this step names (the verdict, the
+        // problem list, the button) is in the pane on the right, and a card placed against a
         // full-height target lands on top of one of them whichever way it is turned.
         place: 'inside-bottom',
         title: 'Look first, then give your verdict',
         body: 'Now do the task: check the steps and the screenshots against the answer, then say on '
-          + 'the right whether the agent completed it. Saying no asks what kind of problem it was — '
-          + 'tick everything that applies and press <b>Next</b>.',
+          + 'the right whether the agent completed it. Saying no asks what kind of problem it was, '
+          + 'so tick everything that applies and press <b>Next</b>.',
         wait: onRevealed('#q-errors-stage'),
         satisfied: () => !!document.getElementById('q-errors-stage') && !document.getElementById('q-errors-stage').hidden,
       },
+      // The type, the step and the Submit press are one step: an error type with no step will not
+      // submit, so the button is already the reminder a separate card would have been. "No error"
+      // has no steps to tap and is a legitimate answer, and the button accepts it on its own.
+      //
+      // THE WHOLE PANE, not the step list. Deciding which step an error happened at is done against
+      // the before/after pair and the answer as much as the journey, and spotlighting the journey
+      // alone told a participant the other three were finished with.
       {
         target: '#q-errors',
-        also: ['.tv-journey'],
+        also: ['#stimulus-pane', '#q-submit'],
         place: 'left',
-        title: 'Which error, and where',
-        body: 'Tick the kind of error, and numbered buttons appear — those are the steps, so tap the '
-          + 'one it happened at. An error type with no step is half an answer and will not submit. '
-          + 'If the run was fine, <b>No error</b> is an answer in its own right.',
-        // "No error" has no steps to tap, so waiting only on a step button would strand anybody who
-        // judged the run to be fine — which is a legitimate answer, and one this study needs people
-        // to feel free to give.
-        wait: onAny(onStepPicked(), onChange('input[name="q-error"][value="none"]')),
-        satisfied: () => !!document.querySelector('.q-step.is-on')
-          || !!document.querySelector('input[name="q-error"][value="none"]:checked'),
-      },
-      {
-        target: '#q-submit',
-        place: 'left',
-        title: 'Submit, and two quick follow-ups',
-        body: 'Then the same two questions every task ends with: how confident you were, how useful '
-          + 'what you were shown turned out to be, and an optional box for anything worth saying.',
+        title: 'Which error, where, then submit',
+        body: 'Tick the kind of error and numbered buttons appear, which are the steps, so tap the '
+          + 'one it happened at. An error type with no step is half an answer and will not submit, '
+          + 'and if the run was fine then <b>No error</b> is an answer in its own right. After '
+          + 'Submit come the same two questions every task ends with, on confidence and '
+          + 'helpfulness.',
         wait: onClick('#q-submit'),
         satisfied: () => !document.getElementById('q-submit'),
       },
@@ -450,8 +437,8 @@
         <!-- Said plainly, because a participant who expects to be marked answers differently from
              one who knows nobody is marking them. -->
         <p class="q-sub tut-no-feedback"><strong>This part only happens in practice.</strong> The
-          real tasks never tell you whether you were right, and there is no score — we are studying
-          the interface, not you.</p>
+          real tasks never tell you whether you were right, and there is no score, because we are
+          studying the interface and not you.</p>
         <div class="q-actions">
           <button class="q-btn q-btn-primary" id="tut-continue">See this one non-grounded →</button>
         </div>
@@ -484,7 +471,7 @@
     questionPane().innerHTML = `
       <div class="q-head"><span class="q-title">◐ The other condition</span></div>
       <div class="q-body">
-        <p class="q-text"><strong>The same task you just did — non-grounded.</strong></p>
+        <p class="q-text"><strong>The same task you just did, non-grounded.</strong></p>
         ${isFind ? `<div class="q-card">
           <div class="q-card-head"><span class="q-badge">A</span>
             <p class="q-text">The agent's answer (non-grounded)</p></div>
@@ -504,10 +491,10 @@
               : 'Neither: the steps are words only, and the answer carries no evidence marks either. The before and after pictures stay.'}</dd></div>
         </dl>
         <p class="q-sub">Everything else is identical, questions included. If you cannot tell what
-          the answer was based on, say so — that is a real answer and a useful one.</p>
+          the answer was based on, say so, because that is a real answer and a useful one.</p>
         <div class="q-actions">
           <button class="q-btn q-btn-primary" id="tut-finish">${last
-            ? (tut.previewOnly ? 'Done — back to the welcome screen' : 'Start the study →')
+            ? (tut.previewOnly ? 'Done, back to the welcome screen' : 'Start the study →')
             : 'Next practice task →'}</button>
         </div>
       </div>`;
@@ -529,19 +516,17 @@
       isFind ? {
         target: '#find-page',
         place: 'left',
-        title: 'The same page, unmarked — and the same answer, uncited',
-        body: 'Compare this with the task you just did. Two things are gone, not one: not a single '
-          + 'highlight in the page, and no numbered chips in the answer beside it. The page is '
-          + 'still entirely readable — you are simply the one finding the sentence, with nothing '
-          + 'saying which one the agent used. That is the whole difference, and it is deliberate.',
+        title: 'The same page unmarked, the same answer uncited',
+        body: 'Two things are gone, not one: no highlights in the page, and no numbered chips in the '
+          + 'answer. The page is still entirely readable, and you are simply the one finding the '
+          + 'sentence. That is the whole difference, and it is deliberate.',
       } : {
         target: '.tv-journey',
         place: 'right',
-        title: 'The same steps, without the pictures — and an answer with nothing behind it',
-        body: 'Compare this with the task you just did. Two things are gone, not one: the steps are '
-          + 'all still here but there is nothing to hover and nothing to open, and the answer below '
-          + 'them no longer marks which of its claims it actually saw. That is the whole difference '
-          + '— and it is the thing the study is trying to measure, so it is deliberate.',
+        title: 'The same steps without pictures, an answer with nothing behind it',
+        body: 'Two things are gone, not one: the steps are all still here but there is nothing to '
+          + 'hover or open, and the answer no longer marks which claims it actually saw. That is '
+          + 'the whole difference, and it is deliberate.',
       },
     ]);
   }
@@ -581,7 +566,12 @@
         <iframe class="find-page" id="find-page" title="The page this question is about"></iframe>
       </main>`;
     // No applyFindGrounding call: this arm marks nothing, and that absence is the whole point.
-    document.getElementById('find-page').srcdoc = page.html;
+    // Sealed all the same — nothing is picked on this screen, but a link followed out of the
+    // snapshot would replace the comparison the screen exists to show with a live website.
+    const frame = document.getElementById('find-page');
+    frame.__pgSnapshotHtml = page.html;
+    frame.addEventListener('load', () => window.sealSnapshot?.(frame), { once: true });
+    frame.srcdoc = page.html;
     return answer;
   }
 
@@ -655,16 +645,16 @@
           : 'This one did not complete the task.')}
         <p class="q-sub">${esc(debrief.why)}</p>
         ${verdictRow(rightStep, rightStep
-          ? `And you put the error at the right step — step ${debrief.step}.`
+          ? `And you put the error at the right step, step ${debrief.step}.`
           : `The step to mark was step ${debrief.step}.`)}
         <p class="q-sub">${esc(debrief.where)}</p>
-        <!-- The type is reported separately from the step, and softly: two of these three types can
-             be argued for on the same step, and telling somebody they were simply wrong about a
-             judgement call teaches them to stop making it. -->
-        <p class="q-sub tut-nuance"><strong>${rightType
-          ? `The type we had in mind was ${esc(debrief.errorLabel)}, and you chose it.`
-          : `The type we had in mind was ${esc(debrief.errorLabel)}.`}</strong>
-          ${esc(debrief.nuance)}</p>
+        <!-- The type gets its own verdict row, so the three judgements a Guide answer is made of —
+             did it work, which step, which kind of error — each come back marked. The prose under
+             it stays soft: two of these types can be argued for on the same step. -->
+        ${verdictRow(rightType, rightType
+          ? `And you picked the right kind of error: ${debrief.errorLabel}.`
+          : `The type we had in mind was ${debrief.errorLabel}.`)}
+        <p class="q-sub tut-nuance">${esc(debrief.nuance)}</p>
       </div>`;
   }
 
@@ -1046,17 +1036,9 @@
   // Each returns a cleanup, so a step that is left early (Back, Skip, a new tour) unbinds itself.
 
   // BUBBLE PHASE, AND A BEAT LATER. The screen's own handlers run on the same events and are what
-  // reveal the next thing — ticking "no" unhides the problem list, pressing Next builds the evidence
+  // reveal the next thing: ticking "no" unhides the problem list, pressing Next builds the evidence
   // stage. Advancing from the capture phase pointed the following coachmark at an element that was
   // still hidden, and it skipped itself.
-  function onChange(selector) {
-    return (next) => {
-      const handler = (e) => { if (e.target.matches?.(selector)) setTimeout(next, 80); };
-      document.addEventListener('change', handler);
-      return () => document.removeEventListener('change', handler);
-    };
-  }
-
   function onClick(selector) {
     return (next) => {
       const handler = (e) => { if (e.target.closest?.(selector)) setTimeout(next, 80); };
@@ -1081,46 +1063,12 @@
     };
   }
 
-  /** Every hop has a piece of evidence against it. */
-  function allPicked() {
-    const boxes = Array.from(document.querySelectorAll('[id^="q-picked-"]'));
-    return boxes.length > 0 && boxes.every(b => b.classList.contains('is-picked'));
-  }
-
-  function onAllPicked() {
-    return (next) => {
-      if (allPicked()) { setTimeout(next, 0); return () => {}; }
-      const observer = new MutationObserver(() => { if (allPicked()) setTimeout(next, 250); });
-      document.querySelectorAll('[id^="q-picked-"]').forEach(box => {
-        observer.observe(box, { attributes: true, attributeFilter: ['class'] });
-      });
-      return () => observer.disconnect();
-    };
-  }
-
   /** Re-cut the step's holes whenever something inside the question pane changes. */
   function onAnswerChange(selector) {
     return (refresh) => {
       const handler = (e) => { if (e.target.matches?.(selector)) setTimeout(refresh, 80); };
       document.addEventListener('change', handler);
       return () => document.removeEventListener('change', handler);
-    };
-  }
-
-  /** Whichever happens first. Both are unbound when the step is left, however it is left. */
-  function onAny(...waits) {
-    return (next) => {
-      const cleanups = waits.map(w => w(next));
-      return () => cleanups.forEach(fn => { try { fn(); } catch (e) { /* ignore */ } });
-    };
-  }
-
-  /** A step button has been tapped under an error type — the half of Q2 that is easy to forget. */
-  function onStepPicked() {
-    return (next) => {
-      const handler = (e) => { if (e.target.closest('.q-step')) setTimeout(next, 300); };
-      document.addEventListener('click', handler);
-      return () => document.removeEventListener('click', handler);
     };
   }
 
