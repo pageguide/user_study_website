@@ -13,13 +13,87 @@ const S = window.StudySession;
 // participant gets — rather than a parallel implementation that could drift from it.
 const DB = window.STUDY_SOURCE || window.StudyDB;
 
+/**
+ * WHICH CONDITION THIS QUESTION IS IN, said out loud at the top of the material.
+ *
+ * The arms differ in what is on screen, and a participant who does not know that reads a missing
+ * screenshot as a broken page rather than as the condition — so they hunt for something that was
+ * never there, and the time we measure is the time they spent looking for a bug. Naming it turns
+ * "I could not tell" from an admission into an answer, which is the answer this study needs.
+ *
+ * The one-liner says what is different; the ⓘ says what that means for THIS kind of task, because
+ * "no evidence" means no step screenshots for a guide trajectory and no marks on the page for a
+ * find question, and a participant only ever sees one of the two at a time.
+ */
+const CONDITION_COPY = {
+  guide: {
+    grounding: {
+      label: 'Grounded',
+      note: 'each step can be checked against the page',
+      hint: 'This task shows the agent\'s evidence. Hover a step in the journey to see the page the '
+        + 'agent was looking at when it took that action, and click for a full-size view. Numbered '
+        + 'chips in the answer mark claims the agent backed with something it saw.',
+    },
+    nongrounding: {
+      label: 'Non-grounded',
+      note: 'no screenshots for the agent\'s steps',
+      hint: 'This task deliberately shows no step screenshots: the agent\'s actions are described in '
+        + 'words only, and there is nothing to hover or click. Nothing is missing or broken — that is '
+        + 'the condition. The before and after pictures of the page are still shown, as they are in '
+        + 'every task. Judge from what is here, and if you cannot tell what happened, say so.',
+    },
+  },
+  find: {
+    grounding: {
+      label: 'Grounded',
+      note: 'the answer\'s evidence is marked on the page',
+      hint: 'This task shows the agent\'s evidence. The passages the answer relies on are highlighted '
+        + 'on the page beside it, and the numbered chips in the answer take you to them.',
+    },
+    nongrounding: {
+      label: 'Non-grounded',
+      note: 'no evidence is marked on the page',
+      hint: 'This task deliberately marks no evidence: the agent\'s answer is text only, and nothing '
+        + 'on the page is highlighted for you. Nothing is missing or broken — that is the condition. '
+        + 'The page itself is still there to read. If you cannot tell what the answer was based on, '
+        + 'say so.',
+    },
+  },
+};
+
+function conditionBannerHtml(arm, taskType) {
+  const copy = CONDITION_COPY[taskType === 'find' ? 'find' : 'guide'][arm === 'nongrounding' ? 'nongrounding' : 'grounding'];
+  const cls = arm === 'nongrounding' ? ' is-nongrounded' : ' is-grounded';
+  return `
+    <div class="tv-condition${cls}">
+      <span class="tv-condition-badge"><span class="tv-condition-dot" aria-hidden="true"></span>${esc(copy.label)}</span>
+      <span class="tv-condition-note">${esc(copy.note)}</span>
+      <button type="button" class="tv-info tv-condition-info" data-condition-hint aria-expanded="false"
+        aria-label="What does this condition mean?">i</button>
+      <div class="tv-condition-hint" hidden>${esc(copy.hint)}</div>
+    </div>`;
+}
+
+// Delegated from the pane, which outlives every shell rebuild — the banner itself is re-rendered
+// for each task, so binding it per render would stack listeners.
+stimulusPane.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-condition-hint]');
+  if (!btn) return;
+  const hint = btn.parentElement.querySelector('.tv-condition-hint');
+  if (!hint) return;
+  hint.hidden = !hint.hidden;
+  btn.setAttribute('aria-expanded', hint.hidden ? 'false' : 'true');
+  btn.classList.toggle('is-open', !hint.hidden);
+});
+
 /** The guide stimulus shell — the same markup study.html ships, rebuilt after a Find task. */
-function renderGuideShell() {
+function renderGuideShell(arm) {
   stimulusPane.innerHTML = `
     <header class="tv-head">
       <div class="tv-head-main">
         <div class="tv-kicker">Task</div>
         <h1 class="tv-goal" id="tv-goal">Loading…</h1>
+        ${conditionBannerHtml(arm, 'guide')}
       </div>
       <div class="tv-count" id="tv-count"></div>
     </header>
@@ -95,7 +169,7 @@ async function showTask() {
   // page, not a step list), so after one of those the elements mountStimulus targets no longer
   // exist — and a guide task following a find task rendered into nothing until the page was
   // reloaded. Rebuilding is cheap and removes the ordering dependency entirely.
-  renderGuideShell();
+  renderGuideShell(arm);
   window.Stimulus.mountStimulus(record, arm, {
     goal: document.getElementById('tv-goal'),
     count: document.getElementById('tv-count'),
@@ -160,6 +234,7 @@ async function showFindTask(task) {
       <div class="tv-head-main">
         <div class="tv-kicker">Task</div>
         <h1 class="tv-goal">${esc(task.question || task.title || '')}</h1>
+        ${conditionBannerHtml(arm, 'find')}
       </div>
     </header>
     <main class="tv-main">${page?.html

@@ -65,6 +65,59 @@ body {
   text-align: center;
 }
 
+/* ── The condition banner ────────────────────────────────────────────────────────
+   Sits under the goal, above the material, on every task. Deliberately NOT colour-coded as
+   good/bad: the two arms are conditions, not scores, and a green "grounded" pill against a red
+   "non-grounded" one would tell a participant which answer we were hoping for. Same neutral pill
+   both ways; only the dot and the wording carry the difference. */
+.tv-condition {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-top: 8px;
+}
+.tv-condition-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: 700 11px/1.5 inherit;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.03);
+}
+.tv-condition-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent-dark);
+}
+/* Filled where the evidence is shown, hollow where it is not — the state of the dot is the state
+   of the task, so the badge is readable at a glance without reading it. */
+.tv-condition.is-grounded .tv-condition-dot { background: var(--accent-dark); }
+.tv-condition.is-nongrounded .tv-condition-dot { background: transparent; }
+.tv-condition-note {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.tv-condition-info { flex: 0 0 auto; }
+.tv-condition-hint {
+  flex: 1 0 100%;
+  margin-top: 2px;
+  padding: 9px 12px;
+  background: rgba(120, 87, 255, 0.07);
+  border-left: 2px solid rgba(120, 87, 255, 0.45);
+  border-radius: 0 8px 8px 0;
+  color: rgba(0, 0, 0, 0.72);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.tv-condition-hint[hidden] { display: none; }
+
 /* ── The question pane ───────────────────────────────────────────────────────── */
 .q-head {
   padding: 14px 16px;
@@ -400,39 +453,194 @@ body {
   background: rgba(22, 143, 90, 0.08);
 }
 
-/* ── Welcome ─────────────────────────────────────────────────────────────────── */
-.welcome-body { background: var(--panel-bg); }
-.welcome {
-  max-width: 640px;
-  margin: 0 auto;
-  padding: 64px 24px;
+/* ── Welcome ─────────────────────────────────────────────────────────────────────
+   A consent-sheet, not a splash page. A participant decides here whether to give us sixteen
+   minutes, so the screen answers the questions they would otherwise have to ask: what am I doing,
+   how long, and what is being recorded. One card, one column, one action at the bottom — the
+   sections read in the order those questions arrive. */
+.welcome-body {
+  background:
+    radial-gradient(900px 420px at 50% -180px, rgba(120, 87, 255, 0.16), transparent 70%),
+    var(--panel-bg);
+  min-height: 100vh;
 }
-.welcome-title { font-size: 30px; margin: 0 0 18px; }
-.welcome-lead { font-size: 17px; }
-.welcome-note {
+.welcome {
+  max-width: 660px;
+  margin: 0 auto;
+  padding: 40px 24px 56px;
+}
+.welcome-card {
   background: var(--card);
   border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: 10px;
-  padding: 12px 14px;
-  color: var(--muted);
-  font-size: 14px;
+  border-radius: 18px;
+  padding: 30px 34px 26px;
+  box-shadow: 0 1px 2px rgba(20, 12, 50, 0.05), 0 18px 48px -24px rgba(20, 12, 50, 0.28);
 }
-.welcome-label { display: block; margin: 22px 0 6px; font-weight: 800; font-size: 13px; }
+@media (max-width: 560px) {
+  .welcome { padding: 20px 14px 40px; }
+  .welcome-card { padding: 24px 20px 22px; border-radius: 14px; }
+}
+
+.welcome-hero { border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+.welcome-eyebrow {
+  margin: 0 0 8px;
+  font: 700 10.5px/1.4 inherit;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent-dark);
+}
+.welcome-title {
+  font-size: 27px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+}
+.welcome-lead { font-size: 15px; line-height: 1.55; margin: 0; color: rgba(0, 0, 0, 0.78); }
+
+/* The three facts a participant weighs before clicking, as chips rather than a sentence: they are
+   scanned, not read. */
+.welcome-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+.welcome-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font: 600 12px/1.5 inherit;
+  color: var(--muted);
+  background: rgba(120, 87, 255, 0.05);
+}
+.welcome-chip-k { font-weight: 800; color: var(--ink); }
+
+.welcome-section { margin-top: 18px; }
+.welcome-section-title {
+  margin: 0 0 10px;
+  font: 800 11px/1.4 inherit;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The step title and its one line of detail run together rather than stacking: three two-line
+   steps is a paragraph, three one-and-a-bit-line steps is a glance. */
+.welcome-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.welcome-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.welcome-step strong { color: var(--ink); font-weight: 700; }
+.welcome-step-n {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(120, 87, 255, 0.12);
+  color: var(--accent-dark);
+  font: 800 11.5px/1 inherit;
+}
+
+/* ── Collapsed detail ────────────────────────────────────────────────────────────
+   Reassurance and the housekeeping facts are things a participant may want, not things they must
+   read to start — so they are one line each until asked for. The summary still carries the part
+   that changes an answer, because a fold nobody opens must not hide anything load-bearing. */
+.welcome-fold {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(120, 87, 255, 0.04);
+}
+.welcome-fold > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 14px 10px 30px;
+  position: relative;
+  font-size: 13.5px;
+  color: var(--muted);
+  border-radius: 10px;
+}
+.welcome-fold > summary::-webkit-details-marker { display: none; }
+.welcome-fold > summary strong { color: var(--ink); font-weight: 700; }
+.welcome-fold > summary::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -4px;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+.welcome-fold[open] > summary::before { transform: rotate(45deg); margin-top: -5px; }
+.welcome-fold > summary:hover { color: var(--ink); }
+.welcome-fold > summary:focus-visible { outline: 2px solid rgba(120, 87, 255, 0.5); outline-offset: 1px; }
+.welcome-fold-body {
+  padding: 0 14px 12px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+/* Two columns of short definitions rather than a paragraph of caveats — a participant should be
+   able to find "what is recorded" without reading the rest. */
+.welcome-facts {
+  margin: 0;
+  padding: 0 14px 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 20px;
+}
+@media (max-width: 560px) { .welcome-facts { grid-template-columns: 1fr; } }
+.welcome-fact { min-width: 0; }
+.welcome-fact dt {
+  font: 800 11.5px/1.5 inherit;
+  color: var(--ink);
+}
+.welcome-fact dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.welcome-actions {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.welcome-label { display: block; margin: 0 0 6px; font-weight: 800; font-size: 13px; }
+.welcome-label .q-sub { font-weight: 500; color: var(--muted); margin-left: 6px; }
 .welcome-id-toggle {
   display: block;
-  margin: 14px auto 0;
+  margin: 0 auto 14px;
   border: 0;
   background: transparent;
   color: var(--muted);
   padding: 4px 6px;
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
   text-decoration: underline;
+  text-underline-offset: 3px;
   cursor: pointer;
-  opacity: 0.68;
+  opacity: 0.72;
 }
-.welcome-id-toggle:hover { color: var(--text); opacity: 1; }
+.welcome-id-toggle:hover { color: var(--accent-dark); opacity: 1; }
+/* welcome.js hides the toggle once the field is open; `display: block` above would otherwise win
+   over the hidden attribute and leave a dead link sitting above the field it just opened. */
+.welcome-id-toggle[hidden] { display: none; }
+.welcome-id-field { margin-bottom: 16px; }
 .welcome-id-field[hidden] { display: none; }
 .welcome-input {
   width: 100%;
@@ -447,30 +655,52 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(120, 87, 255, 0.16);
 }
+/* Flat fill, no coloured glow. A solid button reads as a control; a purple halo reads as a
+   marketing hero, which is not what this page is. The only shadow is a neutral one-pixel drop so
+   the button sits on the card rather than floating over it. */
 .welcome-btn {
-  margin-top: 18px;
   width: 100%;
-  border: 0;
+  border: 1px solid var(--accent-dark);
   background: var(--accent);
   color: #fff;
   border-radius: 10px;
-  padding: 13px;
-  font: 800 15px/1.2 inherit;
+  padding: 14px;
+  font: 700 15px/1.2 inherit;
   cursor: pointer;
+  box-shadow: 0 1px 2px rgba(20, 12, 50, 0.14);
+  transition: background 120ms ease, border-color 120ms ease;
 }
-.welcome-btn:hover:not(:disabled) { background: var(--accent-dark); }
-.welcome-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.welcome-btn:hover:not(:disabled) { background: var(--accent-dark); border-color: #4a32b4; }
+.welcome-btn:active:not(:disabled) { background: #4a32b4; box-shadow: none; }
+.welcome-btn:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 2px; }
+.welcome-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .welcome-status:empty { display: none; }
 .welcome-status {
-  margin-top: 14px;
-  border-radius: 8px;
-  padding: 10px 12px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  padding: 11px 13px;
   font-size: 13px;
   font-weight: 600;
   background: rgba(0, 0, 0, 0.05);
 }
-.welcome-status-bad { background: rgba(211, 47, 47, 0.1); color: var(--bad); }
-.welcome-fine { margin-top: 12px; font-size: 12px; color: var(--muted); text-align: center; }
+.welcome-status-bad {
+  background: rgba(211, 47, 47, 0.08);
+  border: 1px solid rgba(211, 47, 47, 0.25);
+  color: var(--bad);
+}
+.welcome-fine {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+}
+.welcome-consent {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.42);
+  text-align: center;
+}
 
 
 /* ── Admin ──────────────────────────────────────────────────────────────────────
@@ -497,6 +727,10 @@ body {
   border-radius: 10px;
   padding: 14px 16px;
 }
+/* The welcome form's label and button spacing is set by the card's flow; inside the admin panel
+   they stack, so give them back the gaps they need. */
+.admin-panel .welcome-label { margin-top: 14px; }
+.admin-panel .welcome-btn { margin-top: 14px; }
 .admin-title { font-weight: 800; margin-bottom: 10px; }
 .admin-warn {
   background: rgba(201, 122, 0, 0.14);
