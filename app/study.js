@@ -9,9 +9,18 @@ const questionPane = document.getElementById('question-pane');
 const S = window.StudySession;
 let taskTelemetry = null;
 
-// The data source, chosen once. demo.html sets window.STUDY_SOURCE to a local fixture bank before
-// this file loads, so the demo walks THIS code — the same queue, timers, validation and scoring a
-// participant gets — rather than a parallel implementation that could drift from it.
+// The data source, chosen per task. demo.html sets window.STUDY_SOURCE to a local fixture bank
+// before this file loads, so the demo walks THIS code — the same queue, timers, validation and
+// scoring a participant gets — rather than a parallel implementation that could drift from it.
+//
+// A tutorial practice task reads from window.TutorialSource for the same reason: the walkthrough
+// travels the ordinary code path, so what is rehearsed is what comes next rather than a mock-up of
+// it. Its insertStudyResult deliberately writes nothing.
+function dataSource(task) {
+  if (task?.isTutorial && window.TutorialSource) return window.TutorialSource;
+  return window.STUDY_SOURCE || window.StudyDB;
+}
+
 const DB = window.STUDY_SOURCE || window.StudyDB;
 
 function startTaskTelemetry(task) {
@@ -177,11 +186,31 @@ function renderGuideShell(arm) {
     </main>`;
 }
 
+/**
+ * Unmount whatever is in the question pane.
+ *
+ * mountInstrument has always returned a cleanup and study.js has always stored it — and never
+ * called it. Nothing broke while the only way off a task was to submit it (both submit handlers
+ * clear their own intervals), but the walkthrough's Back button leaves a task mid-question, and a
+ * timer left running writes to a #q-timer that no longer exists once a tick lands.
+ */
+function detachQuestionPane() {
+  try { S.state.detachInstrument?.(); } catch (e) { /* a cleanup must never block a render */ }
+  S.state.detachInstrument = null;
+}
+
 function panelMessage(html) {
   questionPane.innerHTML = `<div class="q-body">${html}</div>`;
 }
 
 async function boot() {
+  // The walkthrough on its own, from the admin panel. No session, no assignment, no queue — it needs
+  // none of them, since the practice material is local, and claiming a slot to check some wording
+  // would spend a participant's assignment on a researcher.
+  if (new URLSearchParams(location.search).get('tutorial') === 'preview') {
+    return window.Tutorial.preview();
+  }
+
   // In-memory state wins when it is already populated. That is how the demo hands its fixture queue
   // over without going near localStorage — which matters, because the demo and a real run would
   // otherwise share one storage key, and opening the demo would silently discard the progress of a
@@ -212,14 +241,27 @@ async function boot() {
     S.state.runId = S.newRunId();
     if (!window.STUDY_SOURCE && !S.state.adminReview) S.saveLocal();
   }
+
+  // THE WALKTHROUGH, OFFERED ONCE, BEFORE TASK 1. Only at the very start: someone returning to a run
+  // they are five tasks into has already learnt the screen, and interrupting them to teach it would
+  // be worse than not offering it at all. A reviewer and the demo never see it.
+  if (S.state.idx === 0 && !S.state.adminReview && !window.STUDY_SOURCE
+      && window.Tutorial && !window.Tutorial.isDone()) {
+    return window.Tutorial.renderWelcome();
+  }
   await showTask();
 }
 
 async function showTask() {
   const { queue, idx } = S.state;
-  if (idx >= queue.length) return finish();
+  // A practice task comes from the tutorial's own two-item queue and leaves `idx` alone, so the real
+  // study still begins at task 1 whether the walkthrough was taken, skipped or left halfway.
+  const practising = !!S.state.tutorial?.active;
+  if (!practising && idx >= queue.length) return finish();
 
-  const task = queue[idx];
+  const task = practising ? window.Tutorial.currentTask() : queue[idx];
+  if (!task) return finish();
+  detachQuestionPane();
   startTaskTelemetry(task);
   const arm = S.taskArm ? S.taskArm(task) : S.conditionLabel(task?.arm || S.state.arm);
   panelMessage('<p class="q-text">Loading the next task…</p>');
@@ -227,7 +269,7 @@ async function showTask() {
 
   let record = null;
   try {
-    record = await DB.getStudyTrajectory(task.id);
+    record = await dataSource(task).getStudyTrajectory(task.id);
   } catch (e) {
     console.error('[study] could not load the trajectory:', e);
   }
@@ -258,6 +300,7 @@ async function showTask() {
     steps: window.Stimulus.stimulusSteps(),
     index: idx,
     total: queue.length,
+    progressLabel: progressText(),
     goal: record.goal || record.title || '',
     onSubmit: (timings) => askPostQuestions(task, record, timings),
   });
@@ -267,6 +310,18 @@ async function showTask() {
     bindAdminNav();
   }
   questionPane.scrollTop = 0;
+  window.Tutorial?.onTaskRendered(task);
+}
+
+/**
+ * The line above the questions: which task this is.
+ *
+ * Overridden during the walkthrough, because "Task 1/8" over a practice task would be a lie about
+ * the thing the study most needs a participant to trust — how much of it is left.
+ */
+function progressText() {
+  if (S.state.tutorial?.active) return window.Tutorial.progressLabel();
+  return null;
 }
 
 /**
@@ -287,7 +342,7 @@ async function showFindTask(task) {
   let page = null;
   let groundTruth = null;
   try {
-    canned = await DB.getCannedResponse(task.id, arm);
+    canned = await dataSource(task).getCannedResponse(task.id, arm);
   } catch (e) {
     console.warn('[study] no recorded answer for', task.id, e.message);
   }
@@ -298,7 +353,8 @@ async function showFindTask(task) {
     groundTruth = { error: e?.message || String(e), task_id: task.id };
   }
   try {
-    if (DB.getTaskPage) page = await DB.getTaskPage(task.id, task.url);
+    const source = dataSource(task);
+    if (source.getTaskPage) page = await source.getTaskPage(task.id, task.url);
   } catch (e) {
     console.warn('[study] no captured page for', task.id, e.message);
   }
@@ -366,10 +422,13 @@ async function showFindTask(task) {
 }
 
 async function loadFindGroundTruth(task) {
-  if (DB?.getStudyGroundTruth) {
-    const row = await DB.getStudyGroundTruth(task.id, task.url);
+  const source = dataSource(task);
+  if (source?.getStudyGroundTruth) {
+    const row = await source.getStudyGroundTruth(task.id, task.url);
     if (row) return row;
   }
+  // A practice task carries its own ground truth or none — never fall through to Supabase for it.
+  if (task?.isTutorial) return null;
   return fetchFindGroundTruthDirect(task);
 }
 
@@ -428,7 +487,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
 
   questionPane.innerHTML = `
     <div class="q-head"><span class="q-title">🔍 Find the answer</span></div>
-    <div class="q-progress">Task ${idx + 1}/${queue.length}</div>
+    <div class="q-progress">${esc(progressText() || `Task ${idx + 1}/${queue.length}`)}</div>
     <div class="q-body">
       <div class="q-task-card">
         <div class="q-timers">
@@ -444,7 +503,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
 
       <div class="q-card">
         <div class="q-card-head"><span class="q-badge">Q1</span>
-          <p class="q-text">Select the answer you found:</p></div>
+          <p class="q-text">Select the answer you found:${window.QForm.requiredMark()}</p></div>
         <div class="q-options" id="q-find-answer">
           ${options.map((opt, i) => `
             <label class="q-opt q-opt-rich">
@@ -456,9 +515,9 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
 
       <div id="q-support-stage" hidden>
         ${hops.map((hop, i) => `
-          <div class="q-card">
+          <div class="q-card" id="q-hop-card-${i}">
             <div class="q-card-head"><span class="q-badge">Q${i + 2}</span>
-              <p class="q-text">${esc(hop.prompt)}</p></div>
+              <p class="q-text">${esc(hop.prompt)}${window.QForm.requiredMark()}</p></div>
             <p class="q-sub" id="q-hop-hint-${i}">${hop.kind === 'image'
               ? 'Click the image in the page on the left.'
               : 'Click the sentence or paragraph in the page on the left.'}</p>
@@ -486,6 +545,14 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
     $q('q-timer').textContent = fmtClock(Date.now() - startedAt);
   }, 1000);
 
+  // The same contract mountInstrument returns, in the same slot: whatever is mounted in the question
+  // pane knows how to stop itself, and detachQuestionPane is what asks it to.
+  S.state.detachInstrument = () => {
+    clearInterval(answerTimer);
+    clearInterval(supportTimer);
+    stopPicking(document.getElementById('find-page'));
+  };
+
   // ── Picking evidence in the page ──
   // The snapshot is same-origin, so a click inside it can be read. That is the whole reason the
   // snapshot exists rather than a screenshot: the participant points at the real thing.
@@ -499,7 +566,10 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
       box.textContent = label;
       box.classList.add('is-picked');
     }
+    window.QForm.markMissing($q(`q-hop-card-${hop}`), false);
+    window.QForm.refreshError();
   };
+
 
   questionPane.querySelectorAll('[data-pick-hop]').forEach(btn => {
     btn.dataset.idleText = btn.textContent;
@@ -522,8 +592,12 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   });
 
   $q('q-find-next').onclick = () => {
+    window.QForm.clearMissing(questionPane);
     const sel = questionPane.querySelector('input[name="q-find-answer"]:checked');
-    if (!sel) return showError('Please select the answer you found.');
+    if (!sel) {
+      window.QForm.flagMissing([$q('q-find-answer')]);
+      return showError('Please answer the highlighted question: which answer did you find?');
+    }
     clearError();
 
     choiceElapsed = Math.max(0, Date.now() - startedAt);
@@ -543,9 +617,14 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   $q('q-find-submit').onclick = async () => {
     // EVERY hop, not just one. A half-answered pair cannot be reconstructed afterwards, and a
     // participant who could submit with one blank would do it without noticing.
+    window.QForm.clearMissing(questionPane);
+    const blanks = picked.map((v, i) => (v ? null : $q(`q-hop-card-${i}`)));
     const missing = picked.findIndex(v => !v);
-    if (missing >= 0) return showError(`Please answer Q${missing + 2} — ${hops[missing].kind === 'image'
-      ? 'pick the image in the page' : 'pick the passage in the page'}.`);
+    if (missing >= 0) {
+      window.QForm.flagMissing(blanks);
+      return showError(`Please answer the highlighted question — ${hops[missing].kind === 'image'
+        ? 'pick the image in the page' : 'pick the passage in the page'}.`);
+    }
     clearError();
 
     clearInterval(answerTimer);
@@ -563,6 +642,8 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
       interactionSummary: taskInteractionSummary(),
     });
   };
+
+  window.Tutorial?.onTaskRendered(task);
 }
 
 function normalizeEvidenceText(value) {
@@ -1593,7 +1674,7 @@ function postTaskQuestionsHtml(doneId) {
       <section class="q-post-section">
         <div class="q-post-section-head">
           <span class="q-badge">1</span>
-          <p class="q-text">How confident are you in the answer you selected?</p>
+          <p class="q-text">How confident are you in the answer you selected?${window.QForm.requiredMark()}</p>
         </div>
         <div class="q-options q-post-options" id="q-conf">
           ${POST_TASK_CONFIDENCE.map(([v, l]) => opt('q-conf', v, l)).join('')}
@@ -1602,7 +1683,7 @@ function postTaskQuestionsHtml(doneId) {
       <section class="q-post-section">
         <div class="q-post-section-head">
           <span class="q-badge">2</span>
-          <p class="q-text">How useful was the information shown for checking this task?</p>
+          <p class="q-text">How useful was the information shown for checking this task?${window.QForm.requiredMark()}</p>
         </div>
         <div class="q-options q-post-options" id="q-help">
           ${POST_TASK_HELPFULNESS.map(([v, l]) => opt('q-help', v, l)).join('')}
@@ -1648,9 +1729,20 @@ async function submitFindResult(task, payload) {
     const conf = questionPane.querySelector('input[name="q-conf"]:checked');
     const help = questionPane.querySelector('input[name="q-help"]:checked');
     const err = document.getElementById('q-error-msg');
-    if (!conf || !help) { err.textContent = 'Please answer both questions.'; err.hidden = false; return; }
+    if (!conf || !help) {
+      window.QForm.clearMissing(questionPane);
+      window.QForm.flagMissing([conf ? null : document.getElementById('q-conf'),
+        help ? null : document.getElementById('q-help')]);
+      err.textContent = 'Please answer the highlighted question(s).';
+      err.hidden = false;
+      return;
+    }
     done.dataset.submitted = 'true';
     done.disabled = true;
+
+    // A practice task is answered in full — including these two, which are asked after every real
+    // task — and then goes nowhere: no row, no push, no idx++.
+    if (S.state.tutorial?.active) return window.Tutorial.finishPracticeTask(task, payload);
 
     const row = S.buildFindResultRow({
       task, payload, confidence: conf.value, helpfulness: help.value, notes: postTaskNotes(),
@@ -1666,7 +1758,11 @@ async function submitFindResult(task, payload) {
 const RESULT_BACKUP_KEY = 'pageguide_web_pending_results';
 
 async function saveStudyResult(row) {
-  if (window.STUDY_SOURCE || S.state.adminReview) return { ok: true, skipped: true };
+  // Belt and braces on the tutorial: the practice paths already return before building a row, and a
+  // practice answer that reached study_task_results_v2 would be indistinguishable from a real one.
+  if (window.STUDY_SOURCE || S.state.adminReview || S.state.tutorial?.active) {
+    return { ok: true, skipped: true };
+  }
   try {
     const saved = await DB.insertStudyResult(row);
     if (!saved) throw new Error('Supabase insert returned no confirmation.');
@@ -2909,12 +3005,18 @@ function askPostQuestions(task, record, timings) {
     const help = questionPane.querySelector('input[name="q-help"]:checked');
     const err = document.getElementById('q-error-msg');
     if (!conf || !help) {
-      err.textContent = 'Please answer both questions.';
+      window.QForm.clearMissing(questionPane);
+      window.QForm.flagMissing([conf ? null : document.getElementById('q-conf'),
+        help ? null : document.getElementById('q-help')]);
+      err.textContent = 'Please answer the highlighted question(s).';
       err.hidden = false;
       return;
     }
     done.dataset.submitted = 'true';
     done.disabled = true;
+
+    // Practice answers stop here — see submitFindResult for why.
+    if (S.state.tutorial?.active) return window.Tutorial.finishPracticeTask(task, timings);
 
     const row = S.buildResultRow({
       task,
@@ -2945,6 +3047,7 @@ function askPostQuestions(task, record, timings) {
 }
 
 function finish() {
+  detachQuestionPane();
   stopTaskTelemetry();
   const pending = pendingResultCount();
   stimulusPane.innerHTML = '<div class="tv-done">Thank you — that was the last task.</div>';

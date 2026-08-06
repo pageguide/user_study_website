@@ -203,6 +203,7 @@ function showAdminReviewControls() {
         <button class="admin-chip${o.arm === id ? ' admin-chip-on' : ''}" data-arm="${id}">${label}</button>`).join('')}
     </div>
     <button class="welcome-btn" id="admin-go">Review →</button>
+    <button class="admin-chip" id="admin-tutorial">▶ Preview the walkthrough</button>
     <button class="admin-exit" id="admin-exit">Leave admin mode</button>`;
 
   content.querySelectorAll('[data-half]').forEach(b => {
@@ -211,6 +212,11 @@ function showAdminReviewControls() {
   content.querySelectorAll('[data-arm]').forEach(b => {
     b.onclick = () => { window.StudyAdmin.setAdminOptions({ arm: b.dataset.arm }); showAdminPanel(); };
   });
+  // The walkthrough on its own, so its wording can be checked without claiming a round-robin slot —
+  // the one thing "Review →" cannot do, since it needs published tasks and this needs none.
+  document.getElementById('admin-tutorial').onclick = () => {
+    location.href = 'study.html?tutorial=preview';
+  };
   document.getElementById('admin-exit').onclick = () => {
     window.StudyAdmin.revokeAdmin();
     adminPanel.hidden = true;
@@ -276,16 +282,54 @@ function points(value) {
   return value == null ? 'No data' : `${Math.round(value * 100)} pts`;
 }
 
+/**
+ * The style a result row belongs to: text or visual.
+ *
+ * `task_style` is written by the site as `guide_text` / `find_visual` / … and is the answer whenever
+ * it is there. It is often NOT there: a database that predates the column rejects the whole row for
+ * it, so insertStudyResult drops it and saves the answer without it (see supabase.js). Every such
+ * row is still classifiable, because the stimulus it came from carries the condition — which is what
+ * the second lookup does, against the same list the queue was built from.
+ *
+ * The guesses after that are last resorts, and they are why the guide half read "Unlabeled" while
+ * the find half did not: a Find id says TEXT in it and Find evidence says `image`, but a guide
+ * trajectory id (`gv2-msf0vpxs-qucehj`) says nothing at all.
+ */
 function taskStyle(row) {
   const explicit = String(row?.task_style || '').toLowerCase();
   if (explicit.includes('visual')) return 'visual';
   if (explicit.includes('text')) return 'text';
+
+  const fromStimulus = String(stimulusStyleById().get(String(row?.task_id || '')) || '');
+  if (fromStimulus.includes('visual')) return 'visual';
+  if (fromStimulus.includes('text')) return 'text';
+
   const id = String(row?.task_id || '').toLowerCase();
   if (id.includes('text')) return 'text';
   const evidence = Array.isArray(row?.evidence_responses) ? row.evidence_responses : [];
   if (evidence.some(e => String(e?.kind || '').toLowerCase() === 'image')) return 'visual';
   if (row?.task_type === 'find' && evidence.length) return 'text';
   return 'unknown';
+}
+
+/**
+ * task_id → style, from the stimulus lists the welcome screen already fetched to build the queue.
+ * No extra request: `queue` is in memory by the time anyone can open the dashboard.
+ */
+let stimulusStyleCache = null;
+
+function stimulusStyleById() {
+  if (stimulusStyleCache && stimulusStyleCache.size) return stimulusStyleCache;
+  stimulusStyleCache = new Map();
+  (Array.isArray(queue) ? queue : []).forEach(item => {
+    if (item?.id && item?.style) stimulusStyleCache.set(String(item.id), item.style);
+  });
+  return stimulusStyleCache;
+}
+
+/** Rows saved before the column existed, and therefore leaning on the fallback above. */
+function rowsMissingStyle(rows) {
+  return (Array.isArray(rows) ? rows : []).filter(r => !String(r?.task_style || '').trim()).length;
 }
 
 function answerCorrect(row) {
@@ -580,6 +624,191 @@ function verdictHtml(rows) {
   </div>`;
 }
 
+/**
+ * THE FOUR QUESTIONS THIS STUDY WAS RUN TO ANSWER, answered.
+ *
+ * The charts below show every cell and let somebody read a shape; this reads the shape for them.
+ * Each card is one facet — the four are not variations of one question, they are four questions, and
+ * the answers can point in different directions without any of them being wrong.
+ *
+ * WHICH NUMBER IS THE ANSWER depends on what was asked. A Find question asks whether grounding makes
+ * verification FASTER, so time leads and accuracy is the guardrail beside it — faster-but-wronger is
+ * not a win. A Guide question asks how evidence supports checking a run STEP BY STEP, which is a
+ * localization question, so the error-type-and-step recall leads and time is the guardrail.
+ *
+ * A cell under MIN_CELL_N still shows its direction, labelled as too early. Withholding the number
+ * entirely invites somebody to go and compute it by hand, without the caveat attached.
+ */
+const RESEARCH_QUESTIONS = [
+  {
+    taskType: 'find', style: 'text', kind: 'speed',
+    label: 'Find · Text',
+    question: 'When users verify an answer directly on the page, does grounding let them verify it '
+      + 'faster than a non-grounded agent?',
+  },
+  {
+    taskType: 'find', style: 'visual', kind: 'speed',
+    label: 'Find · Visual',
+    question: 'When the answer needs the visuals on the page, does grounding let them verify it '
+      + 'faster than a non-grounded agent?',
+  },
+  {
+    taskType: 'guide', style: 'visual', kind: 'localization',
+    label: 'Guide · Visual',
+    question: 'When users check a navigation run step by step, how does visual evidence support '
+      + 'that verification?',
+  },
+  {
+    taskType: 'guide', style: 'text', kind: 'localization',
+    label: 'Guide · Text',
+    question: 'When users check a navigation run step by step, how does textual evidence support '
+      + 'that verification?',
+  },
+];
+
+/** grounded − non-grounded for one metric over one facet, with the n behind each side. */
+function facetDelta(rows, metricFn) {
+  const grounded = cellFor(conditionRows(rows, 'grounding'), metricFn);
+  const nongrounded = cellFor(conditionRows(rows, 'nongrounding'), metricFn);
+  const delta = grounded.mean == null || nongrounded.mean == null
+    ? null : grounded.mean - nongrounded.mean;
+  return { grounded, nongrounded, delta, n: Math.min(grounded.n, nongrounded.n) };
+}
+
+function researchAnswerCard(spec, allRows) {
+  const rows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+  const speed = facetDelta(rows, r => r.find_supporting_answer_ms);
+  const accuracy = facetDelta(rows, answerCorrect);
+  const localization = facetDelta(rows, evidenceQuality);
+  const lead = spec.kind === 'speed' ? speed : localization;
+  const thin = lead.n < MIN_CELL_N;
+
+  let tone = 'none';
+  let headline = 'No data yet';
+  if (lead.delta != null) {
+    // Faster is better for time; higher is better for localization.
+    const helps = spec.kind === 'speed' ? lead.delta < 0 : lead.delta > 0;
+    tone = Math.abs(lead.delta) < (spec.kind === 'speed' ? 1000 : 0.05) ? 'flat' : (helps ? 'yes' : 'no');
+    headline = spec.kind === 'speed'
+      ? (tone === 'flat' ? 'No faster, no slower'
+        : `${helps ? 'Yes' : 'No'} — ${seconds(Math.abs(lead.delta))} ${helps ? 'faster' : 'slower'}`)
+      : (tone === 'flat' ? 'It makes no difference'
+        : `${helps ? 'It helps' : 'It does not help'} — ${points(Math.abs(lead.delta))} ${helps ? 'better' : 'worse'} at locating the step`);
+  }
+
+  const guard = spec.kind === 'speed'
+    ? (accuracy.delta == null ? 'No scored answers on both sides yet, so the accuracy side is open.'
+      : Math.abs(accuracy.delta) < 0.05 ? `Accuracy is flat (${points(Math.abs(accuracy.delta))} apart), so the time is the whole story.`
+        : accuracy.delta > 0 ? `And accuracy is ${points(accuracy.delta)} higher with it.`
+          : `But accuracy is ${points(Math.abs(accuracy.delta))} lower with it — a faster wrong answer is not a win.`)
+    // A localization win with accuracy falling behind it is not a win, so the guardrail carries both
+    // — time only when accuracy has nothing to say.
+    : [
+      accuracy.delta != null && Math.abs(accuracy.delta) >= 0.05
+        ? (accuracy.delta > 0 ? `Accuracy is ${points(accuracy.delta)} higher with it.`
+          : `But accuracy is ${points(Math.abs(accuracy.delta))} lower with it.`)
+        : null,
+      speed.delta == null ? 'No paired timings yet, so the time side is open.'
+        : Math.abs(speed.delta) < 1000 ? 'Time to locate is unchanged.'
+          : speed.delta < 0 ? `It is ${seconds(Math.abs(speed.delta))} faster to locate.`
+            : `It takes ${seconds(Math.abs(speed.delta))} longer to locate.`,
+    ].filter(Boolean).join(' ');
+
+  const stat = (name, cell, format) => `<div class="viz-answer-stat">
+      <span>${adminEsc(name)}</span>
+      <b>${adminEsc(format(cell.nongrounded.mean))} → ${adminEsc(format(cell.grounded.mean))}</b>
+    </div>`;
+
+  return `<article class="viz-answer viz-answer-${tone}${thin ? ' is-thin' : ''}">
+    <header>
+      <span class="viz-answer-facet">${adminEsc(spec.label)}</span>
+      <span class="viz-answer-n">n ${lead.nongrounded.n} vs ${lead.grounded.n}</span>
+    </header>
+    <p class="viz-answer-q">${adminEsc(spec.question)}</p>
+    <strong class="viz-answer-headline">${adminEsc(headline)}</strong>
+    <p class="viz-answer-guard">${adminEsc(guard)}</p>
+    <div class="viz-answer-stats">
+      ${stat('Locate time', speed, seconds)}
+      ${stat('Accuracy', accuracy, pct)}
+      ${stat('Localization', localization, pct)}
+    </div>
+    ${thin ? `<p class="viz-answer-thin">Too early to call — this needs ${MIN_CELL_N}+ rows per
+      condition, and the thinner side has ${lead.n}. The direction is shown, not the finding.</p>` : ''}
+  </article>`;
+}
+
+/**
+ * The numbers, as a plain object — the same aggregates the four cards draw.
+ *
+ * This is what gets sent for analysis, and it is deliberately ALL that does: per-facet means and
+ * counts, no participant ids, no session ids, no raw rows, no free text. A model can say what the
+ * numbers mean without ever seeing who produced them.
+ */
+function analysisSummary(rows) {
+  const cell = (c) => ({ nongrounded: c.nongrounded.mean, grounded: c.grounded.mean,
+    n_nongrounded: c.nongrounded.n, n_grounded: c.grounded.n });
+  return {
+    rows_total: rows.length,
+    sessions: new Set(rows.map(r => r.session_id || r.client_run_id || r.participant_id).filter(Boolean)).size,
+    min_rows_per_cell_for_confidence: MIN_CELL_N,
+    facets: RESEARCH_QUESTIONS.map(spec => {
+      const facet = rows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+      return {
+        facet: spec.label,
+        question: spec.question,
+        leads_on: spec.kind === 'speed' ? 'time to locate the evidence' : 'error-type and step recall',
+        rows: facet.length,
+        locate_time_ms: cell(facetDelta(facet, r => r.find_supporting_answer_ms)),
+        judge_time_ms: cell(facetDelta(facet, r => r.answer_multiple_choice_ms)),
+        accuracy: cell(facetDelta(facet, answerCorrect)),
+        localization: cell(facetDelta(facet, evidenceQuality)),
+        confidence_very_or_somewhat: cell(facetDelta(facet, r =>
+          (r.confidence === 'very' || r.confidence === 'somewhat') ? 1 : 0)),
+        helpfulness_very_or_somewhat: cell(facetDelta(facet, r =>
+          (r.helpfulness === 'very' || r.helpfulness === 'somewhat') ? 1 : 0)),
+      };
+    }),
+  };
+}
+
+/** The optional half: what participants wrote, with nothing attached to say who wrote it. */
+function analysisNotes(rows) {
+  return rows
+    .map(r => ({
+      facet: `${r.task_type === 'find' ? 'Find' : 'Guide'} · ${VIZ_STYLE_LABEL[taskStyle(r)]}`,
+      condition: r.condition,
+      note: String(r.notes || '').trim(),
+    }))
+    .filter(n => n.note)
+    .map(n => `[${n.facet} · ${n.condition}] ${n.note}`);
+}
+
+function researchAnswersHtml(rows) {
+  const noteCount = analysisNotes(rows).length;
+  return `<section class="viz-answers">
+    <div class="viz-answers-head">
+      <div>
+        <h4>The four questions, at a glance</h4>
+        <p class="viz-answers-lead">One card per question. Find asks whether grounding is
+          <b>faster</b>, with accuracy as the guardrail; Guide asks how well the evidence supports
+          checking a run <b>step by step</b>, with time as the guardrail. Every number reads
+          non-grounded → grounded.</p>
+      </div>
+      <!-- The cards are computed here and always current; this asks a model to read them out and
+           say what they mean, which is the part arithmetic cannot do. -->
+      <div class="viz-analysis-controls">
+        <button class="admin-chip admin-chip-on" id="viz-analyze">↻ Rerun analysis</button>
+        <label class="viz-analysis-opt"><input type="checkbox" id="viz-analyze-notes">
+          include the ${noteCount} participant note${noteCount === 1 ? '' : 's'}</label>
+      </div>
+    </div>
+    <div class="viz-answer-grid">
+      ${RESEARCH_QUESTIONS.map(spec => researchAnswerCard(spec, rows)).join('')}
+    </div>
+    <div class="viz-analysis" id="viz-analysis" hidden></div>
+  </section>`;
+}
+
 function compositionHtml(rows) {
   const chip = (label, value) => `<span><b>${adminEsc(label)}</b> ${value}</span>`;
   const styles = VIZ_STYLES.map(s => chip(VIZ_STYLE_LABEL[s], rows.filter(r => taskStyle(r) === s).length));
@@ -670,6 +899,26 @@ function howToReadHtml() {
   </div>`;
 }
 
+/**
+ * The one schema problem this dashboard can actually see, said where it will be read.
+ *
+ * insertStudyResult drops `task_style` and saves the row anyway when the column is missing, which is
+ * the right call — an answer, its timings and its scores are worth far more than a facet label — but
+ * it warns to a console nobody has open. The symptom surfaces here instead, as a whole half of the
+ * study reading "Unlabeled", and the fix is one ALTER away.
+ */
+function missingStyleNoticeHtml(allRows) {
+  const missing = rowsMissingStyle(allRows);
+  if (!missing) return '';
+  return `<div class="viz-schema-warn">
+    <strong>${missing} of ${allRows.length} rows were saved without <code>task_style</code></strong> —
+    this database predates that column, so the site dropped it rather than lose the row. The facets
+    below fall back to the stimulus each row came from, which resolves every published task; to fix
+    it at the source, run the <code>alter table … add column if not exists task_style text;</code>
+    from <code>supabase_results_v2.sql</code> in the Supabase SQL editor.
+  </div>`;
+}
+
 function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all', style: 'all', participant: 'all', search: '' }) {
   const rows = rowsFor(allRows, filters);
   const conditionLegend = legendHtml([
@@ -719,8 +968,10 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
       </div>
       <p>Every chart reads left to right as non-grounded → grounded, split by Find/Guide × Text/Visual. Hollow dots mean fewer than ${MIN_CELL_N} rows in that cell.</p>
     </div>
+    ${missingStyleNoticeHtml(allRows)}
     ${controlsHtml(allRows, filters)}
     ${verdictHtml(rows)}
+    ${researchAnswersHtml(rows)}
     ${howToReadHtml()}
     <div class="viz-chart-grid">
       <div class="viz-card">
@@ -845,8 +1096,95 @@ function bindVizTooltip() {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideVizTip(); });
 }
 
+/**
+ * The analysis, kept OUT of the re-render path.
+ *
+ * Every filter change re-renders the dashboard, and a request that fired on render would spend real
+ * money on every keystroke in the search box. It runs when the button is pressed, on the rows
+ * currently in view, and the result is held here so a re-render can put it back.
+ */
+let lastAnalysis = null;
+
+async function runVizAnalysis() {
+  const btn = document.getElementById('viz-analyze');
+  const out = document.getElementById('viz-analysis');
+  if (!btn || !out) return;
+  const rows = rowsFor(adminVizRows, currentVizFilters());
+  const withNotes = !!document.getElementById('viz-analyze-notes')?.checked;
+
+  btn.disabled = true;
+  btn.textContent = '… analysing';
+  out.hidden = false;
+  out.innerHTML = '<p class="viz-analysis-status">Asking the model to read the numbers…</p>';
+
+  try {
+    const result = await window.StudyDB.requestAnalysis({
+      summary: analysisSummary(rows),
+      notes: withNotes ? analysisNotes(rows) : [],
+    });
+    lastAnalysis = { ...result, rows: rows.length, withNotes };
+    out.innerHTML = analysisHtml(lastAnalysis);
+  } catch (e) {
+    out.innerHTML = `<p class="viz-analysis-status viz-analysis-error">${adminEsc(e.message || e)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ Rerun analysis';
+  }
+}
+
+function analysisHtml(result) {
+  return `
+    <div class="viz-analysis-head">
+      <span>Analysis</span>
+      <span class="viz-analysis-meta">${adminEsc(result.model)} · ${result.rows} rows ·
+        ${result.withNotes ? `${result.notes_included} notes included` : 'aggregates only'} ·
+        ${adminEsc(new Date(result.generated_at).toLocaleString())}</span>
+    </div>
+    <div class="viz-analysis-body">${renderAnalysisMarkdown(result.analysis)}</div>
+    <p class="viz-analysis-foot">Written by a model from the aggregates above — read it as a summary
+      to check, not as a result. The charts are the data.</p>`;
+}
+
+/**
+ * Just enough Markdown for a prose answer: headings, bold, lists, paragraphs.
+ *
+ * Escaped first, so nothing the model writes can inject markup into the dashboard.
+ */
+function renderAnalysisMarkdown(text) {
+  const lines = adminEsc(String(text || '')).split('\n');
+  const out = [];
+  let inList = false;
+  const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+  lines.forEach(raw => {
+    const line = raw.trim();
+    const inline = (v) => v
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+    if (!line) { closeList(); return; }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) { closeList(); out.push(`<h5>${inline(heading[2])}</h5>`); return; }
+    const bullet = line.match(/^[-*]\s+(.*)$/) || line.match(/^\d+\.\s+(.*)$/);
+    if (bullet) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push(`<li>${inline(bullet[1])}</li>`);
+      return;
+    }
+    closeList();
+    out.push(`<p>${inline(line)}</p>`);
+  });
+  closeList();
+  return out.join('');
+}
+
 function bindVisualizationControls() {
   bindVizTooltip();
+  document.getElementById('viz-analyze')?.addEventListener('click', runVizAnalysis);
+  // A re-render (a filter change, a search keystroke) rebuilds the pane; put the last analysis back
+  // rather than making the researcher pay for it again, and say which rows it was written from.
+  if (lastAnalysis) {
+    const out = document.getElementById('viz-analysis');
+    if (out) { out.hidden = false; out.innerHTML = analysisHtml(lastAnalysis); }
+  }
   document.getElementById('viz-table-details')?.addEventListener('toggle', (e) => {
     vizTableOpen = e.target.open;
   });
@@ -953,6 +1291,10 @@ startBtn.onclick = async () => {
   startBtn.disabled = true;
   say('Starting…');
   window.StudySession.clearLocal();
+  // Every new run is offered the walkthrough again. The flag lives outside the session (app/tutorial.js
+  // explains why), so it would otherwise outlive the participant who dismissed it and the next person
+  // on the same machine would never be shown it.
+  try { localStorage.removeItem('pageguide_web_tutorial_done'); } catch (e) { /* ignore */ }
 
   let assignment = null;
   let sessionId = null;

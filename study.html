@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PageGuide User Study — review the task</title>
   <link rel="stylesheet" href="styles/stimulus.css">
-  <link rel="stylesheet" href="styles/site.css?v=viz-rebuild-20260806-3">
+  <link rel="stylesheet" href="styles/site.css?v=tutorial-20260806-1">
 </head>
 <body>
   <!--
@@ -47,14 +47,19 @@
 
   <!-- Vendored verbatim from the extension: the question vocabularies, the arm strip and the
        scoring all come from here, so the website cannot drift into being a different study. -->
-  <script src="vendor/guide_trajectories.js?v=viz-rebuild-20260806-3"></script>
-  <script src="app/config.js?v=viz-rebuild-20260806-3" onerror="window.__configMissing = true"></script>
-  <script src="app/supabase.js?v=viz-rebuild-20260806-3"></script>
-  <script src="app/session.js?v=viz-rebuild-20260806-3"></script>
-  <script src="app/admin.js?v=viz-rebuild-20260806-3"></script>
-  <script src="app/find_task.js?v=viz-rebuild-20260806-3"></script>
-  <script src="app/stimulus.js?v=viz-rebuild-20260806-3"></script>
-  <script src="app/instrument.js?v=viz-rebuild-20260806-3"></script>
-  <script src="app/study.js?v=viz-rebuild-20260806-3"></script>
+  <script src="vendor/guide_trajectories.js?v=tutorial-20260806-1"></script>
+  <script src="app/config.js?v=tutorial-20260806-1" onerror="window.__configMissing = true"></script>
+  <script src="app/supabase.js?v=tutorial-20260806-1"></script>
+  <script src="app/session.js?v=tutorial-20260806-1"></script>
+  <script src="app/admin.js?v=tutorial-20260806-1"></script>
+  <script src="app/find_task.js?v=tutorial-20260806-1"></script>
+  <!-- The walkthrough, and the invented practice material it runs on. Loaded before study.js so its
+       hooks exist the first time boot() looks for them; neither file touches the real stimuli. -->
+  <script src="app/fake_page.js?v=tutorial-20260806-1"></script>
+  <script src="app/tutorial_fixtures.js?v=tutorial-20260806-1"></script>
+  <script src="app/tutorial.js?v=tutorial-20260806-1"></script>
+  <script src="app/stimulus.js?v=tutorial-20260806-1"></script>
+  <script src="app/instrument.js?v=tutorial-20260806-1"></script>
+  <script src="app/study.js?v=tutorial-20260806-1"></script>
 </body>
 </html>

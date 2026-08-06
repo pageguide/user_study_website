@@ -12,6 +12,54 @@
 
 const Q = window.GUIDE_STUDY_QUESTIONS;
 
+/**
+ * REQUIRED QUESTIONS SAY SO, AND SAY WHICH ONE WHEN THEY ARE MISSED.
+ *
+ * Every question here except the two free-text boxes must be answered — the study cannot use a row
+ * with a hole in it — but the only way a participant found that out was by pressing the button and
+ * reading a sentence at the bottom of a pane they had already scrolled past. An asterisk sets the
+ * expectation, and the highlight answers the question the error message raises: *which* one?
+ *
+ * Shared with study.js (which loads after this file) through window.QForm, so the Find questions and
+ * the follow-up mark themselves the same way rather than growing a second visual language for it.
+ */
+function requiredMark() {
+  return '<span class="q-req" title="Required" aria-label="required">*</span>';
+}
+
+function markMissing(el, missing = true) {
+  el?.classList.toggle('is-missing', !!missing);
+  return el;
+}
+
+function clearMissing(root) {
+  (root || document).querySelectorAll('.is-missing').forEach(el => el.classList.remove('is-missing'));
+}
+
+/** Highlight what is unanswered, and take the participant to the first of them. */
+function flagMissing(elements) {
+  const missing = elements.filter(Boolean);
+  missing.forEach(el => markMissing(el));
+  try { missing[0]?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { /* ignore */ }
+  return missing.length;
+}
+
+/** The message goes when the last thing it was complaining about is answered. */
+function refreshError() {
+  if (document.querySelector('.is-missing')) return;
+  const msg = document.getElementById('q-error-msg');
+  if (msg) msg.hidden = true;
+}
+
+// Bound ONCE, at load, on the document. The question pane is re-rendered for every task and every
+// stage, so a listener attached per render would stack up eight deep by the end of a session.
+document.addEventListener('change', (e) => {
+  const group = e.target.closest?.('.q-options');
+  if (group) { markMissing(group, false); refreshError(); }
+});
+
+window.QForm = { requiredMark, markMissing, clearMissing, flagMissing, refreshError };
+
 function escapeHTML(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -37,9 +85,9 @@ function fmtTime(ms) {
  * after it they are hunting through the steps (localization). Averaging the two would hide which
  * one the grounding actually helped, which is the thing the study exists to find out.
  *
- * @param {object} opts - {root, steps, index, total, onSubmit}
+ * @param {object} opts - {root, steps, index, total, progressLabel, onSubmit}
  */
-function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
+function mountInstrument({ root, steps, index, total, goal, progressLabel, onSubmit }) {
   const startedAt = Date.now();
   let choiceElapsed = null;
   let errorsStartedAt = null;
@@ -50,7 +98,7 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
     <div class="q-head">
       <span class="q-title">📘 Review the task</span>
     </div>
-    <div class="q-progress">Task ${index + 1}/${total} · 📘 Follow a Guide</div>
+    <div class="q-progress">${escapeHTML(progressLabel || `Task ${index + 1}/${total}`)} · 📘 Follow a Guide</div>
     <div class="q-body">
       <div class="q-task-card">
         <div class="q-timers">
@@ -64,7 +112,7 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
 
       <div class="q-card">
         <div class="q-card-head"><span class="q-badge">Q1</span>
-          <p class="q-text">${escapeHTML(Q.correctness)}</p></div>
+          <p class="q-text">${escapeHTML(Q.correctness)}${requiredMark()}</p></div>
         <div class="q-options" id="q-correct">
           <!-- The options answer the question AS ASKED. "Yes, the answer is correct" under "did the
                agent complete the task?" is a different question again, and a participant reading
@@ -74,7 +122,7 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
         </div>
 
         <div id="q-problem-wrap" hidden>
-          <label class="q-label">${escapeHTML(Q.problem)}</label>
+          <label class="q-label">${escapeHTML(Q.problem)}${requiredMark()}</label>
           <div class="q-options" id="q-problems">
             ${window.GUIDE_PROBLEM_TYPES.map(t => {
               const { name, detail } = splitLabel(t.label);
@@ -96,7 +144,7 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
 
       <div class="q-card" id="q-errors-stage" hidden>
         <div class="q-card-head"><span class="q-badge">Q2</span>
-          <p class="q-text">${escapeHTML(Q.errors)}</p></div>
+          <p class="q-text">${escapeHTML(Q.errors)}${requiredMark()}</p></div>
         <div class="q-options" id="q-errors">
           ${window.GUIDE_ERROR_TYPES.map((t, i) => {
             const { name, detail } = splitLabel(t.label);
@@ -116,7 +164,7 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
                    The steps are a known, short, closed set: showing them makes the wrong answer
                    unwritable and the right one one click. -->
               <div class="q-error-steps" data-steps-for="${escapeHTML(t.id)}" hidden>
-                <label class="q-label">at step(s)</label>
+                <label class="q-label">at step(s)${requiredMark()}</label>
                 <div class="q-step-picks">
                   ${steps.map(st => `
                     <button type="button" class="q-step" data-pick-for="${escapeHTML(t.id)}"
@@ -172,8 +220,13 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
   });
 
   root.querySelectorAll('.q-step').forEach(btn => {
-    btn.addEventListener('click', () => btn.classList.toggle('is-on'));
+    btn.addEventListener('click', () => {
+      btn.classList.toggle('is-on');
+      markMissing(btn.closest('.q-error-steps'), false);
+      refreshError();
+    });
   });
+
 
   const pickedSteps = (typeId) => Array.from(
     root.querySelectorAll(`.q-step.is-on[data-pick-for="${typeId}"]`))
@@ -182,13 +235,18 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
     .sort((a, b) => a - b);
 
   $('q-next').onclick = () => {
+    clearMissing(root);
     const sel = root.querySelector('input[name="q-correct"]:checked');
-    if (!sel) return showError('Please say whether the agent completed the task.');
+    if (!sel) {
+      flagMissing([$('q-correct')]);
+      return showError('Please answer the highlighted question: did the agent complete the task?');
+    }
     // Q1b is required now that it is a closed list: "it did not complete the task" with no problem
     // named is the same half-answer a step-less error type is, and it is the half the ground truth
     // is compared against. The free-text box beside it stays optional.
     if (sel.value === 'no' && !root.querySelector('input[name="q-problem"]:checked')) {
-      return showError('Please choose what the problem was.');
+      flagMissing([$('q-problems')]);
+      return showError('Please answer the highlighted question: what was the problem?');
     }
     clearError();
 
@@ -209,8 +267,12 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
   };
 
   $('q-submit').onclick = () => {
+    clearMissing(root);
     const checked = Array.from(root.querySelectorAll('input[name="q-error"]:checked'));
-    if (!checked.length) return showError('Please choose an error type, or “No error”.');
+    if (!checked.length) {
+      flagMissing([$('q-errors')]);
+      return showError('Please choose an error type, or “No error”.');
+    }
 
     const errors = checked
       .filter(b => b.value !== 'none')
@@ -220,7 +282,13 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
     // where, and that cannot be reconstructed afterwards. Same rule, same wording, same function as
     // the extension — _guideErrorsProblem, from the vendored module.
     const problem = window._guideErrorsProblem(errors);
-    if (problem) return showError(problem);
+    if (problem) {
+      // Point at the type that is missing its step, not at the whole question: with three types on
+      // screen, "one of the errors has no step selected" is a riddle.
+      flagMissing(errors.filter(e => !e.steps.length)
+        .map(e => root.querySelector(`[data-steps-for="${e.type}"]`)));
+      return showError(problem);
+    }
     clearError();
 
     clearInterval(answerTimer);

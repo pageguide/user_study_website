@@ -298,6 +298,130 @@ async function updateCannedResponse(env, payload) {
   return { status: 200, body: { ok: true, updated: rows[0] } };
 }
 
+// ── The analysis endpoint ────────────────────────────────────────────────────────────────────────
+// WHY THIS LIVES HERE AND NOT IN THE BROWSER. An LLM key is a spending credential. app/config.js is
+// served to every participant, so anything in it is public — the same reason the Supabase secret key
+// never leaves this process. The dashboard therefore asks this loopback helper, which holds the key
+// and never returns it.
+//
+// WHAT IT SENDS. Aggregates only, by default: per-facet means and counts that the dashboard has
+// already computed and drawn. No participant ids, no session ids, no raw rows. The participants'
+// free-text notes are the one thing that could carry something personal, so they are sent only when
+// the researcher ticks the box — and the request says outright that it is doing so.
+
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+// OpenRouter has no bare `google/gemini-3-flash`; the Gemini 3 Flash listing is the `-preview` id.
+// Override with OPENROUTER_MODEL for any other id from https://openrouter.ai/models.
+const DEFAULT_MODEL = 'google/gemini-3-flash-preview';
+
+const ANALYSIS_SYSTEM = [
+  'You are a research assistant analysing a within-subjects HCI study.',
+  '',
+  'The study asks whether GROUNDING — showing a participant the evidence behind a web agent\'s',
+  'answer — makes it faster and more accurate to verify that answer. Every participant sees eight',
+  'tasks: four grounded, four non-grounded, spread over four facets (Find/Guide × Text/Visual).',
+  'Find tasks ask whether an answer to a question about a page is right, and where the evidence for',
+  'it is. Guide tasks ask whether an agent completed a navigation task, and at which step it went',
+  'wrong.',
+  '',
+  'You are given the aggregated results, one cell per facet and condition. Every metric reads',
+  'non-grounded → grounded.',
+  '',
+  'Answer the four research questions, in this order, with a heading for each:',
+  '1. Find × Text — does grounding make verifying an on-page answer faster?',
+  '2. Find × Visual — the same, when the answer needs the page\'s visuals.',
+  '3. Guide × Visual — how does visual evidence support checking a run step by step?',
+  '4. Guide × Text — how does textual evidence support it?',
+  '',
+  'Rules you must follow:',
+  '- Lead each answer with the finding in one sentence, then the numbers that support it.',
+  '- Find questions lead on time-to-locate, with accuracy as the guardrail; Guide questions lead on',
+  '  error-type and step recall, with time and accuracy as guardrails. A win on one number while',
+  '  another moves against it is not a win — say so.',
+  '- n is small. Say "directional" or "too early to call" where it is, and never present a',
+  '  difference from a handful of rows as an established effect. Do not compute p-values.',
+  '- Only use the numbers you are given. If a cell is missing or null, say it is not measured yet',
+  '  rather than inferring it.',
+  '- Finish with two or three sentences on what would most change the picture — which cell needs',
+  '  more rows, which measure looks unreliable.',
+  'Write plain prose in Markdown. No preamble about what you are about to do.',
+].join('\n');
+
+function analysisProblem(env) {
+  if (!env.OPENROUTER_API_KEY) {
+    return 'OPENROUTER_API_KEY is not set in .env — add it and restart the helper.';
+  }
+  return null;
+}
+
+async function runAnalysis(env, payload) {
+  const problem = analysisProblem(env);
+  if (problem) return { status: 400, body: { error: problem } };
+
+  const model = String(payload?.model || env.OPENROUTER_MODEL || DEFAULT_MODEL).trim();
+  const summary = payload?.summary;
+  if (!summary || typeof summary !== 'object') {
+    return { status: 400, body: { error: 'summary (the aggregated results) is required' } };
+  }
+  const notes = Array.isArray(payload?.notes) ? payload.notes.slice(0, 200) : [];
+
+  const user = [
+    'Aggregated results:',
+    '```json',
+    JSON.stringify(summary, null, 2),
+    '```',
+    notes.length
+      ? `\nThe participants' free-text notes (${notes.length}), for what they say about WHY:\n`
+        + notes.map(n => `- ${String(n).slice(0, 600)}`).join('\n')
+      : '\nNo participant notes were included in this request.',
+  ].join('\n');
+
+  let res;
+  try {
+    res = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        // OpenRouter attributes the call to the app; both headers are optional and neither
+        // identifies a participant.
+        'HTTP-Referer': 'https://github.com/pageguide/user_study_website',
+        'X-Title': 'PageGuide user study dashboard',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: ANALYSIS_SYSTEM },
+          { role: 'user', content: user },
+        ],
+      }),
+    });
+  } catch (e) {
+    return { status: 502, body: { error: `Could not reach OpenRouter: ${e?.message || e}` } };
+  }
+
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = body?.error?.message || body?.error || `HTTP ${res.status}`;
+    return { status: res.status, body: { error: `OpenRouter refused the request: ${detail}` } };
+  }
+  const text = body?.choices?.[0]?.message?.content;
+  if (!text) {
+    return { status: 502, body: { error: 'OpenRouter returned no analysis text.' } };
+  }
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      model: body?.model || model,
+      analysis: text,
+      usage: body?.usage || null,
+      notes_included: notes.length,
+      generated_at: new Date().toISOString(),
+    },
+  };
+}
+
 function summarize(report) {
   if (!report.length) return 'nothing to publish — the bundle was empty';
   return report
@@ -342,6 +466,31 @@ if (args[0] === '--serve') {
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
     };
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); res.end(); return; }
+    if (req.method === 'POST' && req.url.startsWith('/admin/analysis')) {
+      if (!tokenMatches(req.headers['x-pageguide-admin-token'])) {
+        res.writeHead(403, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Bad or missing admin save token.' }));
+        return;
+      }
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', async () => {
+        let payload;
+        try {
+          payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch (e) {
+          res.writeHead(400, { ...cors, 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'The request was not valid JSON.' }));
+          return;
+        }
+        console.log(`→ analysis requested (${payload?.notes?.length || 0} notes included)`);
+        const out = await runAnalysis(env, payload);
+        if (out.status !== 200) console.error(`  ✗ ${out.body.error}`);
+        res.writeHead(out.status, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(out.body));
+      });
+      return;
+    }
     if (req.method === 'POST' && req.url.startsWith('/admin/canned-response')) {
       if (!tokenMatches(req.headers['x-pageguide-admin-token'])) {
         res.writeHead(403, { ...cors, 'Content-Type': 'application/json' });
@@ -397,6 +546,9 @@ if (args[0] === '--serve') {
     console.log(`✓ Publish helper listening on http://127.0.0.1:${PORT}`);
     console.log(`  Key loaded from ${file}. It stays in this process — nothing is pasted anywhere.`);
     console.log(`  Admin save token: ${ADMIN_SAVE_TOKEN}`);
+    console.log(`  Analysis: ${env.OPENROUTER_API_KEY
+      ? `ready (model ${env.OPENROUTER_MODEL || DEFAULT_MODEL})`
+      : 'OFF — set OPENROUTER_API_KEY in .env to enable the dashboard\'s Rerun analysis button'}`);
     console.log('  Now press ⬆ Publish to web in the extension\'s recorder. Ctrl-C when you are done.');
   });
 } else if (args[0]) {

@@ -262,6 +262,44 @@ async function updateCannedResponseViaAdminHelper(taskId, condition, patch, orig
   throw new Error(body || originalError?.message || `admin helper returned ${res.status}`);
 }
 
+/**
+ * The dashboard's analysis, run by the local publish helper.
+ *
+ * The key is an LLM spending credential, so it lives where the Supabase secret does: in .env, read
+ * by scripts/publish.mjs, never in this file. app/config.js is served to every participant — a key
+ * placed here would be a public key. The helper is loopback-only and gated by the same admin token
+ * the canned-response editor uses.
+ *
+ * What crosses the wire is the aggregate the dashboard has already drawn, plus the participants'
+ * notes only when the researcher asked for them. No participant ids, no session ids, no raw rows.
+ */
+async function requestAnalysis({ summary, notes = [], model = '' }) {
+  let token = '';
+  try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
+  if (!token) {
+    token = (window.prompt('Paste the admin save token printed by `node scripts/publish.mjs --serve`:') || '').trim();
+    if (!token) throw new Error('An admin save token is needed to reach the analysis helper.');
+    try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
+  }
+
+  let res;
+  try {
+    res = await fetch('http://127.0.0.1:8790/admin/analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
+      body: JSON.stringify({ summary, notes, model }),
+    });
+  } catch (e) {
+    throw new Error('The analysis helper is not running. Start it with `node scripts/publish.mjs --serve`.');
+  }
+  const body = await res.json().catch(() => null);
+  if (res.status === 401 || res.status === 403) {
+    try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
+  }
+  if (!res.ok) throw new Error(body?.error || `The helper returned ${res.status}.`);
+  return body;
+}
+
 // ── The Find half ──
 // The site cannot RUN a Find task: that needs the extension on a live page to index it, highlight
 // citations and let a participant pick sentences off it. What it can do is show the material —
@@ -314,6 +352,7 @@ async function getTaskPage(taskId, url) {
 
 window.StudyDB = {
   getTaskPage,
+  requestAnalysis,
   supabaseConfigured,
   listStudyTrajectories,
   getStudyTrajectory,

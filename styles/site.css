@@ -1273,3 +1273,521 @@ body {
   border-color: var(--accent);
   color: #fff;
 }
+
+/* ── The walkthrough ─────────────────────────────────────────────────────────────
+   A backdrop with a hole cut over whatever is being pointed at, and a card beside it. The layer
+   takes no pointer events and neither does the hole, so the control under the spotlight stays
+   clickable — it has to, because half of these steps ask the participant to use it. Only the card
+   itself catches clicks. */
+.tut-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+
+.tut-layer.is-on { opacity: 1; }
+
+/* The dimmed backdrop, as an SVG mask so a step can cut more than one hole in it. A box-shadow can
+   only cut one: a second element casting its own shadow re-dims the first hole, which is how the
+   card a step was telling somebody to use ended up grey. */
+.tut-mask {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
+
+/* The edge of a hole. */
+.tut-ring {
+  position: fixed;
+  top: 0; left: 0; width: 0; height: 0;
+  border-radius: 12px;
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  pointer-events: none;
+}
+
+/* A hole over something the walkthrough is waiting for somebody to use. A card with no Next button
+   is a pause, and a pause that does not say what it is waiting for reads as being stuck. */
+.tut-ring.is-action {
+  outline-width: 3px;
+  animation: tut-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes tut-pulse {
+  0%, 100% { outline-color: var(--accent); box-shadow: 0 0 0 0 rgba(120, 87, 255, 0.40); }
+  50%      { outline-color: var(--accent-dark); box-shadow: 0 0 0 10px rgba(120, 87, 255, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tut-ring.is-action { animation: none; }
+}
+
+.tut-tip {
+  position: fixed;
+  width: 330px;
+  max-width: calc(100vw - 32px);
+  padding: 16px 18px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(20, 16, 60, 0.28);
+  pointer-events: auto;
+}
+
+.tut-tip-kicker {
+  font: 800 11px/1.2 inherit;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.tut-tip-title { font: 800 16px/1.3 inherit; margin-bottom: 6px; }
+.tut-tip-body { font-size: 13.5px; line-height: 1.55; color: rgba(0, 0, 0, 0.72); }
+.tut-tip-body b { color: var(--ink); }
+
+.tut-tip-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.tut-tip-spacer { flex: 1; }
+
+.tut-tip-actions button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 9px;
+  padding: 7px 12px;
+  font: 800 12.5px/1.2 inherit;
+  cursor: pointer;
+}
+
+.tut-tip-actions .tut-tip-next {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.tut-tip-actions .tut-tip-next:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+
+/* Deliberately the quietest thing on the card, and deliberately always there. */
+.tut-tip-actions .tut-tip-skip {
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+  padding-left: 0;
+  text-decoration: underline;
+}
+
+/* ── The walkthrough's own welcome screen ────────────────────────────────────── */
+.tut-hero {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 56px 32px;
+}
+
+.tut-eyebrow {
+  margin: 0 0 8px;
+  font: 800 12px/1.2 inherit;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.tut-title { font-size: 30px; line-height: 1.15; margin: 0 0 12px; }
+.tut-lead { font-size: 15.5px; line-height: 1.6; margin: 0 0 20px; color: rgba(0, 0, 0, 0.78); }
+
+.tut-list {
+  margin: 0 0 20px;
+  padding-left: 20px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.tut-list li { margin-bottom: 8px; }
+.tut-fine { font-size: 13px; color: var(--muted); margin: 0; }
+.tut-welcome-actions { flex-direction: column; }
+
+/* ── What we were looking for ────────────────────────────────────────────────── */
+.tut-debrief {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--card);
+}
+
+.tut-verdict {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 10px 0 4px;
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.tut-verdict-mark { font-size: 14px; }
+.tut-verdict.is-ok { color: var(--ok); }
+.tut-verdict.is-off { color: var(--bad); }
+
+.tut-evidence { list-style: none; margin: 12px 0 0; padding: 0; }
+
+.tut-evidence li {
+  border-left: 3px solid var(--accent);
+  padding: 4px 0 4px 10px;
+  margin-bottom: 10px;
+}
+
+.tut-evidence-label {
+  display: block;
+  font: 800 11px/1.4 inherit;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tut-evidence-text { font-size: 13px; line-height: 1.5; color: rgba(0, 0, 0, 0.75); }
+.tut-debrief-closing { margin-top: 14px; }
+
+.welcome-lead-quiet { font-size: 13.5px; color: var(--muted); margin-top: 12px; }
+
+/* "Your turn" — the kicker on a step that is waiting for the participant rather than for Next. */
+.tut-layer.is-waiting .tut-tip-kicker { color: var(--accent-dark); }
+
+/* The two conditions, side by side, on the screen that shows the non-grounded one. */
+.tut-compare { margin: 14px 0; }
+
+.tut-compare > div {
+  border-left: 3px solid var(--line);
+  padding: 2px 0 2px 10px;
+  margin-bottom: 10px;
+}
+
+.tut-compare > div:first-child { border-left-color: var(--accent); }
+
+.tut-compare dt {
+  font: 800 11px/1.4 inherit;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tut-compare dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.tut-nuance { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+
+/* The debrief's evidence list: what supports the answer, and whether that is what they picked. */
+.tut-evidence li.is-ok { border-left-color: var(--ok); }
+.tut-evidence li.is-off { border-left-color: var(--bad); }
+
+.tut-evidence-mark {
+  margin-left: 6px;
+  font-weight: 800;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.tut-evidence li.is-ok .tut-evidence-mark { color: var(--ok); }
+.tut-evidence li.is-off .tut-evidence-mark { color: var(--bad); }
+
+.tut-evidence-mine {
+  display: block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.tut-no-feedback {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 10px;
+}
+
+/* The walkthrough's own bar: where you are, and the two ways out of the screen you are on. Fixed
+   and outside both panes, because every screen in the walkthrough rebuilds the pane it lives in. */
+.tut-nav {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 2147483100;   /* above the coachmark layer — it must stay usable during a tour */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: 0 10px 30px rgba(20, 16, 60, 0.22);
+}
+
+.tut-nav-label {
+  font: 800 11.5px/1.2 inherit;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tut-nav button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: 800 12.5px/1.2 inherit;
+  cursor: pointer;
+}
+
+.tut-nav-back:hover,
+.tut-nav-fwd:hover { border-color: var(--accent); color: var(--accent-dark); }
+
+.tut-nav-fwd { border-color: rgba(120, 87, 255, 0.35); color: var(--accent-dark); }
+
+.tut-nav-skip {
+  border-color: transparent !important;
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+/* ── Required, and what is still missing ─────────────────────────────────────────
+   The asterisk sets the expectation before the button is pressed; the highlight answers the
+   question the error message raises — which one? Both are removed the moment the question is
+   answered, so red always means "still needed" and never "you got this wrong". */
+.q-req {
+  color: var(--bad);
+  font-weight: 800;
+  margin-left: 3px;
+}
+
+.q-options.is-missing,
+.q-card.is-missing,
+.q-error-steps.is-missing {
+  border-radius: 12px;
+  outline: 2px solid var(--bad);
+  outline-offset: 4px;
+  background: rgba(165, 32, 32, 0.045);
+  scroll-margin: 24px;
+}
+
+.q-card.is-missing { outline-offset: 2px; }
+
+.q-error-steps.is-missing {
+  outline-offset: 2px;
+  padding: 6px 8px;
+}
+
+/* A schema problem the dashboard can see, said where the symptom appears. */
+.viz-schema-warn {
+  border: 1px solid rgba(165, 32, 32, 0.35);
+  background: rgba(165, 32, 32, 0.05);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.viz-schema-warn code {
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* ── The four questions, answered ────────────────────────────────────────────────
+   One card per question, because the study asks four and they may point four different ways. The
+   headline is the answer; the line under it is the guardrail that stops a win being claimed on one
+   number alone (faster but less accurate is not a win, and neither is accurate but slower). */
+.viz-answers { margin: 4px 0 14px; }
+
+.viz-answers h4 { margin: 0 0 4px; font-size: 15px; }
+
+.viz-answers-lead {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.viz-answer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.viz-answer {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--card);
+}
+
+.viz-answer-yes { border-left-color: var(--ok); }
+.viz-answer-no { border-left-color: var(--bad); }
+.viz-answer-flat { border-left-color: rgba(0, 0, 0, 0.28); }
+.viz-answer.is-thin { border-style: dashed; }
+
+.viz-answer header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.viz-answer-facet {
+  font: 800 11px/1.2 inherit;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--accent-dark);
+}
+
+.viz-answer-n { font: 700 11px/1.2 inherit; color: var(--muted); }
+
+.viz-answer-q {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, 0.72);
+}
+
+.viz-answer-headline {
+  display: block;
+  font-size: 17px;
+  line-height: 1.25;
+  margin-bottom: 4px;
+}
+
+.viz-answer-yes .viz-answer-headline { color: var(--ok); }
+.viz-answer-no .viz-answer-headline { color: var(--bad); }
+
+.viz-answer-guard {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.viz-answer-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.viz-answer-stat { display: flex; flex-direction: column; gap: 1px; }
+
+.viz-answer-stat span {
+  font: 700 10.5px/1.2 inherit;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.viz-answer-stat b { font-size: 13px; }
+
+.viz-answer-thin {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--bad);
+}
+
+/* ── The analysis panel ──────────────────────────────────────────────────────────
+   The cards state the numbers; this states what a model makes of them. Deliberately styled as a
+   quotation rather than as a result — it is a summary to check, and the charts are the data. */
+.viz-answers-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.viz-analysis-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.viz-analysis-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.viz-analysis {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 14px 16px;
+}
+
+.viz-analysis-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  font: 800 11px/1.3 inherit;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--accent-dark);
+}
+
+.viz-analysis-meta {
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: none;
+  color: var(--muted);
+}
+
+.viz-analysis-body { font-size: 13.5px; line-height: 1.6; }
+.viz-analysis-body h5 { margin: 14px 0 4px; font-size: 13.5px; }
+.viz-analysis-body h5:first-child { margin-top: 0; }
+.viz-analysis-body p { margin: 0 0 8px; }
+.viz-analysis-body ul { margin: 0 0 8px; padding-left: 20px; }
+.viz-analysis-body li { margin-bottom: 4px; }
+
+.viz-analysis-body code {
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.viz-analysis-status { margin: 0; font-size: 13px; color: var(--muted); }
+.viz-analysis-error { color: var(--bad); }
+
+.viz-analysis-foot {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
