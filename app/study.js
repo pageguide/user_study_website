@@ -506,7 +506,8 @@ function startPicking(frame, kind, onPick) {
   const SEL = kind === 'image' ? 'img' : 'p, li, figcaption, blockquote, h1, h2, h3, td, th';
   const TEXT_OVERLAY_SEL = 'p, li, figcaption, blockquote, h1, h2, h3';
   let hovered = null;
-  let overlayBlock = null;
+  let moveFrame = 0;
+  let lastMove = null;
 
   const over = (e) => {
     const el = kind === 'image' ? e.target.closest?.(SEL) : e.target.closest?.('td, th');
@@ -517,24 +518,18 @@ function startPicking(frame, kind, onPick) {
   };
   const move = (e) => {
     if (kind === 'image') return;
-    const block = e.target.closest?.(TEXT_OVERLAY_SEL);
-    if (block && block !== overlayBlock) {
-      overlayBlock = block;
-      buildPickSentenceOverlays(doc, block);
-    } else if (!block && !e.target.closest?.('.pg-pick-sentence-hit')) {
-      overlayBlock = null;
-      clearPickSentenceOverlays(doc);
-    }
-    const hit = e.target.closest?.('.pg-pick-sentence-hit');
-    clearPickPreview(doc);
-    clearSentenceHitHover(doc);
-    if (hit?.__pgPickSentence) {
-      setSentenceHitHover(doc, hit.__pgPickSentence.group);
-      return;
-    }
-    if (!block) return;
-    const pickedPassage = sentencePickFromClick(doc, block, e.clientX, e.clientY);
-    if (pickedPassage?.range) wrapPickPreviewSentence(doc, pickedPassage.range);
+    lastMove = { target: e.target, x: e.clientX, y: e.clientY };
+    if (moveFrame) return;
+    moveFrame = doc.defaultView.requestAnimationFrame(() => {
+      moveFrame = 0;
+      const ev = lastMove;
+      if (!ev) return;
+      const block = ev.target.closest?.(TEXT_OVERLAY_SEL);
+      clearPickPreview(doc);
+      if (!block) return;
+      const pickedPassage = sentencePickFromClick(doc, block, ev.x, ev.y);
+      if (pickedPassage?.range) wrapPickPreviewSentence(doc, pickedPassage.range);
+    });
   };
   const click = (e) => {
     const sentenceHit = kind === 'image' ? null : e.target.closest?.('.pg-pick-sentence-hit');
@@ -573,7 +568,11 @@ function startPicking(frame, kind, onPick) {
   doc.addEventListener('mouseover', over, true);
   doc.addEventListener('mousemove', move, true);
   doc.addEventListener('click', click, true);
-  doc.__pgPick = { over, move, click };
+  doc.__pgPick = { over, move, click, cancel: () => {
+    if (moveFrame) doc.defaultView.cancelAnimationFrame(moveFrame);
+    moveFrame = 0;
+    lastMove = null;
+  } };
 }
 
 function pickDisplayLabel(text, locator, kind) {
@@ -850,6 +849,7 @@ function stopPicking(frame) {
   let doc;
   try { doc = frame?.contentDocument; } catch (e) { return; }
   if (!doc?.__pgPick) return;
+  if (doc.__pgPick.cancel) doc.__pgPick.cancel();
   doc.removeEventListener('mouseover', doc.__pgPick.over, true);
   if (doc.__pgPick.move) doc.removeEventListener('mousemove', doc.__pgPick.move, true);
   doc.removeEventListener('click', doc.__pgPick.click, true);
