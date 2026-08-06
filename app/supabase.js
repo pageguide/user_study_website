@@ -35,6 +35,19 @@ async function get(path) {
   return res.json();
 }
 
+async function rpc(name, data = {}) {
+  if (!supabaseConfigured()) throw new Error('Supabase is not configured — copy app/config.example.js to app/config.js.');
+  const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/rpc/${name}`, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(`Supabase RPC ${name} failed (${res.status}): ${await res.text().catch(() => '')}`);
+  }
+  return res.json().catch(() => null);
+}
+
 /**
  * Insert one row.
  *
@@ -72,6 +85,23 @@ async function insert(table, data, { wantRow = false } = {}) {
   }
 }
 
+async function upsert(table, data, conflictColumn) {
+  if (!supabaseConfigured()) return null;
+  try {
+    const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/${table}?on_conflict=${encodeURIComponent(conflictColumn)}`, {
+      method: 'POST',
+      headers: headers('resolution=merge-duplicates,return=minimal'),
+      body: JSON.stringify(data),
+    });
+    if (res.ok) return true;
+    console.error(`[study] Supabase ${res.status} on ${table} upsert:`, await res.text().catch(() => ''));
+    return null;
+  } catch (e) {
+    console.warn(`[study] Supabase upsert into ${table} failed:`, e);
+    return null;
+  }
+}
+
 // ── Stimuli ──
 // The trajectory LIST comes back without `arms`, because arms carries the base64 screenshots and a
 // 16-trajectory bank would be tens of megabytes to build a queue out of. The full record is fetched
@@ -103,8 +133,44 @@ async function insertStudySession(participantId, conditionLabel) {
   return (row && row.id) || null;
 }
 
+async function claimStudyAssignment(participantId, assignmentKey = 'default') {
+  const rows = await rpc('claim_study_assignment', {
+    p_participant_id: participantId,
+    p_assignment_key: assignmentKey,
+  });
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  if (!row) throw new Error('Assignment RPC returned no row.');
+  return {
+    sessionId: row.session_id ?? row.id ?? null,
+    assignmentIndex: Number(row.assignment_index ?? 0),
+    assignmentSlot: Number(row.assignment_slot ?? row.assignment_index ?? 0),
+    conditionOrder: row.condition_order || `rr_mixed_g${Number(row.assignment_slot ?? 0)}_ng${Number(row.assignment_slot ?? 0) + 1}`,
+  };
+}
+
+const STUDY_TASK_RESULT_COLUMNS = new Set([
+  'result_key', 'client_run_id', 'session_id', 'participant_id', 'task_id', 'task_index',
+  'question_index', 'task_type', 'condition', 'question_or_task',
+  'time_ms', 'answer_time_ms', 'answer_multiple_choice_ms', 'find_supporting_answer_ms',
+  'answer', 'answer_correct', 'evidence_responses',
+  'guide_answer_correct', 'guide_answer_problems', 'guide_answer_problem', 'guide_errors',
+  'score_answer_correct', 'score_evidence_precision', 'score_evidence_recall',
+  'score_evidence_exact', 'score_evidence_hop_exact',
+  'score_verdict_correct', 'score_problem_precision', 'score_problem_recall', 'score_problem_exact',
+  'score_type_precision', 'score_type_recall', 'score_step_precision', 'score_step_recall',
+  'score_step_exact', 'score_no_error_agreement', 'confidence', 'helpfulness',
+]);
+
+function normalizeStudyResultRecord(record) {
+  const clean = {};
+  Object.entries(record || {}).forEach(([key, value]) => {
+    if (STUDY_TASK_RESULT_COLUMNS.has(key)) clean[key] = value;
+  });
+  return clean;
+}
+
 async function insertStudyResult(record) {
-  return insert('study_task_results', record);
+  return upsert('study_task_results_v2', normalizeStudyResultRecord(record), 'result_key');
 }
 
 async function updateCannedResponseGrounding(taskId, condition, patch) {
@@ -219,6 +285,7 @@ window.StudyDB = {
   getCannedResponse,
   getStudyGroundTruth,
   updateCannedResponseGrounding,
+  claimStudyAssignment,
   insertStudySession,
   insertStudyResult,
 };

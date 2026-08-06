@@ -92,24 +92,27 @@ body {
   background: #efe9ff;
   border: 1px solid rgba(120, 87, 255, 0.28);
   border-radius: 10px;
-  padding: 12px 14px;
+  padding: 20px 14px 12px;   /* extra top room for the timer chip floating on the border */
   font-weight: 600;
   margin-bottom: 12px;
+  position: relative;
 }
 
-.q-timers { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
-.q-timer-row {
-  display: flex;
+/* One active phase timer. The label changes when the task moves from deciding to checking evidence. */
+.q-timers { position: absolute; top: -11px; right: 12px; display: flex; gap: 6px; }
+.q-timer-chip {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 5px;
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 8px 12px;
+  border: 1px solid rgba(120, 87, 255, 0.35);
+  border-radius: 999px;
+  padding: 3px 9px;
+  box-shadow: 0 2px 6px rgba(30, 20, 70, 0.16);
 }
-.q-timer-label { font-size: 12px; font-weight: 700; color: var(--muted); }
+.q-timer-label { font-size: 10px; font-weight: 700; color: var(--muted); white-space: nowrap; }
 .q-timer {
-  font-size: 22px;
+  font-size: 12px;
   font-weight: 800;
   color: var(--accent-dark);
   font-variant-numeric: tabular-nums;   /* so the seconds do not shift the label as they tick */
@@ -168,6 +171,26 @@ body {
 .q-opt-body { display: flex; flex-direction: column; gap: 2px; }
 .q-opt-name { font-weight: 700; }
 .q-opt-detail { font-size: 12px; color: var(--muted); }
+
+.q-post-body { display: flex; flex-direction: column; gap: 14px; }
+.q-post-section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+.q-post-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.q-post-options { gap: 8px; }
+.q-post-opt {
+  min-height: 42px;
+  background: #fff;
+  font-weight: 650;
+}
 
 .q-error-block {
   border: 1px solid var(--line);

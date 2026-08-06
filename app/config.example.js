@@ -15,13 +15,13 @@ window.STUDY_CONFIG = {
   SUPABASE_URL: 'YOUR_PROJECT_URL',        // e.g. https://abcdefgh.supabase.co
   SUPABASE_ANON_KEY: 'YOUR_PROJECT_ANON_KEY',
 
-  // Which half of the study this deployment runs. 'guide' is what the site currently implements.
+  // Which half of the study this deployment runs. The participant site now builds a mixed queue
+  // from both halves; this remains for older local/debug tooling.
   HALF: 'guide',
 
-  // How a participant is assigned to an arm:
-  //   'random'  — coin flip on the welcome screen (between-subjects)
-  //   'url'     — read ?arm=grounding|nongrounding, so you control assignment when recruiting
-  //   'ask'     — a picker on the welcome screen (debugging and pilots only; a real participant
-  //               must never choose their own condition)
+  // Participant assignment is round-robin through Supabase RPC claim_study_assignment:
+  // each participant gets 8 tasks, 4 grounded and 4 non-grounded. ARM_ASSIGNMENT is kept only for
+  // older debug/admin paths that still need a single fallback arm.
+  ASSIGNMENT_KEY: 'default',
   ARM_ASSIGNMENT: 'url',
 };

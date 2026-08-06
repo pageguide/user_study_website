@@ -18,6 +18,13 @@ function say(msg, tone = '') {
 
 let queue = [];
 
+const STYLE_ORDER = [
+  { id: 'find_text', label: 'Find x Text' },
+  { id: 'find_visual', label: 'Find x Visual' },
+  { id: 'guide_text', label: 'Guide x Text' },
+  { id: 'guide_visual', label: 'Guide x Visual' },
+];
+
 /**
  * Both halves, in the order a participant walks them: Find questions first, then the guide
  * trajectories. Same order the extension builds (_buildTaskQueue → trajectories appended), so a
@@ -32,17 +39,61 @@ async function buildQueue() {
     tasks.forEach(t => out.push({
       taskType: 'find', id: t.id, title: t.title, question: t.question,
       url: t.url, type: t.type, answer: t.answer, distractors: t.distractors,
+      style: studyStyle({ taskType: 'find', type: t.type, title: t.title, question: t.question }),
     }));
   } catch (e) {
     console.warn('[study] no Find tasks:', e.message);
   }
   try {
     const trajectories = await window.StudyDB.listStudyTrajectories();
-    trajectories.forEach(t => out.push({ taskType: 'guide', id: t.id, goal: t.goal, title: t.title, condition: t.condition }));
+    trajectories.forEach(t => out.push({
+      taskType: 'guide', id: t.id, goal: t.goal, title: t.title, condition: t.condition,
+      style: studyStyle({ taskType: 'guide', condition: t.condition, title: t.title, goal: t.goal }),
+    }));
   } catch (e) {
     console.warn('[study] no guide trajectories:', e.message);
   }
   return out;
+}
+
+function studyStyle(item) {
+  const text = `${item?.type || ''} ${item?.condition || ''} ${item?.title || ''} ${item?.goal || ''} ${item?.question || ''}`.toUpperCase();
+  const mode = text.includes('VISUAL') ? 'visual' : (text.includes('TEXT') ? 'text' : '');
+  if (item?.taskType === 'find') return mode === 'visual' ? 'find_visual' : (mode === 'text' ? 'find_text' : '');
+  if (item?.taskType === 'guide') return mode === 'visual' ? 'guide_visual' : (mode === 'text' ? 'guide_text' : '');
+  return '';
+}
+
+function styleBuckets(list) {
+  const buckets = Object.fromEntries(STYLE_ORDER.map(s => [s.id, []]));
+  list.forEach(item => {
+    if (buckets[item.style]) buckets[item.style].push(item);
+  });
+  return buckets;
+}
+
+function missingStyles(buckets) {
+  return STYLE_ORDER.filter(style => !buckets[style.id]?.length).map(style => style.label);
+}
+
+function withArm(item, arm, order) {
+  return Object.assign({}, item, { arm, assignedOrder: order });
+}
+
+function buildRoundRobinQueue(list, slot) {
+  const buckets = styleBuckets(list);
+  const missing = missingStyles(buckets);
+  if (missing.length) throw new Error(`Missing published study questions for: ${missing.join(', ')}.`);
+  const n = Math.max(0, Number(slot) || 0);
+  const grounded = STYLE_ORDER.map((style, i) => {
+    const bucket = buckets[style.id];
+    return withArm(bucket[n % bucket.length], 'grounding', i);
+  });
+  const nongrounded = STYLE_ORDER.map((style, i) => {
+    const bucket = buckets[style.id];
+    return withArm(bucket[(n + 1) % bucket.length], 'nongrounding', STYLE_ORDER.length + i);
+  });
+  return grounded.concat(nongrounded);
 }
 
 async function init() {
@@ -65,9 +116,14 @@ async function init() {
       + '⬆ Publish guide with the publish helper running.', 'bad');
     return;
   }
-  const find = queue.filter(e => e.taskType === 'find').length;
-  const guide = queue.length - find;
-  countEl.textContent = `${find} find · ${guide} guide · about ${Math.max(5, Math.round(queue.length * 2))} minutes`;
+  const buckets = styleBuckets(queue);
+  const missing = missingStyles(buckets);
+  if (missing.length) {
+    startBtn.disabled = true;
+    say(`Missing published study questions for: ${missing.join(', ')}.`, 'bad');
+    return;
+  }
+  countEl.textContent = '8 questions: 4 grounded · 4 non-grounded · about 16 minutes';
 
   if (window.StudyAdmin.isAdmin()) showAdminPanel();
 }
@@ -179,21 +235,41 @@ startBtn.onclick = async () => {
   startBtn.disabled = true;
   say('Starting…');
 
-  const params = new URLSearchParams(location.search);
-  const arm = window.StudySession.resolveArm(params);
-
-  // The session row is created up front so every task row can reference it. A failure here is not
-  // fatal — the tasks still record, with a null session_id — so it must not stop the study.
+  let assignment = null;
   let sessionId = null;
   try {
-    sessionId = await window.StudyDB.insertStudySession(
-      participantId, window.StudySession.conditionLabel(arm));
+    assignment = await window.StudyDB.claimStudyAssignment(
+      participantId,
+      (window.STUDY_CONFIG || {}).ASSIGNMENT_KEY || 'default'
+    );
+    sessionId = assignment.sessionId;
   } catch (e) {
-    console.warn('[study] could not open a session row:', e);
+    console.warn('[study] could not claim round-robin assignment:', e);
+    say('Could not start the study because the round-robin assignment table is not ready.', 'bad');
+    startBtn.disabled = false;
+    return;
+  }
+
+  let assignedQueue = [];
+  try {
+    assignedQueue = buildRoundRobinQueue(queue, assignment.assignmentSlot);
+  } catch (e) {
+    say(e.message, 'bad');
+    startBtn.disabled = false;
+    return;
   }
 
   Object.assign(window.StudySession.state, {
-    participantId, arm, sessionId, queue, idx: 0, results: [], adminReview: false,
+    participantId,
+    arm: 'grounding',
+    sessionId,
+    runId: window.StudySession.newRunId(),
+    assignmentIndex: assignment.assignmentIndex,
+    assignmentSlot: assignment.assignmentSlot,
+    queue: assignedQueue,
+    idx: 0,
+    results: [],
+    adminReview: false,
   });
   window.StudySession.saveLocal();
   location.href = 'study.html';

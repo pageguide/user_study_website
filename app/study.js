@@ -58,14 +58,19 @@ async function boot() {
     return;
   }
   Object.assign(S.state, saved);
+  if (!S.state.runId) {
+    S.state.runId = S.newRunId();
+    if (!window.STUDY_SOURCE && !S.state.adminReview) S.saveLocal();
+  }
   await showTask();
 }
 
 async function showTask() {
-  const { queue, idx, arm } = S.state;
+  const { queue, idx } = S.state;
   if (idx >= queue.length) return finish();
 
   const task = queue[idx];
+  const arm = S.taskArm ? S.taskArm(task) : S.conditionLabel(task?.arm || S.state.arm);
   panelMessage('<p class="q-text">Loading the next task…</p>');
   if (task.taskType === 'find') return showFindTask(task);
 
@@ -125,7 +130,8 @@ async function showTask() {
  * reviewed as though it were.
  */
 async function showFindTask(task) {
-  const { arm, idx, queue } = S.state;
+  const { idx, queue } = S.state;
+  const arm = S.taskArm ? S.taskArm(task) : S.conditionLabel(task?.arm || S.state.arm);
   let canned = null;
   let page = null;
   let groundTruth = null;
@@ -201,7 +207,7 @@ async function showFindTask(task) {
     return;
   }
 
-  renderFindQuestions(task, canned, answer, arm, cites);
+  renderFindQuestions(task, canned, answer, arm, cites, groundTruth);
 }
 
 async function loadFindGroundTruth(task) {
@@ -254,7 +260,7 @@ function answerCardHtml(answer, arm) {
  * Two stages, two timers, and no way past either without answering — see the header of
  * app/find_task.js for why both of those matter.
  */
-function renderFindQuestions(task, canned, answer, arm, cites) {
+function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   const { idx, queue } = S.state;
   const options = window.FindTask.answerOptions(task);
   const hops = window.FindTask.evidencePrompts(task);
@@ -269,17 +275,14 @@ function renderFindQuestions(task, canned, answer, arm, cites) {
     <div class="q-head"><span class="q-title">🔍 Find the answer</span></div>
     <div class="q-progress">Task ${idx + 1}/${queue.length} · 🔍 Find Information</div>
     <div class="q-body">
-      <div class="q-task-card">${esc(task.question || '')}</div>
-
-      <div class="q-timers">
-        <div class="q-timer-row" id="q-answer-timer-row">
-          <span class="q-timer-label">🔍 Finding the answer</span>
-          <span class="q-timer" id="q-answer-timer">00:00</span>
+      <div class="q-task-card">
+        <div class="q-timers">
+          <div class="q-timer-chip">
+            <span class="q-timer-label" id="q-timer-label">Answer time</span>
+            <span class="q-timer" id="q-timer">00:00</span>
+          </div>
         </div>
-        <div class="q-timer-row" id="q-support-timer-row" hidden>
-          <span class="q-timer-label">🔎 Finding the evidence</span>
-          <span class="q-timer" id="q-support-timer">00:00</span>
-        </div>
+        ${esc(task.question || '')}
       </div>
 
       ${answerCardHtml(answer, arm)}
@@ -325,7 +328,7 @@ function renderFindQuestions(task, canned, answer, arm, cites) {
   const clearError = () => { errorEl.hidden = true; };
 
   answerTimer = setInterval(() => {
-    $q('q-answer-timer').textContent = fmtClock(Date.now() - startedAt);
+    $q('q-timer').textContent = fmtClock(Date.now() - startedAt);
   }, 1000);
 
   // ── Picking evidence in the page ──
@@ -368,10 +371,10 @@ function renderFindQuestions(task, canned, answer, arm, cites) {
     $q('q-find-next').hidden = true;
     $q('q-find-submit').hidden = false;
     clearInterval(answerTimer); answerTimer = null;
-    $q('q-answer-timer-row').hidden = true;
-    $q('q-support-timer-row').hidden = false;
+    $q('q-timer-label').textContent = 'Evidence time';
+    $q('q-timer').textContent = '00:00';
     supportTimer = setInterval(() => {
-      $q('q-support-timer').textContent = fmtClock(Date.now() - supportStartedAt);
+      $q('q-timer').textContent = fmtClock(Date.now() - supportStartedAt);
     }, 1000);
     $q('q-support-stage').scrollIntoView({ block: 'nearest' });
   };
@@ -395,7 +398,55 @@ function renderFindQuestions(task, canned, answer, arm, cites) {
       answerChoiceMs: choiceElapsed,
       findSupportingMs: supportStartedAt == null ? null : Math.max(0, Date.now() - supportStartedAt),
       evidenceResponses: picked.map((v, i) => ({ hop: i + 1, prompt: hops[i].prompt, kind: hops[i].kind, ...v })),
+      findScores: scoreFindEvidence(picked, groundTruth),
     });
+  };
+}
+
+function normalizeEvidenceText(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function groundTruthText(hit) {
+  return normalizeEvidenceText(hit?.text || hit?.source_text || hit?.source_anchor?.quote || hit?.quote || hit?.label);
+}
+
+function pickedEvidenceText(pick) {
+  return normalizeEvidenceText(pick?.text || pick?.source_text || pick?.source_anchor?.quote || pick?.label);
+}
+
+function evidenceMatches(picked, truth) {
+  if (!picked || !truth) return false;
+  return picked === truth || picked.includes(truth) || truth.includes(picked);
+}
+
+function scoreFindEvidence(picked, groundTruth) {
+  const hops = groundTruth?.hops;
+  if (!hops || typeof hops !== 'object') {
+    return { precision: null, recall: null, exact: null, hopExact: null };
+  }
+  const expected = Object.keys(hops).sort((a, b) => Number(a) - Number(b));
+  if (!expected.length) return { precision: null, recall: null, exact: null, hopExact: null };
+
+  const hopExact = {};
+  let correct = 0;
+  expected.forEach(key => {
+    const idx = Number(key) - 1;
+    const pickText = pickedEvidenceText(picked[idx]);
+    const accepted = (Array.isArray(hops[key]) ? hops[key] : [])
+      .map(groundTruthText)
+      .filter(Boolean);
+    const ok = !!pickText && accepted.some(truth => evidenceMatches(pickText, truth));
+    hopExact[key] = ok;
+    if (ok) correct++;
+  });
+
+  const pickedCount = picked.filter(Boolean).length;
+  return {
+    precision: pickedCount ? correct / pickedCount : null,
+    recall: correct / expected.length,
+    exact: correct === expected.length && pickedCount === expected.length,
+    hopExact,
   };
 }
 
@@ -425,47 +476,73 @@ function startPicking(frame, kind, onPick) {
     style.textContent = `
       .pg-pickable{outline:2px dashed #7857ff!important;outline-offset:2px;cursor:pointer!important;
         background:rgba(120,87,255,.10)!important}
+      .pg-pickable-text{cursor:pointer!important}
       .pg-picked{outline:3px solid #168f5a!important;outline-offset:2px;
         background:rgba(22,143,90,.14)!important}
+      .pg-pick-preview-box{position:absolute!important;z-index:2147483646!important;
+        pointer-events:none!important;border-radius:3px!important;
+        background:rgba(120,87,255,.14)!important;outline:2px dashed #7857ff!important;
+        outline-offset:2px!important}
+      .pg-pick-sentence-hit{position:absolute!important;z-index:2147483645!important;
+        box-sizing:border-box!important;border-radius:3px!important;cursor:pointer!important;
+        background:rgba(120,87,255,.04)!important;outline:1px solid rgba(120,87,255,.18)!important;
+        outline-offset:1px!important;appearance:none!important;-webkit-appearance:none!important;
+        margin:0!important;font:inherit!important}
+      .pg-pick-sentence-hit.pg-pick-sentence-hover{background:rgba(120,87,255,.18)!important;
+        outline:2px dashed #7857ff!important;outline-offset:2px!important}
       .pg-picked-sentence{border-radius:3px!important;padding:1px 3px!important;margin:0 1px!important;
         background:rgba(22,143,90,.22)!important;outline:2px solid #168f5a!important;
         outline-offset:2px!important}`;
     doc.head?.appendChild(style);
   }
 
-  const SEL = kind === 'image' ? 'img' : 'p, li, figcaption, blockquote, h1, h2, h3, td';
+  const SEL = kind === 'image' ? 'img' : 'p, li, figcaption, blockquote, h1, h2, h3, td, th';
+  const TEXT_OVERLAY_SEL = 'p, li, figcaption, blockquote, h1, h2, h3';
   let hovered = null;
+  if (kind !== 'image') buildPickSentenceOverlays(doc, TEXT_OVERLAY_SEL);
 
   const over = (e) => {
-    const el = e.target.closest?.(SEL);
+    const el = kind === 'image' ? e.target.closest?.(SEL) : e.target.closest?.('td, th');
     if (el === hovered) return;
     hovered?.classList.remove('pg-pickable');
     hovered = el;
     hovered?.classList.add('pg-pickable');
   };
+  const move = (e) => {
+    if (kind === 'image') return;
+    const hit = e.target.closest?.('.pg-pick-sentence-hit');
+    clearPickPreview(doc);
+    clearSentenceHitHover(doc);
+    if (!hit?.__pgPickSentence) return;
+    setSentenceHitHover(doc, hit.__pgPickSentence.group);
+  };
   const click = (e) => {
-    const el = e.target.closest?.(SEL);
+    const sentenceHit = kind === 'image' ? null : e.target.closest?.('.pg-pick-sentence-hit');
+    const pickedFromHit = sentenceHit?.__pgPickSentence || null;
+    const el = kind === 'image'
+      ? e.target.closest?.(SEL)
+      : (pickedFromHit?.block || e.target.closest?.(SEL));
     if (!el) return;
     e.preventDefault();
     e.stopPropagation();
     clearPickedPassage(doc);
-    el.classList.remove('pg-pickable');
+    el.classList.remove('pg-pickable', 'pg-pickable-text');
     hovered = null;
-    const pickedPassage = kind === 'image' ? null : sentencePickFromClick(doc, el, e.clientX, e.clientY);
-    if (pickedPassage?.range) {
-      wrapPickedSentence(doc, pickedPassage.range);
-    } else {
-      el.classList.add('pg-picked');
+    const pickedPassage = kind === 'image' ? null : (pickedFromHit || tableCellPick(el) || sentencePickFromClick(doc, el, e.clientX, e.clientY));
+    if (kind !== 'image' && !pickedPassage?.range && !pickedPassage?.cell) {
+      return;
     }
+    if (pickedPassage?.range) wrapPickedSentence(doc, pickedPassage.range);
+    else el.classList.add('pg-picked');
     const text = kind === 'image'
       ? imagePickLabel(el)
-      : (pickedPassage?.text || el.textContent || '').replace(/\s+/g, ' ').trim();
+      : pickedPassage.text;
     const locator = pickLocator(el, pickedPassage);
     onPick(
       {
         text: text.slice(0, 600),
         tag: el.tagName.toLowerCase(),
-        granularity: kind === 'image' ? 'image' : (pickedPassage ? 'sentence' : 'block'),
+        granularity: kind === 'image' ? 'image' : (pickedPassage?.cell ? 'table-cell' : 'sentence'),
         locator,
       },
       pickDisplayLabel(text, locator, kind)
@@ -474,14 +551,15 @@ function startPicking(frame, kind, onPick) {
   };
 
   doc.addEventListener('mouseover', over, true);
+  doc.addEventListener('mousemove', move, true);
   doc.addEventListener('click', click, true);
-  doc.__pgPick = { over, click };
+  doc.__pgPick = { over, move, click };
 }
 
 function pickDisplayLabel(text, locator, kind) {
   const main = text ? text.slice(0, 120) + (text.length > 120 ? '...' : '') : `(${kind})`;
   if (kind === 'image') return main;
-  if (locator?.table?.rowText) return `${main} | row: ${locator.table.rowText.slice(0, 120)}${locator.table.rowText.length > 120 ? '...' : ''}`;
+  if (locator?.table?.columnText) return main;
   if (locator?.pageIndex != null) return `${main} | page index ${locator.pageIndex}`;
   return main;
 }
@@ -545,13 +623,71 @@ function imagePickLabel(img) {
   return file ? decodeURIComponent(file).replace(/[_-]+/g, ' ').trim() : 'Selected image';
 }
 
+function tableCellPick(el) {
+  const cell = el.closest?.('td, th');
+  if (!cell) return null;
+  const text = normText(cell.textContent || '');
+  return text ? { text, range: null, start: null, end: null, cell: true } : null;
+}
+
 function clearPickedPassage(doc) {
-  doc.querySelectorAll('.pg-picked').forEach(n => n.classList.remove('pg-picked'));
+  clearPickPreview(doc);
+  clearPickSentenceOverlays(doc);
+  doc.querySelectorAll('.pg-picked, .pg-pickable-text').forEach(n => n.classList.remove('pg-picked', 'pg-pickable-text'));
   doc.querySelectorAll('.pg-picked-sentence').forEach(mark => {
     const parent = mark.parentNode;
     while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
     mark.remove();
     parent.normalize?.();
+  });
+}
+
+function clearPickPreview(doc) {
+  doc.querySelectorAll('.pg-pick-preview-box').forEach(mark => mark.remove());
+}
+
+function clearPickSentenceOverlays(doc) {
+  doc.querySelectorAll('.pg-pick-sentence-hit').forEach(mark => mark.remove());
+}
+
+function clearSentenceHitHover(doc) {
+  doc.querySelectorAll('.pg-pick-sentence-hover').forEach(mark => mark.classList.remove('pg-pick-sentence-hover'));
+}
+
+function setSentenceHitHover(doc, group) {
+  if (!group) return;
+  doc.querySelectorAll(`.pg-pick-sentence-hit[data-pg-sentence-group="${group}"]`)
+    .forEach(mark => mark.classList.add('pg-pick-sentence-hover'));
+}
+
+function buildPickSentenceOverlays(doc, selector) {
+  clearPickSentenceOverlays(doc);
+  const scrollX = doc.defaultView?.scrollX || 0;
+  const scrollY = doc.defaultView?.scrollY || 0;
+  let groupIndex = 0;
+  doc.querySelectorAll(selector).forEach(block => {
+    sentencePicksInBlock(doc, block).forEach(pick => {
+      const group = `s${++groupIndex}`;
+      const rects = Array.from(pick.range.getClientRects())
+        .filter(rect => rect.width >= 2 && rect.height >= 2);
+      rects.forEach(rect => {
+        const hit = doc.createElement('button');
+        hit.type = 'button';
+        hit.className = 'pg-pick-sentence-hit';
+        hit.dataset.pgSentenceGroup = group;
+        hit.setAttribute('aria-label', pick.text);
+        hit.__pgPickSentence = { ...pick, block, group };
+        hit.setAttribute('style', [
+          `left:${Math.max(0, rect.left + scrollX - 2)}px`,
+          `top:${Math.max(0, rect.top + scrollY - 2)}px`,
+          `width:${rect.width + 4}px`,
+          `height:${rect.height + 4}px`,
+          'border:0!important',
+          'padding:0!important',
+        ].join(';'));
+        doc.body.appendChild(hit);
+      });
+    });
   });
 }
 
@@ -578,6 +714,25 @@ function caretFromPoint(doc, x, y) {
 
 function sentencePickFromBlock(doc, block) {
   return sentencePickAtOffset(doc, textNodesIn(block), 0);
+}
+
+function sentencePicksInBlock(doc, block) {
+  const nodes = textNodesIn(block);
+  const full = nodes.map(n => n.nodeValue || '').join('');
+  const picks = [];
+  let start = 0;
+  while (start < full.length) {
+    while (start < full.length && /\s/.test(full[start])) start++;
+    if (start >= full.length) break;
+    let end = start;
+    while (end < full.length && !/[.!?]/.test(full[end])) end++;
+    if (end < full.length) end++;
+    while (end > start && /\s/.test(full[end - 1])) end--;
+    const text = full.slice(start, end).replace(/\s+/g, ' ').trim();
+    if (text) picks.push({ text, range: rangeForTextOffsets(doc, nodes, start, end), start, end });
+    start = Math.max(end + 1, start + 1);
+  }
+  return picks;
 }
 
 function sentencePickAtOffset(doc, nodes, offset) {
@@ -651,13 +806,33 @@ function wrapPickedSentence(doc, range) {
   }
 }
 
+function wrapPickPreviewSentence(doc, range) {
+  const scrollX = doc.defaultView?.scrollX || 0;
+  const scrollY = doc.defaultView?.scrollY || 0;
+  Array.from(range.getClientRects()).forEach(rect => {
+    if (rect.width < 2 || rect.height < 2) return;
+    const box = doc.createElement('div');
+    box.className = 'pg-pick-preview-box';
+    box.setAttribute('style', [
+      `left:${rect.left + scrollX}px`,
+      `top:${rect.top + scrollY}px`,
+      `width:${rect.width}px`,
+      `height:${rect.height}px`,
+    ].join(';'));
+    doc.body.appendChild(box);
+  });
+}
+
 function stopPicking(frame) {
   let doc;
   try { doc = frame?.contentDocument; } catch (e) { return; }
   if (!doc?.__pgPick) return;
   doc.removeEventListener('mouseover', doc.__pgPick.over, true);
+  if (doc.__pgPick.move) doc.removeEventListener('mousemove', doc.__pgPick.move, true);
   doc.removeEventListener('click', doc.__pgPick.click, true);
-  doc.querySelectorAll('.pg-pickable').forEach(n => n.classList.remove('pg-pickable'));
+  doc.querySelectorAll('.pg-pickable, .pg-pickable-text').forEach(n => n.classList.remove('pg-pickable', 'pg-pickable-text'));
+  clearPickPreview(doc);
+  clearPickSentenceOverlays(doc);
   delete doc.__pgPick;
 }
 
@@ -1158,32 +1333,62 @@ function rerenderFindGrounding(frame, canned, arm) {
   applyFindGrounding(frame, canned, arm);
 }
 
+const POST_TASK_CONFIDENCE = [
+  ['very', 'Very confident'],
+  ['somewhat', 'Somewhat confident'],
+  ['notsure', 'Not sure'],
+  ['guessed', 'Mostly guessing'],
+];
+
+const POST_TASK_HELPFULNESS = [
+  ['very', 'Very useful'],
+  ['somewhat', 'Somewhat useful'],
+  ['notmuch', 'Slightly useful'],
+  ['notatall', 'Not useful'],
+];
+
+function postTaskQuestionsHtml(doneId) {
+  const opt = (name, value, label) =>
+    `<label class="q-opt q-post-opt"><input type="radio" name="${name}" value="${value}"><span>${label}</span></label>`;
+  return `
+    <div class="q-head"><span class="q-title">Task follow-up</span></div>
+    <div class="q-body q-post-body">
+      <section class="q-post-section">
+        <div class="q-post-section-head">
+          <span class="q-badge">1</span>
+          <p class="q-text">How confident are you in the answer you selected?</p>
+        </div>
+        <div class="q-options q-post-options" id="q-conf">
+          ${POST_TASK_CONFIDENCE.map(([v, l]) => opt('q-conf', v, l)).join('')}
+        </div>
+      </section>
+      <section class="q-post-section">
+        <div class="q-post-section-head">
+          <span class="q-badge">2</span>
+          <p class="q-text">How useful was the information shown for checking this task?</p>
+        </div>
+        <div class="q-options q-post-options" id="q-help">
+          ${POST_TASK_HELPFULNESS.map(([v, l]) => opt('q-help', v, l)).join('')}
+        </div>
+      </section>
+      <div class="q-error-msg" id="q-error-msg" hidden></div>
+      <div class="q-actions"><button class="q-btn q-btn-primary" id="${doneId}">Next task →</button></div>
+    </div>`;
+}
+
 /** Record the Find result, then move on. Mirrors the guide half's post-task questions. */
 async function submitFindResult(task, payload) {
-  questionPane.innerHTML = `
-    <div class="q-head"><span class="q-title">Quick questions</span></div>
-    <div class="q-body">
-      <p class="q-text">How confident are you in your answer?</p>
-      <div class="q-options" id="q-conf">
-        ${[['very', '😎 Very confident'], ['somewhat', '🙂 Somewhat confident'],
-           ['notsure', '😐 Not sure'], ['guessed', '🤷 Just guessing']]
-          .map(([v, l]) => `<label class="q-opt"><input type="radio" name="q-conf" value="${v}"><span>${l}</span></label>`).join('')}
-      </div>
-      <p class="q-text" style="margin-top:16px;">How helpful was what you were shown?</p>
-      <div class="q-options" id="q-help">
-        ${[['very', '⭐⭐⭐ Very helpful'], ['somewhat', '⭐⭐ Somewhat helpful'],
-           ['notmuch', '⭐ Not very helpful'], ['notatall', 'Not helpful at all']]
-          .map(([v, l]) => `<label class="q-opt"><input type="radio" name="q-help" value="${v}"><span>${l}</span></label>`).join('')}
-      </div>
-      <div class="q-error-msg" id="q-error-msg" hidden></div>
-      <div class="q-actions"><button class="q-btn q-btn-primary" id="q-find-done">Next task →</button></div>
-    </div>`;
+  questionPane.innerHTML = postTaskQuestionsHtml('q-find-done');
 
   document.getElementById('q-find-done').onclick = async () => {
+    const done = document.getElementById('q-find-done');
+    if (done.dataset.submitted === 'true') return;
     const conf = questionPane.querySelector('input[name="q-conf"]:checked');
     const help = questionPane.querySelector('input[name="q-help"]:checked');
     const err = document.getElementById('q-error-msg');
     if (!conf || !help) { err.textContent = 'Please answer both questions.'; err.hidden = false; return; }
+    done.dataset.submitted = 'true';
+    done.disabled = true;
 
     const row = S.buildFindResultRow({
       task, payload, confidence: conf.value, helpfulness: help.value,
@@ -1191,13 +1396,58 @@ async function submitFindResult(task, payload) {
     S.state.results.push(row);
     S.state.idx++;
     if (!window.STUDY_SOURCE && !S.state.adminReview) S.saveLocal();
-    try {
-      await DB.insertStudyResult(row);
-    } catch (e) {
-      console.warn('[study] result kept locally only:', e);
-    }
+    await saveStudyResult(row);
     showTask();
   };
+}
+
+const RESULT_BACKUP_KEY = 'pageguide_web_pending_results';
+
+async function saveStudyResult(row) {
+  if (window.STUDY_SOURCE || S.state.adminReview) return { ok: true, skipped: true };
+  try {
+    const saved = await DB.insertStudyResult(row);
+    if (!saved) throw new Error('Supabase insert returned no confirmation.');
+    console.info('[study] task result saved', {
+      session_id: row.session_id,
+      participant_id: row.participant_id,
+      task_index: row.task_index,
+      task_type: row.task_type,
+      answer: row.answer,
+      time_ms: row.time_ms,
+    });
+    return { ok: true };
+  } catch (e) {
+    rememberPendingResult(row, e);
+    console.error('[study] task result was not saved to Supabase; kept pending locally', {
+      error: e?.message || String(e),
+      row,
+    });
+    return { ok: false, error: e };
+  }
+}
+
+function rememberPendingResult(row, error) {
+  try {
+    const pending = JSON.parse(localStorage.getItem(RESULT_BACKUP_KEY) || '[]');
+    pending.push({
+      saved_at: new Date().toISOString(),
+      error: error?.message || String(error || ''),
+      row,
+    });
+    localStorage.setItem(RESULT_BACKUP_KEY, JSON.stringify(pending.slice(-100)));
+  } catch (e) {
+    console.warn('[study] could not keep pending result backup:', e);
+  }
+}
+
+function pendingResultCount() {
+  try {
+    const pending = JSON.parse(localStorage.getItem(RESULT_BACKUP_KEY) || '[]');
+    return Array.isArray(pending) ? pending.length : 0;
+  } catch (e) {
+    return 0;
+  }
 }
 
 /** The citation and evidence chips inside a rendered answer. Shared by review and participant. */
@@ -2336,37 +2586,17 @@ function adminTaskLabel(task, i, total) {
 }
 
 /**
- * The two post-task questions, asked exactly as the extension asks them.
+ * The two post-task questions, asked after every submitted task.
  *
  * Kept on the same screen rather than a page of their own: they are about the task just finished,
  * and a participant who has navigated away from it is answering from memory.
  */
 function askPostQuestions(task, record, timings) {
-  const opt = (name, value, label) =>
-    `<label class="q-opt"><input type="radio" name="${name}" value="${value}"><span>${label}</span></label>`;
-
-  questionPane.innerHTML = `
-    <div class="q-head"><span class="q-title">Quick questions</span></div>
-    <div class="q-body">
-      <p class="q-text">How confident are you in your answer?</p>
-      <div class="q-options" id="q-conf">
-        ${opt('q-conf', 'very', '😎 Very confident')}
-        ${opt('q-conf', 'somewhat', '🙂 Somewhat confident')}
-        ${opt('q-conf', 'notsure', '😐 Not sure')}
-        ${opt('q-conf', 'guessed', '🤷 Just guessing')}
-      </div>
-      <p class="q-text" style="margin-top:16px;">How helpful was what you were shown?</p>
-      <div class="q-options" id="q-help">
-        ${opt('q-help', 'very', '⭐⭐⭐ Very helpful')}
-        ${opt('q-help', 'somewhat', '⭐⭐ Somewhat helpful')}
-        ${opt('q-help', 'notmuch', '⭐ Not very helpful')}
-        ${opt('q-help', 'notatall', 'Not helpful at all')}
-      </div>
-      <div class="q-error-msg" id="q-error-msg" hidden></div>
-      <div class="q-actions"><button class="q-btn q-btn-primary" id="q-done">Next task →</button></div>
-    </div>`;
+  questionPane.innerHTML = postTaskQuestionsHtml('q-done');
 
   document.getElementById('q-done').onclick = async () => {
+    const done = document.getElementById('q-done');
+    if (done.dataset.submitted === 'true') return;
     const conf = questionPane.querySelector('input[name="q-conf"]:checked');
     const help = questionPane.querySelector('input[name="q-help"]:checked');
     const err = document.getElementById('q-error-msg');
@@ -2375,6 +2605,8 @@ function askPostQuestions(task, record, timings) {
       err.hidden = false;
       return;
     }
+    done.dataset.submitted = 'true';
+    done.disabled = true;
 
     const row = S.buildResultRow({
       task, record, timings, confidence: conf.value, helpfulness: help.value,
@@ -2392,11 +2624,7 @@ function askPostQuestions(task, record, timings) {
       // Written now rather than batched at the end: a participant who closes the tab three tasks in
       // should leave three rows behind, not none. A failed write keeps the local copy, which the
       // final screen can still export.
-      try {
-        await DB.insertStudyResult(row);
-      } catch (e) {
-        console.warn('[study] result kept locally only:', e);
-      }
+      await saveStudyResult(row);
     }
 
     showTask();
@@ -2404,11 +2632,13 @@ function askPostQuestions(task, record, timings) {
 }
 
 function finish() {
+  const pending = pendingResultCount();
   stimulusPane.innerHTML = '<div class="tv-done">Thank you — that was the last task.</div>';
   questionPane.innerHTML = `
     <div class="q-head"><span class="q-title">✅ All done</span></div>
     <div class="q-body">
       <p class="q-text">You have finished all ${S.state.results.length} tasks. Thank you.</p>
+      ${pending ? `<p class="q-error-msg">Some task results did not reach the database yet (${pending}). Use the download button and send the file to the researcher.</p>` : ''}
       <p class="q-sub">You can close this tab. If the researcher asked for a copy of your responses,
         use the button below.</p>
       <div class="q-actions">
@@ -2417,7 +2647,14 @@ function finish() {
     </div>`;
 
   document.getElementById('q-download').onclick = () => {
-    const blob = new Blob([JSON.stringify(S.state.results, null, 2)], { type: 'application/json' });
+    let pendingRows = [];
+    try { pendingRows = JSON.parse(localStorage.getItem(RESULT_BACKUP_KEY) || '[]'); } catch (e) { pendingRows = []; }
+    const blob = new Blob([JSON.stringify({
+      participant_id: S.state.participantId,
+      session_id: S.state.sessionId,
+      results: S.state.results,
+      pending_results: Array.isArray(pendingRows) ? pendingRows : [],
+    }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `study_${S.state.participantId || 'anon'}_${Date.now()}.json`;

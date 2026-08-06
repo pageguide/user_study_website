@@ -52,17 +52,14 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
     </div>
     <div class="q-progress">Task ${index + 1}/${total} · 📘 Follow a Guide</div>
     <div class="q-body">
-      <div class="q-task-card">${escapeHTML(goal || '')}</div>
-
-      <div class="q-timers">
-        <div class="q-timer-row" id="q-answer-timer-row">
-          <span class="q-timer-label">🔍 Finding the answer</span>
-          <span class="q-timer" id="q-answer-timer">00:00</span>
+      <div class="q-task-card">
+        <div class="q-timers">
+          <div class="q-timer-chip">
+            <span class="q-timer-label" id="q-timer-label">Answer time</span>
+            <span class="q-timer" id="q-timer">00:00</span>
+          </div>
         </div>
-        <div class="q-timer-row" id="q-support-timer-row" hidden>
-          <span class="q-timer-label">🔎 Finding the errors</span>
-          <span class="q-timer" id="q-support-timer">00:00</span>
-        </div>
+        ${escapeHTML(goal || '')}
       </div>
 
       <div class="q-card">
@@ -149,7 +146,7 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
   const clearError = () => { errorMsg.hidden = true; };
 
   answerTimer = setInterval(() => {
-    $('q-answer-timer').textContent = fmtTime(Date.now() - startedAt);
+    $('q-timer').textContent = fmtTime(Date.now() - startedAt);
   }, 1000);
 
   // Q1b appears only when the verdict is "did not complete" — it is the follow-up to that answer,
@@ -203,10 +200,10 @@ function mountInstrument({ root, steps, index, total, goal, onSubmit }) {
     // Hand over: the answer timer's span is already banked in choiceElapsed, and the total keeps
     // counting from startedAt regardless of what is on screen.
     clearInterval(answerTimer); answerTimer = null;
-    $('q-answer-timer-row').hidden = true;
-    $('q-support-timer-row').hidden = false;
+    $('q-timer-label').textContent = 'Error-check time';
+    $('q-timer').textContent = '00:00';
     errorsTimer = setInterval(() => {
-      $('q-support-timer').textContent = fmtTime(Date.now() - errorsStartedAt);
+      $('q-timer').textContent = fmtTime(Date.now() - errorsStartedAt);
     }, 1000);
     $('q-errors-stage').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };

@@ -30,8 +30,8 @@ Run the check before every deploy.
 ## Setup
 
 **1. Create the tables.** In the Supabase SQL editor, run `supabase_schema.sql` from the pageguide
-repo. It creates `study_guide_trajectories` and `study_tasks` (the stimuli, anon-readable) and
-migrates `study_task_results` with the `score_*` columns.
+repo, then run `supabase_results_v2.sql` from this repo. The first script creates the stimuli tables;
+the second creates the clean browser-result table this site writes to.
 
 > An insert naming a column the table lacks is rejected **whole**, and the failure is logged and
 > swallowed — the study keeps running while nothing reaches Supabase. Run the SQL before the next
@@ -84,24 +84,27 @@ Any static host works: GitHub Pages, Netlify, Cloudflare Pages. There is no buil
 
 ## Assigning conditions
 
-`ARM_ASSIGNMENT` in `app/config.js`:
+Participants are assigned by the Supabase RPC in `supabase_results_v2.sql`, not by URL. When a
+participant presses Start, `claim_study_assignment` atomically claims the next round-robin slot and
+creates the `study_sessions` row. Each participant sees 8 tasks:
 
-- `'url'` *(default)* — `?arm=grounding` or `?arm=nongrounding`. The link you send **is** the
-  assignment, which keeps a record of it outside the browser.
-- `'random'` — a coin flip per participant.
+- grounded: the slot's Find x Text, Find x Visual, Guide x Text, and Guide x Visual tasks
+- non-grounded: the next slot's task from each of those four styles, wrapping within each style
 
-A participant must never pick their own condition.
+Run `supabase_results_v2.sql` before deploying this version; it adds the assignment counter, session
+metadata columns, and the claim RPC. `ARM_ASSIGNMENT` remains only as a fallback for old debug paths.
 
 ## What lands in the database
 
-One `study_sessions` row per participant, one `study_task_results` row per task — the same tables
-and the same field names the extension writes, so a web run and an extension run are one dataset.
-Rows are written as each task finishes, so a participant who closes the tab three tasks in leaves
-three rows behind.
+One `study_sessions` row per participant, one `study_task_results_v2` row per task. Rows are upserted
+by a stable `result_key`, so a double-click on submission updates the same task row instead of
+creating a duplicate. Rows are written as each task finishes, so a participant who closes the tab
+three tasks in leaves three rows behind.
 
-Each row carries the raw answer (`guide_answer_correct`, `guide_answer_problems`, `guide_errors`)
-and its score against the trajectory's ground truth (`score_*`), computed client-side by the
-vendored scorer. Two groups, never averaged:
+Guide rows carry the raw answer (`guide_answer_correct`, `guide_answer_problems`, `guide_errors`)
+and their score against the trajectory's ground truth (`score_*`), computed client-side by the
+vendored scorer. Find rows carry `answer_correct` plus evidence scores against `study_ground_truth`.
+Guide scores stay in two groups, never averaged:
 
 | | |
 |---|---|
@@ -113,7 +116,6 @@ zero. An unfinished stimulus must not read as a participant who got everything w
 
 ## Known gap
 
-Behaviour counts (`scroll_user_count`, `ctrl_f_count`, `mouse_move_px`, …) come from a content
-script watching the live page. A website cannot observe the participant's other tabs, so these are
-0 for web rows rather than invented. Check before mixing the two sources in an analysis that uses
-them.
+Behaviour counts (`scroll_user_count`, `ctrl_f_count`, `mouse_move_px`, …) come from the extension's
+content script watching the live page. The browser website cannot observe a participant's other
+tabs, so those legacy fields are intentionally not part of `study_task_results_v2`.

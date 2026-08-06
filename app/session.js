@@ -9,6 +9,9 @@ const state = {
   participantId: '',
   arm: 'grounding',
   sessionId: null,
+  runId: '',
+  assignmentIndex: null,
+  assignmentSlot: null,
   queue: [],
   idx: 0,
   results: [],
@@ -35,11 +38,15 @@ function resolveArm(params) {
  * The condition, and there are exactly two of it: `grounding` | `nongrounding`.
  *
  * Matches studyConditionLabel in the extension byte for byte. Nothing about WHICH CLIENT produced
- * the row belongs in this column — that is a different fact, and it lives in task_data.source.
+ * the row belongs in this column; v2 result rows are already website-only.
  * Mixing the two is how the same two conditions ended up recorded under five different strings.
  */
 function conditionLabel(arm) {
   return arm === 'nongrounding' ? 'nongrounding' : 'grounding';
+}
+
+function taskArm(task) {
+  return conditionLabel(task?.arm || state.arm);
 }
 
 // ── Persistence across a reload ──
@@ -49,6 +56,7 @@ function saveLocal() {
   try {
     localStorage.setItem(SESSION_KEY, JSON.stringify({
       participantId: state.participantId, arm: state.arm, sessionId: state.sessionId,
+      runId: state.runId, assignmentIndex: state.assignmentIndex, assignmentSlot: state.assignmentSlot,
       idx: state.idx, results: state.results, queue: state.queue,
     }));
   } catch (e) { /* private mode, quota — not worth failing the study over */ }
@@ -68,6 +76,7 @@ function saveReview() {
   try {
     sessionStorage.setItem(REVIEW_KEY, JSON.stringify({
       participantId: state.participantId, arm: state.arm, queue: state.queue,
+      assignmentIndex: state.assignmentIndex, assignmentSlot: state.assignmentSlot,
       idx: state.idx, results: state.results, adminReview: true,
     }));
   } catch (e) { /* ignore */ }
@@ -95,13 +104,21 @@ function clearLocal() {
   try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
 }
 
+function newRunId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return `run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function resultKey(task, taskType) {
+  const run = state.sessionId || state.runId || state.participantId || 'anon';
+  return [run, taskType, task?.id || 'task', state.idx].map(v => String(v).replace(/:/g, '_')).join(':');
+}
+
 /**
  * Build one result row.
  *
- * The field names are the extension's, exactly — this row goes into the same study_task_results
- * table, and a web run has to be indistinguishable from an extension run once it is in there.
- * Scored client-side with the vendored _scoreGuideAnswer so the measure is computed by the same
- * code on both sides.
+ * Build the clean browser result row. Guide scoring still uses the vendored _scoreGuideAnswer so
+ * the measure is computed by the same code as the extension.
  */
 function buildResultRow({ task, record, timings, confidence, helpfulness }) {
   const scored = window._scoreGuideAnswer(timings.guideAnswer, record?.ground_truth) || {};
@@ -109,15 +126,16 @@ function buildResultRow({ task, record, timings, confidence, helpfulness }) {
   const questionIndex = state.results.filter(r => r.task_type === 'guide').length;
 
   return {
+    result_key: resultKey(task, 'guide'),
+    client_run_id: state.runId || null,
     session_id: state.sessionId,
     participant_id: state.participantId,
-    block_index: 0,
+    task_id: task.id,
     task_index: state.idx,
     question_index: questionIndex,
     task_type: 'guide',
-    condition: conditionLabel(state.arm),
+    condition: taskArm(task),
     time_ms: timings.answerElapsed,
-    notes_time_ms: null,
     answer_time_ms: timings.answerElapsed,
     answer_multiple_choice_ms: timings.answerChoiceMs,
     find_supporting_answer_ms: timings.findSupportingMs,
@@ -137,6 +155,11 @@ function buildResultRow({ task, record, timings, confidence, helpfulness }) {
     score_step_recall: score('step_recall'),
     score_step_exact: score('step_exact'),
     score_no_error_agreement: score('no_error_agreement'),
+    score_answer_correct: null,
+    score_evidence_precision: null,
+    score_evidence_recall: null,
+    score_evidence_exact: null,
+    score_evidence_hop_exact: null,
 
     evidence_responses: [],
     answer: null,
@@ -144,25 +167,6 @@ function buildResultRow({ task, record, timings, confidence, helpfulness }) {
     question_or_task: record?.goal || task.goal || '',
     confidence: confidence || null,
     helpfulness: helpfulness || null,
-    chat_turn_count: 0,
-    chat_transcript: [],
-    user_hidden_selectors: null,
-    guide_screenshot: null,
-
-    // Behaviour counts come from a content script watching the live page. A website cannot observe
-    // the participant's other tabs, so these stay at their defaults for web rows rather than being
-    // invented. Worth knowing before mixing the two sources in an analysis that uses them.
-    scroll_user_count: 0,
-    scroll_agent_count: 0,
-    ctrl_f_count: 0,
-    text_select_count: 0,
-    click_count: 0,
-    mouse_move_px: 0,
-    agent_think_ms: null,
-    page_visit_count: 0,
-    page_visit_urls: null,
-
-    task_data: { id: task.id, condition: task.condition || '', source: 'pageguide-web' },
   };
 }
 
@@ -179,17 +183,19 @@ function buildFindResultRow({ task, payload, confidence, helpfulness }) {
   const questionIndex = state.results.filter(r => r.task_type === 'find').length;
   const chosen = String(payload.answer || '').trim().toLowerCase();
   const correct = String(task?.answer || '').trim().toLowerCase();
+  const answerCorrect = !!correct && chosen === correct;
 
   return {
+    result_key: resultKey(task, 'find'),
+    client_run_id: state.runId || null,
     session_id: state.sessionId,
     participant_id: state.participantId,
-    block_index: 0,
+    task_id: task?.id || '',
     task_index: state.idx,
     question_index: questionIndex,
     task_type: 'find',
-    condition: conditionLabel(state.arm),
+    condition: taskArm(task),
     time_ms: payload.answerElapsed,
-    notes_time_ms: null,
     answer_time_ms: payload.answerElapsed,
     // The split that makes the two halves of a Find task measurable separately: deciding, then
     // hunting. Grounding should help the second far more than the first.
@@ -210,34 +216,23 @@ function buildFindResultRow({ task, payload, confidence, helpfulness }) {
     score_step_recall: null,
     score_step_exact: null,
     score_no_error_agreement: null,
+    score_answer_correct: answerCorrect,
+    score_evidence_precision: payload.findScores?.precision ?? null,
+    score_evidence_recall: payload.findScores?.recall ?? null,
+    score_evidence_exact: payload.findScores?.exact ?? null,
+    score_evidence_hop_exact: payload.findScores?.hopExact ?? null,
 
     evidence_responses: payload.evidenceResponses || [],
     answer: payload.answer,
-    answer_correct: !!correct && chosen === correct,
+    answer_correct: answerCorrect,
     question_or_task: task?.question || '',
     confidence: confidence || null,
     helpfulness: helpfulness || null,
-    chat_turn_count: 0,
-    chat_transcript: [],
-    user_hidden_selectors: null,
-    guide_screenshot: null,
-
-    scroll_user_count: 0,
-    scroll_agent_count: 0,
-    ctrl_f_count: 0,
-    text_select_count: 0,
-    click_count: 0,
-    mouse_move_px: 0,
-    agent_think_ms: null,
-    page_visit_count: 0,
-    page_visit_urls: null,
-
-    task_data: { id: task?.id, type: task?.type || '', url: task?.url || '', source: 'pageguide-web' },
   };
 }
 
 window.StudySession = {
   buildFindResultRow,
-  state, resolveArm, conditionLabel, saveLocal, loadLocal, clearLocal, buildResultRow,
-  saveReview, loadReview, clearReview,
+  state, resolveArm, conditionLabel, taskArm, saveLocal, loadLocal, clearLocal, buildResultRow,
+  saveReview, loadReview, clearReview, newRunId,
 };
