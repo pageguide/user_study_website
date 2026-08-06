@@ -96,6 +96,19 @@ function buildRoundRobinQueue(list, slot) {
   return grounded.concat(nongrounded);
 }
 
+window.__studyDebugBuckets = async function __studyDebugBuckets() {
+  const list = await buildQueue();
+  const buckets = styleBuckets(list);
+  return {
+    total: list.length,
+    styles: Object.fromEntries(Object.entries(buckets).map(([key, rows]) => [
+      key,
+      rows.map(row => ({ id: row.id, taskType: row.taskType, type: row.type, condition: row.condition, style: row.style })),
+    ])),
+    missing: missingStyles(buckets),
+  };
+};
+
 async function init() {
   if (window.__configMissing || !window.StudyDB.supabaseConfigured()) {
     startBtn.disabled = true;
