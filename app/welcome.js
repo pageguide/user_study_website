@@ -136,6 +136,7 @@ async function init() {
     say(`Missing published study questions for: ${missing.join(', ')}.`, 'bad');
     return;
   }
+  startBtn.disabled = false;
   countEl.textContent = '8 questions: 4 grounded · 4 non-grounded · about 16 minutes';
 
   if (window.StudyAdmin.isAdmin()) showAdminPanel();

@@ -126,6 +126,12 @@ create index if not exists idx_str_v2_task on public.study_task_results_v2 (task
 
 alter table public.study_task_results_v2 enable row level security;
 
+grant select, insert, update on public.study_task_results_v2 to anon;
+
+drop policy if exists "anon can read task results v2" on public.study_task_results_v2;
+create policy "anon can read task results v2"
+  on public.study_task_results_v2 for select to anon using (true);
+
 drop policy if exists "anon can insert task results v2" on public.study_task_results_v2;
 create policy "anon can insert task results v2"
   on public.study_task_results_v2 for insert to anon with check (true);

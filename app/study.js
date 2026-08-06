@@ -1443,11 +1443,25 @@ function rememberPendingResult(row, error) {
 }
 
 function pendingResultCount() {
+  return pendingResultsForCurrentRun().length;
+}
+
+function pendingResultsForCurrentRun() {
   try {
     const pending = JSON.parse(localStorage.getItem(RESULT_BACKUP_KEY) || '[]');
-    return Array.isArray(pending) ? pending.length : 0;
+    if (!Array.isArray(pending)) return [];
+    const currentKeys = new Set((S.state.results || []).map(row => String(row?.result_key || '')).filter(Boolean));
+    const runId = String(S.state.runId || '');
+    const sessionId = S.state.sessionId == null ? '' : String(S.state.sessionId);
+    return pending.filter(item => {
+      const row = item?.row || {};
+      if (row.result_key && currentKeys.has(String(row.result_key))) return true;
+      if (runId && String(row.client_run_id || '') === runId) return true;
+      if (sessionId && String(row.session_id || '') === sessionId) return true;
+      return false;
+    });
   } catch (e) {
-    return 0;
+    return [];
   }
 }
 
@@ -2648,8 +2662,7 @@ function finish() {
     </div>`;
 
   document.getElementById('q-download').onclick = () => {
-    let pendingRows = [];
-    try { pendingRows = JSON.parse(localStorage.getItem(RESULT_BACKUP_KEY) || '[]'); } catch (e) { pendingRows = []; }
+    const pendingRows = pendingResultsForCurrentRun();
     const blob = new Blob([JSON.stringify({
       participant_id: S.state.participantId,
       session_id: S.state.sessionId,
