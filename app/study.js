@@ -310,7 +310,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
               : 'Click the sentence or paragraph in the page on the left.'}</p>
             <div class="q-picked" id="q-picked-${i}">Nothing selected yet.</div>
             <button class="q-btn" data-pick-hop="${i}">${hop.kind === 'image'
-              ? '🖼 Pick an image' : '✏️ Pick a passage'}</button>
+              ? '🖼 Pick evidence' : '✏️ Pick evidence'}</button>
           </div>`).join('')}
       </div>
 
@@ -348,14 +348,20 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   };
 
   questionPane.querySelectorAll('[data-pick-hop]').forEach(btn => {
+    btn.dataset.idleText = btn.textContent;
     btn.onclick = () => {
       pickingHop = Number(btn.dataset.pickHop);
       const kind = hops[pickingHop].kind;
-      questionPane.querySelectorAll('[data-pick-hop]').forEach(b => b.classList.remove('is-picking'));
+      questionPane.querySelectorAll('[data-pick-hop]').forEach(b => {
+        b.classList.remove('is-picking');
+        if (b.dataset.idleText) b.textContent = b.dataset.idleText;
+      });
       btn.classList.add('is-picking');
+      btn.textContent = kind === 'image' ? 'Click image evidence' : 'Click sentence evidence';
       startPicking(frame(), kind, (value, label) => {
         setPicked(pickingHop, value, label);
         btn.classList.remove('is-picking');
+        btn.textContent = btn.dataset.idleText || 'Pick evidence';
         pickingHop = null;
       });
     };
@@ -500,7 +506,7 @@ function startPicking(frame, kind, onPick) {
   const SEL = kind === 'image' ? 'img' : 'p, li, figcaption, blockquote, h1, h2, h3, td, th';
   const TEXT_OVERLAY_SEL = 'p, li, figcaption, blockquote, h1, h2, h3';
   let hovered = null;
-  if (kind !== 'image') buildPickSentenceOverlays(doc, TEXT_OVERLAY_SEL);
+  let overlayBlock = null;
 
   const over = (e) => {
     const el = kind === 'image' ? e.target.closest?.(SEL) : e.target.closest?.('td, th');
@@ -511,6 +517,14 @@ function startPicking(frame, kind, onPick) {
   };
   const move = (e) => {
     if (kind === 'image') return;
+    const block = e.target.closest?.(TEXT_OVERLAY_SEL);
+    if (block && block !== overlayBlock) {
+      overlayBlock = block;
+      buildPickSentenceOverlays(doc, block);
+    } else if (!block && !e.target.closest?.('.pg-pick-sentence-hit')) {
+      overlayBlock = null;
+      clearPickSentenceOverlays(doc);
+    }
     const hit = e.target.closest?.('.pg-pick-sentence-hit');
     clearPickPreview(doc);
     clearSentenceHitHover(doc);
@@ -661,12 +675,15 @@ function setSentenceHitHover(doc, group) {
     .forEach(mark => mark.classList.add('pg-pick-sentence-hover'));
 }
 
-function buildPickSentenceOverlays(doc, selector) {
+function buildPickSentenceOverlays(doc, target) {
   clearPickSentenceOverlays(doc);
   const scrollX = doc.defaultView?.scrollX || 0;
   const scrollY = doc.defaultView?.scrollY || 0;
   let groupIndex = 0;
-  doc.querySelectorAll(selector).forEach(block => {
+  const blocks = typeof target === 'string'
+    ? Array.from(doc.querySelectorAll(target))
+    : (target ? [target] : []);
+  blocks.forEach(block => {
     sentencePicksInBlock(doc, block).forEach(pick => {
       const group = `s${++groupIndex}`;
       const rects = Array.from(pick.range.getClientRects())
