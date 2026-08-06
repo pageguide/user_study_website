@@ -77,6 +77,7 @@ create table if not exists public.study_task_results_v2 (
   participant_id text not null,
   task_id text not null,
   task_type text not null,
+  task_style text,
   condition text not null,
   task_index smallint not null,
   question_index smallint not null,
@@ -131,6 +132,9 @@ alter table public.study_task_results_v2
 
 alter table public.study_task_results_v2
   add column if not exists interaction_summary jsonb;
+
+alter table public.study_task_results_v2
+  add column if not exists task_style text;
 
 create index if not exists idx_str_v2_session_id on public.study_task_results_v2 (session_id);
 create index if not exists idx_str_v2_participant on public.study_task_results_v2 (participant_id);

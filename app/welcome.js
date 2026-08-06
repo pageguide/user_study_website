@@ -236,20 +236,38 @@ function showAdminReviewControls() {
   };
 }
 
-function boolRate(rows, key) {
-  const vals = rows.map(r => r?.[key]).filter(v => v === true || v === false);
-  if (!vals.length) return null;
-  return vals.filter(Boolean).length / vals.length;
+let adminVizRows = [];
+
+function num(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
-function avg(rows, key) {
-  const vals = rows.map(r => Number(r?.[key])).filter(Number.isFinite);
+function avgValues(values) {
+  const vals = values.map(num).filter(Number.isFinite);
   if (!vals.length) return null;
   return vals.reduce((a, b) => a + b, 0) / vals.length;
 }
 
+function avg(rows, key) {
+  return avgValues(rows.map(r => r?.[key]));
+}
+
+function boolRate(rows, keyOrFn) {
+  const vals = rows.map(r => typeof keyOrFn === 'function' ? keyOrFn(r) : r?.[keyOrFn])
+    .filter(v => v === true || v === false);
+  if (!vals.length) return null;
+  return vals.filter(Boolean).length / vals.length;
+}
+
 function pct(value) {
   return value == null ? 'No data' : `${Math.round(value * 100)}%`;
+}
+
+function signedPct(delta) {
+  if (delta == null) return 'No data';
+  const n = Math.round(delta * 100);
+  return `${n > 0 ? '+' : ''}${n}%`;
 }
 
 function oneDecimal(value) {
@@ -260,130 +278,370 @@ function seconds(value) {
   return value == null ? 'No data' : `${Math.round(value / 1000)}s`;
 }
 
-function metricBar(label, value, detail = '') {
-  const width = value == null ? 0 : Math.max(0, Math.min(100, Math.round(value * 100)));
-  return `
-    <div class="viz-bar-row">
-      <div class="viz-bar-label">${adminEsc(label)}</div>
-      <div class="viz-bar-track"><span style="width:${width}%"></span></div>
-      <div class="viz-bar-value">${value == null ? 'No data' : `${width}%`}${detail ? ` <span>${adminEsc(detail)}</span>` : ''}</div>
-    </div>`;
+function taskStyle(row) {
+  const explicit = String(row?.task_style || '').toLowerCase();
+  if (explicit.includes('visual')) return 'visual';
+  if (explicit.includes('text')) return 'text';
+  const id = String(row?.task_id || '').toLowerCase();
+  if (id.includes('text')) return 'text';
+  const evidence = Array.isArray(row?.evidence_responses) ? row.evidence_responses : [];
+  if (evidence.some(e => String(e?.kind || '').toLowerCase() === 'image')) return 'visual';
+  if (row?.task_type === 'find' && evidence.length) return 'text';
+  return 'unknown';
 }
 
-function metricNumberBar(label, value, max) {
-  const width = value == null || !max ? 0 : Math.max(0, Math.min(100, Math.round((value / max) * 100)));
-  return `
-    <div class="viz-bar-row">
-      <div class="viz-bar-label">${adminEsc(label)}</div>
-      <div class="viz-bar-track viz-bar-track-muted"><span style="width:${width}%"></span></div>
-      <div class="viz-bar-value">${oneDecimal(value)}</div>
-    </div>`;
+function answerCorrect(row) {
+  if (row?.task_type === 'find') return row.score_answer_correct;
+  if (row?.task_type === 'guide') return row.score_verdict_correct;
+  return null;
 }
 
-function groupedRows(rows, taskType, condition) {
-  return rows.filter(r => r.task_type === taskType && r.condition === condition);
+function evidenceQuality(row) {
+  if (row?.task_type === 'find') {
+    return avgValues([row.score_evidence_precision, row.score_evidence_recall]);
+  }
+  if (row?.task_type === 'guide') {
+    return avgValues([row.score_type_recall, row.score_step_recall]);
+  }
+  return null;
 }
 
 function interactionAvg(rows, key) {
-  const vals = rows
-    .map(r => Number(r?.interaction_summary?.[key]))
-    .filter(Number.isFinite);
-  if (!vals.length) return null;
-  return vals.reduce((a, b) => a + b, 0) / vals.length;
+  return avgValues(rows.map(r => r?.interaction_summary?.[key]));
 }
 
-function visualizationHtml(rows) {
+function rowsFor(rows, filters) {
+  const q = String(filters.search || '').trim().toLowerCase();
+  return rows.filter(row => {
+    if (filters.taskType !== 'all' && row.task_type !== filters.taskType) return false;
+    if (filters.condition !== 'all' && row.condition !== filters.condition) return false;
+    if (filters.style !== 'all' && taskStyle(row) !== filters.style) return false;
+    if (filters.participant !== 'all' && String(row.participant_id) !== filters.participant) return false;
+    if (!q) return true;
+    return [row.participant_id, row.task_id, row.task_type, row.condition, row.question_or_task]
+      .some(v => String(v || '').toLowerCase().includes(q));
+  });
+}
+
+function currentVizFilters() {
+  return {
+    taskType: document.getElementById('viz-filter-task')?.value || 'all',
+    condition: document.getElementById('viz-filter-condition')?.value || 'all',
+    style: document.getElementById('viz-filter-style')?.value || 'all',
+    participant: document.getElementById('viz-filter-participant')?.value || 'all',
+    search: document.getElementById('viz-filter-search')?.value || '',
+  };
+}
+
+function compareMetric(rows, taskType, metricFn) {
+  const relevant = rows.filter(r => r.task_type === taskType);
+  const grounded = relevant.filter(r => r.condition === 'grounding');
+  const nongrounded = relevant.filter(r => r.condition === 'nongrounding');
+  return {
+    grounded: avgValues(grounded.map(metricFn)),
+    nongrounded: avgValues(nongrounded.map(metricFn)),
+    groundedN: grounded.length,
+    nongroundedN: nongrounded.length,
+  };
+}
+
+function insightCard(title, value, detail, tone = '') {
+  return `<div class="viz-insight${tone ? ` viz-insight-${tone}` : ''}">
+    <span>${adminEsc(title)}</span>
+    <strong>${adminEsc(value)}</strong>
+    <small>${adminEsc(detail)}</small>
+  </div>`;
+}
+
+function speedInsight(rows, taskType, key) {
+  const c = compareMetric(rows, taskType, r => r[key]);
+  if (c.grounded == null || c.nongrounded == null) {
+    return insightCard(`${taskType} speed`, 'No comparison yet', 'Need rows in both conditions.');
+  }
+  const delta = c.nongrounded - c.grounded;
+  const faster = delta > 0;
+  return insightCard(
+    `${taskType} speed`,
+    faster ? `${seconds(delta)} faster grounded` : `${seconds(Math.abs(delta))} slower grounded`,
+    `Grounded ${seconds(c.grounded)} vs non-grounded ${seconds(c.nongrounded)}.`,
+    faster ? 'good' : 'warn'
+  );
+}
+
+function accuracyInsight(rows) {
+  const c = compareMetric(rows, 'find', answerCorrect);
+  const g = compareMetric(rows, 'guide', answerCorrect);
+  const findDelta = c.grounded == null || c.nongrounded == null ? null : c.grounded - c.nongrounded;
+  const guideDelta = g.grounded == null || g.nongrounded == null ? null : g.grounded - g.nongrounded;
+  return insightCard(
+    'Accuracy cost',
+    `Find ${signedPct(findDelta)} · Guide ${signedPct(guideDelta)}`,
+    'Positive means grounded was more accurate; near zero supports “faster without costing accuracy”.'
+  );
+}
+
+function evidenceInsight(rows) {
+  const find = compareMetric(rows, 'find', evidenceQuality);
+  const guide = compareMetric(rows, 'guide', evidenceQuality);
+  return insightCard(
+    'Evidence localization',
+    `Find ${pct(find.grounded)} · Guide ${pct(guide.grounded)}`,
+    'Find uses paragraph evidence quality. Guide uses error type and step recall.'
+  );
+}
+
+function svgBarChart(title, items, opts = {}) {
+  const width = 520;
+  const height = 260;
+  const top = 34;
+  const left = 42;
+  const bottom = 50;
+  const max = opts.max ?? Math.max(1, ...items.map(i => num(i.value) || 0));
+  const innerW = width - left - 16;
+  const innerH = height - top - bottom;
+  const gap = 12;
+  const barW = Math.max(14, (innerW - gap * Math.max(0, items.length - 1)) / Math.max(1, items.length));
+  return `<svg class="viz-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${adminEsc(title)}">
+    <text x="${left}" y="20" class="viz-svg-title">${adminEsc(title)}</text>
+    <line x1="${left}" y1="${top + innerH}" x2="${width - 12}" y2="${top + innerH}" class="viz-axis"></line>
+    ${items.map((item, i) => {
+      const value = num(item.value);
+      const barH = value == null ? 0 : Math.max(0, Math.min(innerH, (value / max) * innerH));
+      const x = left + i * (barW + gap);
+      const y = top + innerH - barH;
+      const label = item.format ? item.format(value) : oneDecimal(value);
+      return `<g>
+        <title>${adminEsc(item.label)}: ${adminEsc(label)}</title>
+        <rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="5" fill="${item.color || '#7857ff'}"></rect>
+        <text x="${x + barW / 2}" y="${Math.max(34, y - 6)}" text-anchor="middle" class="viz-svg-value">${adminEsc(label)}</text>
+        <text x="${x + barW / 2}" y="${height - 24}" text-anchor="middle" class="viz-svg-label">${adminEsc(item.label)}</text>
+      </g>`;
+    }).join('')}
+  </svg>`;
+}
+
+function svgLineChart(title, rows) {
+  const width = 720;
+  const height = 260;
+  const left = 44;
+  const top = 34;
+  const innerW = width - left - 24;
+  const innerH = height - top - 46;
+  const indexes = Array.from(new Set(rows.map(r => Number(r.task_index)).filter(Number.isFinite))).sort((a, b) => a - b);
+  const series = ['grounding', 'nongrounding'].map(condition => ({
+    condition,
+    color: condition === 'grounding' ? '#7857ff' : '#0f6b43',
+    points: indexes.map(i => ({
+      i,
+      value: avgValues(rows.filter(r => r.condition === condition && Number(r.task_index) === i).map(r => r.time_ms)),
+    })).filter(p => p.value != null),
+  }));
+  const max = Math.max(1, ...series.flatMap(s => s.points.map(p => p.value)));
+  const minIndex = indexes.length ? indexes[0] : 0;
+  const maxIndex = indexes.length > 1 ? indexes[indexes.length - 1] : minIndex + 1;
+  const xOf = (i) => left + ((i - minIndex) / Math.max(1, maxIndex - minIndex)) * innerW;
+  const yOf = (v) => top + innerH - (v / max) * innerH;
+  return `<svg class="viz-svg viz-line-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${adminEsc(title)}">
+    <text x="${left}" y="20" class="viz-svg-title">${adminEsc(title)}</text>
+    <line x1="${left}" y1="${top + innerH}" x2="${width - 16}" y2="${top + innerH}" class="viz-axis"></line>
+    <line x1="${left}" y1="${top}" x2="${left}" y2="${top + innerH}" class="viz-axis"></line>
+    ${series.map(s => s.points.length ? `<polyline points="${s.points.map(p => `${xOf(p.i)},${yOf(p.value)}`).join(' ')}"
+      fill="none" stroke="${s.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      ${s.points.map(p => `<circle cx="${xOf(p.i)}" cy="${yOf(p.value)}" r="4" fill="${s.color}">
+        <title>${s.condition}, task ${p.i + 1}: ${seconds(p.value)}</title>
+      </circle>`).join('')}` : '').join('')}
+    <text x="${width - 170}" y="20" class="viz-svg-label" fill="#7857ff">Grounded</text>
+    <text x="${width - 88}" y="20" class="viz-svg-label" fill="#0f6b43">Non-grounded</text>
+    <text x="${left}" y="${height - 12}" class="viz-svg-label">Task order</text>
+  </svg>`;
+}
+
+function piePath(cx, cy, r, start, end) {
+  const sx = cx + r * Math.cos(start);
+  const sy = cy + r * Math.sin(start);
+  const ex = cx + r * Math.cos(end);
+  const ey = cy + r * Math.sin(end);
+  const large = end - start > Math.PI ? 1 : 0;
+  return `M ${cx} ${cy} L ${sx} ${sy} A ${r} ${r} 0 ${large} 1 ${ex} ${ey} Z`;
+}
+
+function svgPieChart(title, slices) {
+  const total = slices.reduce((sum, s) => sum + Math.max(0, Number(s.value) || 0), 0);
+  let start = -Math.PI / 2;
+  return `<svg class="viz-svg viz-pie-svg" viewBox="0 0 360 220" role="img" aria-label="${adminEsc(title)}">
+    <text x="18" y="22" class="viz-svg-title">${adminEsc(title)}</text>
+    ${total ? slices.map((s, i) => {
+      const portion = Math.max(0, Number(s.value) || 0) / total;
+      const end = start + portion * Math.PI * 2;
+      const path = piePath(112, 116, 70, start, end);
+      start = end;
+      return `<path d="${path}" fill="${s.color}">
+        <title>${adminEsc(s.label)}: ${s.value} rows (${Math.round(portion * 100)}%)</title>
+      </path>
+      <rect x="212" y="${62 + i * 28}" width="10" height="10" rx="2" fill="${s.color}"></rect>
+      <text x="230" y="${72 + i * 28}" class="viz-svg-label">${adminEsc(s.label)} (${s.value})</text>`;
+    }).join('') : '<text x="88" y="120" class="viz-svg-label">No data</text>'}
+  </svg>`;
+}
+
+function metricRows(rows, filters) {
   const find = rows.filter(r => r.task_type === 'find');
   const guide = rows.filter(r => r.task_type === 'guide');
   const sessions = new Set(rows.map(r => r.session_id || r.client_run_id || r.participant_id).filter(Boolean)).size;
-  const completedSessions = new Set(rows
-    .filter(r => r.session_id != null)
-    .map(r => r.session_id)
-    .filter(id => rows.filter(r => r.session_id === id).length >= 8)).size;
-  const allTime = avg(rows, 'time_ms');
-  const interactionKeys = ['scroll_count', 'ctrl_f_count', 'website_click_count', 'panel_click_count'];
-  const interactionMax = Math.max(1, ...interactionKeys.flatMap(key => [
-    interactionAvg(find, key) || 0,
-    interactionAvg(guide, key) || 0,
-  ]));
-
-  const conditionBars = (taskType, key, title) => `
-    <div class="viz-card">
-      <h4>${adminEsc(title)}</h4>
-      ${metricBar('Grounded', boolRate(groupedRows(rows, taskType, 'grounding'), key))}
-      ${metricBar('Non-grounded', boolRate(groupedRows(rows, taskType, 'nongrounding'), key))}
-    </div>`;
-
+  const telemetryRows = rows.filter(r => r.interaction_summary);
   return `
-    <div class="viz-dashboard">
-      <div class="viz-kpis">
-        <div class="viz-kpi"><span>Sessions</span><strong>${sessions}</strong><small>${completedSessions} completed 8 tasks</small></div>
-        <div class="viz-kpi"><span>Rows</span><strong>${rows.length}</strong><small>${find.length} Find · ${guide.length} Guide</small></div>
-        <div class="viz-kpi"><span>Find accuracy</span><strong>${pct(boolRate(find, 'score_answer_correct'))}</strong><small>answer correctness</small></div>
-        <div class="viz-kpi"><span>Guide accuracy</span><strong>${pct(boolRate(guide, 'score_verdict_correct'))}</strong><small>verdict correctness</small></div>
-        <div class="viz-kpi"><span>Avg time</span><strong>${seconds(allTime)}</strong><small>per task row</small></div>
-      </div>
-
-      <div class="viz-grid">
-        ${conditionBars('find', 'score_answer_correct', 'Find answer correctness')}
-        ${conditionBars('guide', 'score_verdict_correct', 'Guide verdict correctness')}
-        <div class="viz-card">
-          <h4>Find supporting evidence</h4>
-          ${metricBar('Precision', avg(find, 'score_evidence_precision'))}
-          ${metricBar('Recall', avg(find, 'score_evidence_recall'))}
-          ${metricBar('Exact match', boolRate(find, 'score_evidence_exact'))}
-        </div>
-        <div class="viz-card">
-          <h4>Guide localization quality</h4>
-          ${metricBar('Type precision', avg(guide, 'score_type_precision'))}
-          ${metricBar('Type recall', avg(guide, 'score_type_recall'))}
-          ${metricBar('Step precision', avg(guide, 'score_step_precision'))}
-          ${metricBar('Step recall', avg(guide, 'score_step_recall'))}
-        </div>
-        <div class="viz-card viz-card-wide">
-          <h4>Average interactions per task</h4>
-          ${metricNumberBar('Find scroll sessions', interactionAvg(find, 'scroll_count'), interactionMax)}
-          ${metricNumberBar('Guide scroll sessions', interactionAvg(guide, 'scroll_count'), interactionMax)}
-          ${metricNumberBar('Find Ctrl-F', interactionAvg(find, 'ctrl_f_count'), interactionMax)}
-          ${metricNumberBar('Guide Ctrl-F', interactionAvg(guide, 'ctrl_f_count'), interactionMax)}
-          ${metricNumberBar('Find website clicks', interactionAvg(find, 'website_click_count'), interactionMax)}
-          ${metricNumberBar('Guide website clicks', interactionAvg(guide, 'website_click_count'), interactionMax)}
-          ${metricNumberBar('Find panel clicks', interactionAvg(find, 'panel_click_count'), interactionMax)}
-          ${metricNumberBar('Guide panel clicks', interactionAvg(guide, 'panel_click_count'), interactionMax)}
-          <p class="viz-note">Interaction telemetry appears only for rows collected after this dashboard update.</p>
-        </div>
-      </div>
-
-      <div class="viz-card viz-table-card">
-        <h4>Recent result rows</h4>
-        <div class="viz-table-wrap">
-          <table class="viz-table">
-            <thead><tr><th>Participant</th><th>Task</th><th>Condition</th><th>Answer</th><th>Evidence</th><th>Interactions</th><th>Time</th></tr></thead>
-            <tbody>
-              ${rows.slice(0, 30).map(row => {
-                const isFind = row.task_type === 'find';
-                const answer = isFind ? pct(row.score_answer_correct == null ? null : Number(row.score_answer_correct)) : pct(row.score_verdict_correct == null ? null : Number(row.score_verdict_correct));
-                const evidence = isFind
-                  ? pct(row.score_evidence_precision)
-                  : pct(row.score_step_recall ?? row.score_type_recall);
-                const inter = row.interaction_summary
-                  ? `${Number(row.interaction_summary.scroll_count || 0)} scroll · ${Number(row.interaction_summary.ctrl_f_count || 0)} find · ${Number(row.interaction_summary.website_click_count || 0)} clicks`
-                  : 'No data';
-                return `<tr>
-                  <td>${adminEsc(row.participant_id)}</td>
-                  <td>${adminEsc(row.task_type)} · ${adminEsc(row.task_id)}</td>
-                  <td>${adminEsc(row.condition)}</td>
-                  <td>${answer}</td>
-                  <td>${evidence}</td>
-                  <td>${adminEsc(inter)}</td>
-                  <td>${seconds(row.time_ms)}</td>
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
+    <div class="viz-kpis">
+      <div class="viz-kpi"><span>Visible rows</span><strong>${rows.length}</strong><small>${adminEsc(filters.taskType)} · ${adminEsc(filters.condition)} · ${adminEsc(filters.style)}</small></div>
+      <div class="viz-kpi"><span>Sessions</span><strong>${sessions}</strong><small>unique session/run identifiers</small></div>
+      <div class="viz-kpi"><span>Find answer accuracy</span><strong>${pct(boolRate(find, answerCorrect))}</strong><small>${find.length} Find rows</small></div>
+      <div class="viz-kpi"><span>Guide verdict accuracy</span><strong>${pct(boolRate(guide, answerCorrect))}</strong><small>${guide.length} Guide rows</small></div>
+      <div class="viz-kpi"><span>Telemetry coverage</span><strong>${pct(rows.length ? telemetryRows.length / rows.length : null)}</strong><small>scroll, Ctrl-F, clicks</small></div>
     </div>`;
+}
+
+function controlsHtml(rows, filters) {
+  const participants = Array.from(new Set(rows.map(r => String(r.participant_id || '')).filter(Boolean))).sort();
+  const opt = (value, label, selected) => `<option value="${adminEsc(value)}"${selected === value ? ' selected' : ''}>${adminEsc(label)}</option>`;
+  return `<div class="viz-controls">
+    <label>Task ${`<select id="viz-filter-task">
+      ${opt('all', 'All', filters.taskType)}${opt('find', 'Find', filters.taskType)}${opt('guide', 'Guide', filters.taskType)}
+    </select>`}</label>
+    <label>Condition ${`<select id="viz-filter-condition">
+      ${opt('all', 'All', filters.condition)}${opt('grounding', 'Grounded', filters.condition)}${opt('nongrounding', 'Non-grounded', filters.condition)}
+    </select>`}</label>
+    <label>Style ${`<select id="viz-filter-style">
+      ${opt('all', 'All', filters.style)}${opt('text', 'Text', filters.style)}${opt('visual', 'Visual', filters.style)}${opt('unknown', 'Unknown', filters.style)}
+    </select>`}</label>
+    <label>Participant <select id="viz-filter-participant">
+      ${opt('all', 'All', filters.participant)}
+      ${participants.map(p => opt(p, p, filters.participant)).join('')}
+    </select></label>
+    <label class="viz-search">Search <input id="viz-filter-search" value="${adminEsc(filters.search)}" placeholder="task, participant, note"></label>
+  </div>`;
+}
+
+function tableHtml(rows) {
+  return `<div class="viz-card viz-table-card">
+    <div class="viz-card-head">
+      <h4>Result rows</h4>
+      <span>${rows.length > 40 ? 'showing first 40' : `${rows.length} shown`}</span>
+    </div>
+    <div class="viz-table-wrap">
+      <table class="viz-table">
+        <thead><tr><th>Participant</th><th>Task</th><th>Condition</th><th>Style</th><th>Answer</th><th>Evidence / localization</th><th>Behavior</th><th>Time split</th></tr></thead>
+        <tbody>
+          ${rows.slice(0, 40).map(row => {
+            const answer = answerCorrect(row);
+            const evidence = evidenceQuality(row);
+            const inter = row.interaction_summary
+              ? `${Number(row.interaction_summary.scroll_count || 0)} scroll · ${Number(row.interaction_summary.ctrl_f_count || 0)} Ctrl-F · ${Number(row.interaction_summary.website_click_count || 0)} page clicks`
+              : 'No telemetry';
+            return `<tr>
+              <td>${adminEsc(row.participant_id)}</td>
+              <td><strong>${adminEsc(row.task_type)}</strong><br>${adminEsc(row.task_id)}</td>
+              <td>${adminEsc(row.condition)}</td>
+              <td>${adminEsc(taskStyle(row))}</td>
+              <td>${answer == null ? 'No score' : answer ? 'Correct' : 'Wrong'}</td>
+              <td>${pct(evidence)}</td>
+              <td>${adminEsc(inter)}</td>
+              <td>${seconds(row.answer_multiple_choice_ms)} judge<br>${seconds(row.find_supporting_answer_ms)} evidence</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all', style: 'all', participant: 'all', search: '' }) {
+  const rows = rowsFor(allRows, filters);
+  const find = rows.filter(r => r.task_type === 'find');
+  const guide = rows.filter(r => r.task_type === 'guide');
+  const speedBars = [
+    { label: 'Find G', value: avg(find.filter(r => r.condition === 'grounding'), 'find_supporting_answer_ms'), color: '#7857ff', format: seconds },
+    { label: 'Find NG', value: avg(find.filter(r => r.condition === 'nongrounding'), 'find_supporting_answer_ms'), color: '#0f6b43', format: seconds },
+    { label: 'Guide G', value: avg(guide.filter(r => r.condition === 'grounding'), 'find_supporting_answer_ms'), color: '#9b84ff', format: seconds },
+    { label: 'Guide NG', value: avg(guide.filter(r => r.condition === 'nongrounding'), 'find_supporting_answer_ms'), color: '#2f8f66', format: seconds },
+  ];
+  const accuracyBars = [
+    { label: 'Find G', value: boolRate(find.filter(r => r.condition === 'grounding'), answerCorrect), color: '#7857ff', format: pct },
+    { label: 'Find NG', value: boolRate(find.filter(r => r.condition === 'nongrounding'), answerCorrect), color: '#0f6b43', format: pct },
+    { label: 'Guide G', value: boolRate(guide.filter(r => r.condition === 'grounding'), answerCorrect), color: '#9b84ff', format: pct },
+    { label: 'Guide NG', value: boolRate(guide.filter(r => r.condition === 'nongrounding'), answerCorrect), color: '#2f8f66', format: pct },
+  ];
+  const behaviorBars = [
+    { label: 'Scroll', value: interactionAvg(rows, 'scroll_count'), color: '#7857ff' },
+    { label: 'Ctrl-F', value: interactionAvg(rows, 'ctrl_f_count'), color: '#5b3fd6' },
+    { label: 'Page clicks', value: interactionAvg(rows, 'website_click_count'), color: '#0f6b43' },
+    { label: 'Panel clicks', value: interactionAvg(rows, 'panel_click_count'), color: '#8a5300' },
+  ];
+  const styleCounts = ['text', 'visual', 'unknown'].map((style, i) => ({
+    label: style[0].toUpperCase() + style.slice(1),
+    value: rows.filter(r => taskStyle(r) === style).length,
+    color: ['#7857ff', '#0f6b43', '#c97a00'][i],
+  }));
+
+  return `<div class="viz-dashboard">
+    <div class="viz-protocol">
+      <div>
+        <span>Research question</span>
+        <strong>Does grounding make verification faster without costing accuracy?</strong>
+      </div>
+      <p>Use the filters to compare grounded vs non-grounded, Find vs Guide, and Text vs Visual tasks. Charts update immediately.</p>
+    </div>
+    ${controlsHtml(allRows, filters)}
+    ${metricRows(rows, filters)}
+    <div class="viz-insights">
+      ${speedInsight(rows, 'find', 'find_supporting_answer_ms')}
+      ${speedInsight(rows, 'guide', 'find_supporting_answer_ms')}
+      ${accuracyInsight(rows)}
+      ${evidenceInsight(rows)}
+    </div>
+    <div class="viz-chart-grid">
+      <div class="viz-card">${svgBarChart('Evidence/step-finding time', speedBars, { max: Math.max(1, ...speedBars.map(b => b.value || 0)) })}</div>
+      <div class="viz-card">${svgBarChart('Answer accuracy', accuracyBars, { max: 1 })}</div>
+      <div class="viz-card viz-card-wide">${svgLineChart('Average total time by task order', rows)}</div>
+      <div class="viz-card">${svgPieChart('Task style mix', styleCounts)}</div>
+      <div class="viz-card">${svgPieChart('Task type mix', [
+        { label: 'Find', value: find.length, color: '#7857ff' },
+        { label: 'Guide', value: guide.length, color: '#0f6b43' },
+      ])}</div>
+      <div class="viz-card viz-card-wide">${svgBarChart('Average behavior traces', behaviorBars)}</div>
+    </div>
+    ${tableHtml(rows)}
+  </div>`;
+}
+
+function bindVisualizationControls() {
+  ['viz-filter-task', 'viz-filter-condition', 'viz-filter-style', 'viz-filter-participant'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => renderAdminVisualizations(adminVizRows, currentVizFilters()));
+  });
+  document.getElementById('viz-filter-search')?.addEventListener('input', () => {
+    const filters = currentVizFilters();
+    renderAdminVisualizations(adminVizRows, filters);
+    const search = document.getElementById('viz-filter-search');
+    if (search) {
+      search.focus();
+      search.setSelectionRange(search.value.length, search.value.length);
+    }
+  });
+}
+
+function renderAdminVisualizations(rows, filters) {
+  const content = document.getElementById('admin-content');
+  content.innerHTML = visualizationHtml(rows, filters) + '<button class="admin-exit" id="admin-exit">Leave admin mode</button>';
+  bindVisualizationControls();
+  bindAdminExit();
+}
+
+function bindAdminExit() {
+  const exit = document.getElementById('admin-exit');
+  if (!exit) return;
+  exit.onclick = () => {
+    window.StudyAdmin.revokeAdmin();
+    adminPanel.hidden = true;
+    adminPanel.innerHTML = '';
+  };
 }
 
 async function showAdminVisualizations() {
@@ -391,20 +649,18 @@ async function showAdminVisualizations() {
   content.innerHTML = '<div class="viz-loading">Loading study results…</div>';
   try {
     const rows = await window.StudyDB.listStudyResults();
+    adminVizRows = rows;
     if (!rows.length) {
       content.innerHTML = '<div class="viz-empty">No result rows yet.</div><button class="admin-exit" id="admin-exit">Leave admin mode</button>';
     } else {
-      content.innerHTML = visualizationHtml(rows) + '<button class="admin-exit" id="admin-exit">Leave admin mode</button>';
+      renderAdminVisualizations(rows, { taskType: 'all', condition: 'all', style: 'all', participant: 'all', search: '' });
+      return;
     }
   } catch (e) {
     content.innerHTML = `<div class="welcome-status welcome-status-bad">Could not load result rows: ${adminEsc(e.message || e)}</div>
       <button class="admin-exit" id="admin-exit">Leave admin mode</button>`;
   }
-  document.getElementById('admin-exit').onclick = () => {
-    window.StudyAdmin.revokeAdmin();
-    adminPanel.hidden = true;
-    adminPanel.innerHTML = '';
-  };
+  bindAdminExit();
 }
 
 /**

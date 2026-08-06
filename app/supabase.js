@@ -157,7 +157,7 @@ async function claimStudyAssignment(participantId, assignmentKey = 'default') {
 
 const STUDY_TASK_RESULT_COLUMNS = new Set([
   'result_key', 'client_run_id', 'session_id', 'participant_id', 'task_id', 'task_index',
-  'question_index', 'task_type', 'condition', 'question_or_task',
+  'question_index', 'task_type', 'task_style', 'condition', 'question_or_task',
   'time_ms', 'answer_time_ms', 'answer_multiple_choice_ms', 'find_supporting_answer_ms',
   'answer', 'answer_correct', 'evidence_responses',
   'guide_answer_correct', 'guide_answer_problems', 'guide_answer_problem', 'guide_errors',
@@ -180,15 +180,13 @@ function normalizeStudyResultRecord(record) {
 /**
  * One result row.
  *
- * RETRIES ONCE WITHOUT `notes`. The optional note needs a column that supabase_results_v2.sql adds,
- * and a site deployed before that migration is run would otherwise have PostgREST reject the whole
- * row — losing the answer, the timings and the scores over a free-text box nobody had to fill in.
- * The note is the least valuable field in the row; it is the one that should be dropped when the
- * schema is behind, loudly, rather than taking the measurements down with it.
+ * RETRIES WITHOUT OPTIONAL NEWER COLUMNS. A site can be deployed before the matching SQL migration
+ * is run; in that case PostgREST rejects the whole row for one unknown column. Drop only the missing
+ * optional field, loudly, rather than losing the answer, timings and scores.
  */
 async function insertStudyResult(record) {
   const row = normalizeStudyResultRecord(record);
-  const optionalColumns = ['notes', 'interaction_summary'];
+  const optionalColumns = ['notes', 'interaction_summary', 'task_style'];
   for (let attempt = 0; attempt <= optionalColumns.length; attempt++) {
     const res = await upsert('study_task_results_v2', row, 'result_key', { detail: true });
     if (res.ok) return true;
