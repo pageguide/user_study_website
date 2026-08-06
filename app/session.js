@@ -4,6 +4,7 @@
 // about Supabase; this is what joins them.
 
 const SESSION_KEY = 'pageguide_web_study_session';
+const SESSION_VERSION = 2;
 
 const state = {
   participantId: '',
@@ -55,6 +56,7 @@ function taskArm(task) {
 function saveLocal() {
   try {
     localStorage.setItem(SESSION_KEY, JSON.stringify({
+      sessionVersion: SESSION_VERSION,
       participantId: state.participantId, arm: state.arm, sessionId: state.sessionId,
       runId: state.runId, assignmentIndex: state.assignmentIndex, assignmentSlot: state.assignmentSlot,
       idx: state.idx, results: state.results, queue: state.queue,
@@ -96,12 +98,23 @@ function clearReview() {
 function loadLocal() {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const saved = raw ? JSON.parse(raw) : null;
+    return validParticipantSession(saved) ? saved : null;
   } catch (e) { return null; }
 }
 
 function clearLocal() {
   try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
+}
+
+function validParticipantSession(saved) {
+  if (!saved || saved.adminReview) return false;
+  if (saved.sessionVersion !== SESSION_VERSION) return false;
+  if (!saved.participantId || !Array.isArray(saved.queue)) return false;
+  if (saved.queue.length !== 8) return false;
+  if (!saved.queue.every(task => task && (task.arm === 'grounding' || task.arm === 'nongrounding'))) return false;
+  if (saved.assignmentIndex == null || saved.assignmentSlot == null) return false;
+  return true;
 }
 
 function newRunId() {
@@ -234,5 +247,5 @@ function buildFindResultRow({ task, payload, confidence, helpfulness }) {
 window.StudySession = {
   buildFindResultRow,
   state, resolveArm, conditionLabel, taskArm, saveLocal, loadLocal, clearLocal, buildResultRow,
-  saveReview, loadReview, clearReview, newRunId,
+  saveReview, loadReview, clearReview, newRunId, SESSION_VERSION, validParticipantSession,
 };

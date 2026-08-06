@@ -54,6 +54,7 @@ async function boot() {
     }
     // Reached directly, or the session was cleared. Send them back rather than inventing a session:
     // a result row with no participant id is a row nobody can use.
+    if (!window.STUDY_SOURCE) S.clearLocal();
     location.replace('index.html');
     return;
   }

@@ -234,6 +234,7 @@ startBtn.onclick = async () => {
 
   startBtn.disabled = true;
   say('Starting…');
+  window.StudySession.clearLocal();
 
   let assignment = null;
   let sessionId = null;
@@ -245,7 +246,8 @@ startBtn.onclick = async () => {
     sessionId = assignment.sessionId;
   } catch (e) {
     console.warn('[study] could not claim round-robin assignment:', e);
-    say('Could not start the study because the round-robin assignment table is not ready.', 'bad');
+    const detail = e?.message ? ` ${e.message}` : '';
+    say(`Could not start the study because the round-robin assignment table is not ready.${detail}`, 'bad');
     startBtn.disabled = false;
     return;
   }
@@ -253,6 +255,7 @@ startBtn.onclick = async () => {
   let assignedQueue = [];
   try {
     assignedQueue = buildRoundRobinQueue(queue, assignment.assignmentSlot);
+    if (assignedQueue.length !== 8) throw new Error(`Round-robin assignment built ${assignedQueue.length} tasks instead of 8.`);
   } catch (e) {
     say(e.message, 'bad');
     startBtn.disabled = false;
@@ -270,6 +273,17 @@ startBtn.onclick = async () => {
     idx: 0,
     results: [],
     adminReview: false,
+  });
+  console.info('[study] round-robin assignment', {
+    assignmentIndex: assignment.assignmentIndex,
+    assignmentSlot: assignment.assignmentSlot,
+    queue: assignedQueue.map((task, i) => ({
+      i,
+      taskType: task.taskType,
+      style: task.style,
+      id: task.id,
+      arm: task.arm,
+    })),
   });
   window.StudySession.saveLocal();
   location.href = 'study.html';
