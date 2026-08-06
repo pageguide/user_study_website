@@ -8,6 +8,8 @@ const status = document.getElementById('welcome-status');
 const startBtn = document.getElementById('start-btn');
 const countEl = document.getElementById('welcome-count');
 const idInput = document.getElementById('participant-id');
+const idToggle = document.getElementById('participant-id-toggle');
+const idField = document.getElementById('participant-id-field');
 const adminBtn = document.getElementById('admin-btn');
 const adminPanel = document.getElementById('admin-panel');
 
@@ -17,6 +19,14 @@ function say(msg, tone = '') {
 }
 
 let queue = [];
+
+if (idToggle && idField && idInput) {
+  idToggle.onclick = () => {
+    idField.hidden = false;
+    idToggle.hidden = true;
+    idInput.focus();
+  };
+}
 
 const STYLE_ORDER = [
   { id: 'find_text', label: 'Find x Text' },

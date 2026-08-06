@@ -419,6 +419,19 @@ body {
   font-size: 14px;
 }
 .welcome-label { display: block; margin: 22px 0 6px; font-weight: 800; font-size: 13px; }
+.welcome-id-toggle {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--muted);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.welcome-id-toggle:hover { border-color: var(--accent); color: var(--text); }
+.welcome-id-field[hidden] { display: none; }
 .welcome-input {
   width: 100%;
   border: 1px solid var(--line);

@@ -16,20 +16,23 @@
     <h1 class="welcome-title">🎓 PageGuide User Study</h1>
 
     <p class="welcome-lead">
-      You will review what a web agent did on a series of tasks. For each one you will see the steps
-      it took and the answer it gave, then be asked whether it got the task right — and if not,
-      where it went wrong.
+      You will review a series of tasks completed by a web agent. For each task, you will see what
+      the agent did and the answer it gave. Then you will decide whether the agent got it right and
+      where it went wrong if there was a problem.
     </p>
 
     <p class="welcome-note">
-      There are no trick questions and nothing is being tested about you. We are measuring how easy
-      or hard it is to check an agent's work, so "I could not tell" is a real finding — please answer
-      from what you can actually see rather than what you can guess.
+      There are no trick questions. This study is not testing you. We are studying how easy or hard
+      it is to check an agent's work. If you cannot tell what happened, choose that option. Please
+      answer from what you can actually see.
     </p>
 
-    <label class="welcome-label" for="participant-id">Participant ID
-      <span class="q-sub">optional — leave blank to stay anonymous</span></label>
-    <input class="welcome-input" id="participant-id" type="text" placeholder="anon" autocomplete="off">
+    <button class="welcome-id-toggle" id="participant-id-toggle" type="button">Add participant ID (optional)</button>
+    <div class="welcome-id-field" id="participant-id-field" hidden>
+      <label class="welcome-label" for="participant-id">Participant ID
+        <span class="q-sub">(optional, leave blank to stay anonymous)</span></label>
+      <input class="welcome-input" id="participant-id" type="text" placeholder="anon" autocomplete="off">
+    </div>
 
     <div class="welcome-status" id="welcome-status"></div>
 
@@ -43,10 +46,10 @@
     <section class="admin-panel" id="admin-panel" hidden></section>
   </main>
 
-  <script src="app/config.js?v=round-robin-20260805-9" onerror="window.__configMissing = true"></script>
-  <script src="app/supabase.js?v=round-robin-20260805-9"></script>
-  <script src="app/session.js?v=round-robin-20260805-9"></script>
-  <script src="app/admin.js?v=round-robin-20260805-9"></script>
-  <script src="app/welcome.js?v=round-robin-20260805-9"></script>
+  <script src="app/config.js?v=round-robin-20260805-10" onerror="window.__configMissing = true"></script>
+  <script src="app/supabase.js?v=round-robin-20260805-10"></script>
+  <script src="app/session.js?v=round-robin-20260805-10"></script>
+  <script src="app/admin.js?v=round-robin-20260805-10"></script>
+  <script src="app/welcome.js?v=round-robin-20260805-10"></script>
 </body>
 </html>
