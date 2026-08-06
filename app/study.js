@@ -158,7 +158,7 @@ async function showFindTask(task) {
   stimulusPane.innerHTML = `
     <header class="tv-head">
       <div class="tv-head-main">
-        <div class="tv-kicker">Find task${task.type ? ` · ${esc(task.type)}` : ''}</div>
+        <div class="tv-kicker">Task</div>
         <h1 class="tv-goal">${esc(task.question || task.title || '')}</h1>
       </div>
     </header>
@@ -274,7 +274,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
 
   questionPane.innerHTML = `
     <div class="q-head"><span class="q-title">🔍 Find the answer</span></div>
-    <div class="q-progress">Task ${idx + 1}/${queue.length} · 🔍 Find Information</div>
+    <div class="q-progress">Task ${idx + 1}/${queue.length}</div>
     <div class="q-body">
       <div class="q-task-card">
         <div class="q-timers">
