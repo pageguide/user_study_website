@@ -264,18 +264,16 @@ function pct(value) {
   return value == null ? 'No data' : `${Math.round(value * 100)}%`;
 }
 
-function signedPct(delta) {
-  if (delta == null) return 'No data';
-  const n = Math.round(delta * 100);
-  return `${n > 0 ? '+' : ''}${n}%`;
-}
-
 function oneDecimal(value) {
   return value == null ? 'No data' : String(Math.round(value * 10) / 10);
 }
 
 function seconds(value) {
   return value == null ? 'No data' : `${Math.round(value / 1000)}s`;
+}
+
+function points(value) {
+  return value == null ? 'No data' : `${Math.round(value * 100)} pts`;
 }
 
 function taskStyle(row) {
@@ -306,10 +304,6 @@ function evidenceQuality(row) {
   return null;
 }
 
-function interactionAvg(rows, key) {
-  return avgValues(rows.map(r => r?.interaction_summary?.[key]));
-}
-
 function rowsFor(rows, filters) {
   const q = String(filters.search || '').trim().toLowerCase();
   return rows.filter(row => {
@@ -333,170 +327,269 @@ function currentVizFilters() {
   };
 }
 
-function compareMetric(rows, taskType, metricFn) {
-  const relevant = rows.filter(r => r.task_type === taskType);
-  const grounded = relevant.filter(r => r.condition === 'grounding');
-  const nongrounded = relevant.filter(r => r.condition === 'nongrounding');
+/* One question per block, and every block compares the same two things in the same order:
+   non-grounded on the left, grounded on the right. Colors are fixed to the condition so a
+   filter never repaints a series. Validated as a categorical pair against the white card. */
+const VIZ_INK = {
+  grounded: '#2a78d6',
+  nongrounded: '#eb6834',
+  groundedSoft: 'rgba(42, 120, 214, 0.3)',
+  nongroundedSoft: 'rgba(235, 104, 52, 0.3)',
+  judge: '#86b6ef',
+  locate: '#1c5cab',
+  rule: '#c3c2b7',
+  grid: '#e1e0d9',
+  muted: '#898781',
+  good: '#006300',
+  bad: '#c0392f',
+  surface: '#ffffff',
+};
+
+/* Below this many rows in a cell we show the marks but refuse to draw a conclusion from
+   them: hollow dots, and the verdict degrades to "not enough yet". */
+const MIN_CELL_N = 3;
+
+const VIZ_STYLES = ['text', 'visual', 'unknown'];
+const VIZ_STYLE_LABEL = { text: 'Text', visual: 'Visual', unknown: 'Unlabeled' };
+
+function conditionRows(rows, condition) {
+  return rows.filter(r => r.condition === condition);
+}
+
+/* Booleans count as 1/0 so accuracy and duration go through the same path. */
+function metricValues(rows, metricFn) {
+  return rows
+    .map(metricFn)
+    .map(v => (v === true ? 1 : v === false ? 0 : num(v)))
+    .filter(v => v != null);
+}
+
+function cellFor(rows, metricFn) {
+  const values = metricValues(rows, metricFn);
+  return { mean: avgValues(values), n: values.length, values, rows: rows.length };
+}
+
+/* The study asks four separate questions — Find x Text, Find x Visual, Guide x Text,
+   Guide x Visual — so style is a row here, not a filter you have to remember to set. */
+function facetCells(rows, metricFn) {
+  const cells = [];
+  ['find', 'guide'].forEach(taskType => {
+    VIZ_STYLES.forEach(style => {
+      const facet = rows.filter(r => r.task_type === taskType && taskStyle(r) === style);
+      if (!facet.length) return;
+      cells.push({
+        key: `${taskType}-${style}`,
+        label: `${taskType === 'find' ? 'Find' : 'Guide'} · ${VIZ_STYLE_LABEL[style]}`,
+        grounded: cellFor(conditionRows(facet, 'grounding'), metricFn),
+        nongrounded: cellFor(conditionRows(facet, 'nongrounding'), metricFn),
+      });
+    });
+  });
+  return cells;
+}
+
+function pooledCells(rows, metricFn) {
   return {
-    grounded: avgValues(grounded.map(metricFn)),
-    nongrounded: avgValues(nongrounded.map(metricFn)),
-    groundedN: grounded.length,
-    nongroundedN: nongrounded.length,
+    grounded: cellFor(conditionRows(rows, 'grounding'), metricFn),
+    nongrounded: cellFor(conditionRows(rows, 'nongrounding'), metricFn),
   };
 }
 
-function insightCard(title, value, detail, tone = '') {
-  return `<div class="viz-insight${tone ? ` viz-insight-${tone}` : ''}">
-    <span>${adminEsc(title)}</span>
-    <strong>${adminEsc(value)}</strong>
-    <small>${adminEsc(detail)}</small>
-  </div>`;
+function cellsAreThin(cells) {
+  if (!cells.length) return true;
+  return cells.some(c => c.grounded.n < MIN_CELL_N || c.nongrounded.n < MIN_CELL_N);
 }
 
-function speedInsight(rows, taskType, key) {
-  const c = compareMetric(rows, taskType, r => r[key]);
-  if (c.grounded == null || c.nongrounded == null) {
-    return insightCard(`${taskType} speed`, 'No comparison yet', 'Need rows in both conditions.');
-  }
-  const delta = c.nongrounded - c.grounded;
-  const faster = delta > 0;
-  return insightCard(
-    `${taskType} speed`,
-    faster ? `${seconds(delta)} faster grounded` : `${seconds(Math.abs(delta))} slower grounded`,
-    `Grounded ${seconds(c.grounded)} vs non-grounded ${seconds(c.nongrounded)}.`,
-    faster ? 'good' : 'warn'
-  );
+function thinnestCell(cells) {
+  return cells.reduce((min, c) => Math.min(min, c.grounded.n, c.nongrounded.n), Infinity);
 }
 
-function accuracyInsight(rows) {
-  const c = compareMetric(rows, 'find', answerCorrect);
-  const g = compareMetric(rows, 'guide', answerCorrect);
-  const findDelta = c.grounded == null || c.nongrounded == null ? null : c.grounded - c.nongrounded;
-  const guideDelta = g.grounded == null || g.nongrounded == null ? null : g.grounded - g.nongrounded;
-  return insightCard(
-    'Accuracy cost',
-    `Find ${signedPct(findDelta)} · Guide ${signedPct(guideDelta)}`,
-    'Positive means grounded was more accurate; near zero supports “faster without costing accuracy”.'
-  );
+function niceMax(value) {
+  if (!(value > 0)) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+  return (Math.ceil((value / magnitude) * 2) / 2) * magnitude;
 }
 
-function evidenceInsight(rows) {
-  const find = compareMetric(rows, 'find', evidenceQuality);
-  const guide = compareMetric(rows, 'guide', evidenceQuality);
-  return insightCard(
-    'Evidence localization',
-    `Find ${pct(find.grounded)} · Guide ${pct(guide.grounded)}`,
-    'Find uses paragraph evidence quality. Guide uses error type and step recall.'
-  );
+function emptySvg(width, height, message) {
+  return `<svg class="viz-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${adminEsc(message)}">
+    <text x="${width / 2}" y="${height / 2}" text-anchor="middle" class="viz-svg-label">${adminEsc(message)}</text>
+  </svg>`;
 }
 
-function svgBarChart(title, items, opts = {}) {
-  const width = 520;
-  const height = 260;
-  const top = 34;
-  const left = 42;
-  const bottom = 50;
-  const max = opts.max ?? Math.max(1, ...items.map(i => num(i.value) || 0));
-  const innerW = width - left - 16;
-  const innerH = height - top - bottom;
-  const gap = 12;
-  const barW = Math.max(14, (innerW - gap * Math.max(0, items.length - 1)) / Math.max(1, items.length));
-  return `<svg class="viz-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${adminEsc(title)}">
-    <text x="${left}" y="20" class="viz-svg-title">${adminEsc(title)}</text>
-    <line x1="${left}" y1="${top + innerH}" x2="${width - 12}" y2="${top + innerH}" class="viz-axis"></line>
-    ${items.map((item, i) => {
-      const value = num(item.value);
-      const barH = value == null ? 0 : Math.max(0, Math.min(innerH, (value / max) * innerH));
-      const x = left + i * (barW + gap);
-      const y = top + innerH - barH;
-      const label = item.format ? item.format(value) : oneDecimal(value);
-      return `<g>
-        <title>${adminEsc(item.label)}: ${adminEsc(label)}</title>
-        <rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="5" fill="${item.color || '#7857ff'}"></rect>
-        <text x="${x + barW / 2}" y="${Math.max(34, y - 6)}" text-anchor="middle" class="viz-svg-value">${adminEsc(label)}</text>
-        <text x="${x + barW / 2}" y="${height - 24}" text-anchor="middle" class="viz-svg-label">${adminEsc(item.label)}</text>
+function legendHtml(items) {
+  return `<div class="viz-legend">${items.map(i => `<span><i style="background:${i.color}"></i>${adminEsc(i.label)}</span>`).join('')}</div>`;
+}
+
+/* The hover payload travels as JSON on the mark's hit target and is turned into DOM with
+   textContent at read time — task ids and titles are participant-facing data, never markup. */
+function tipData(payload) {
+  return `data-tip="${adminEsc(JSON.stringify(payload))}" tabindex="0" role="button"`;
+}
+
+/* One row per facet: the two dots are the two conditions and the rule between them IS the
+   effect. Individual rows sit behind the means as faint dots, so two lucky trials can never
+   look like a finding. */
+function svgDumbbell(cells, opts = {}) {
+  const fmt = opts.format || oneDecimal;
+  /* A gap between two percentages is percentage points, and saying "25%" for it invites the
+     reader to hear "a quarter better" when it means "one trial in four". */
+  const deltaFmt = opts.deltaFormat || fmt;
+  const words = opts.deltaWords || ['better', 'worse'];
+  const betterLower = opts.betterLower !== false;
+  const width = 620;
+  const rowH = 48;
+  const top = 14;
+  const left = 128;
+  const right = 122;
+  const innerW = width - left - right;
+  const height = top + Math.max(1, cells.length) * rowH + 30;
+  if (!cells.length) return emptySvg(width, 160, 'No rows match this filter');
+
+  const observed = cells.flatMap(c => [c.grounded.mean, c.nongrounded.mean, ...c.grounded.values, ...c.nongrounded.values])
+    .filter(v => v != null);
+  const max = opts.max ?? niceMax(Math.max(...observed, 0));
+  const xOf = (v) => left + Math.min(1, Math.max(0, v / max)) * innerW;
+  const ticks = [0, max / 2, max];
+  const baseline = top + cells.length * rowH;
+
+  const dot = (cell, color, soft, y) => {
+    if (cell.mean == null) return '';
+    const thin = cell.n < MIN_CELL_N;
+    const raws = cell.values.map(v => `<circle cx="${xOf(v).toFixed(1)}" cy="${y}" r="2.5" fill="${soft}"></circle>`).join('');
+    return `${raws}<circle class="viz-mark" cx="${xOf(cell.mean).toFixed(1)}" cy="${y}" r="6.5" fill="${thin ? VIZ_INK.surface : color}" stroke="${thin ? color : VIZ_INK.surface}" stroke-width="2"></circle>`;
+  };
+
+  return `<svg class="viz-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${adminEsc(opts.aria || 'Grounded versus non-grounded by task facet')}">
+    ${ticks.map(t => `<line x1="${xOf(t).toFixed(1)}" y1="${top}" x2="${xOf(t).toFixed(1)}" y2="${baseline}" stroke="${VIZ_INK.grid}" stroke-width="1"></line>
+      <text x="${xOf(t).toFixed(1)}" y="${baseline + 18}" text-anchor="middle" class="viz-svg-label">${adminEsc(fmt(t))}</text>`).join('')}
+    ${cells.map((cell, i) => {
+      const y = top + i * rowH + rowH / 2;
+      const g = cell.grounded;
+      const ng = cell.nongrounded;
+      const both = g.mean != null && ng.mean != null;
+      const delta = both ? g.mean - ng.mean : null;
+      /* A difference that rounds away at the chart's own precision is not a direction. */
+      const flat = delta != null && deltaFmt(Math.abs(delta)) === deltaFmt(0);
+      const good = delta == null || flat ? null : betterLower ? delta < 0 : delta > 0;
+      const thin = g.n < MIN_CELL_N || ng.n < MIN_CELL_N;
+      const deltaText = delta == null
+        ? 'no pair'
+        : flat
+          ? 'no change'
+          : `${deltaFmt(Math.abs(delta))} ${good ? words[0] : words[1]}`;
+      const tip = {
+        title: cell.label,
+        rows: [
+          { color: VIZ_INK.nongrounded, value: ng.mean == null ? 'no rows' : fmt(ng.mean), label: `Non-grounded · mean of ${ng.n}${ng.n < MIN_CELL_N ? ' · thin' : ''}` },
+          { color: VIZ_INK.grounded, value: g.mean == null ? 'no rows' : fmt(g.mean), label: `Grounded · mean of ${g.n}${g.n < MIN_CELL_N ? ' · thin' : ''}` },
+        ],
+        foot: delta == null
+          ? 'Needs rows in both conditions to compare.'
+          : `${deltaText} with grounding${thin ? ` · under ${MIN_CELL_N} rows in a cell, so treat it as noise` : ''}`,
+      };
+      return `<g class="viz-row">
+        <rect class="viz-hit" x="0" y="${top + i * rowH}" width="${width}" height="${rowH}" ${tipData(tip)} aria-label="${adminEsc(`${cell.label}: ${deltaText}`)}"></rect>
+        ${both ? `<line x1="${xOf(ng.mean).toFixed(1)}" y1="${y}" x2="${xOf(g.mean).toFixed(1)}" y2="${y}" stroke="${VIZ_INK.rule}" stroke-width="2"></line>` : ''}
+        ${dot(ng, VIZ_INK.nongrounded, VIZ_INK.nongroundedSoft, y)}
+        ${dot(g, VIZ_INK.grounded, VIZ_INK.groundedSoft, y)}
+        <text x="${left - 12}" y="${y - 3}" text-anchor="end" class="viz-svg-value">${adminEsc(cell.label)}</text>
+        <text x="${left - 12}" y="${y + 12}" text-anchor="end" class="viz-svg-label">n ${ng.n} vs ${g.n}</text>
+        <text x="${width - 6}" y="${y - 3}" text-anchor="end" class="viz-svg-value">${adminEsc(`${ng.mean == null ? '—' : fmt(ng.mean)} → ${g.mean == null ? '—' : fmt(g.mean)}`)}</text>
+        <text x="${width - 6}" y="${y + 12}" text-anchor="end" class="viz-svg-label" fill="${thin || good == null ? VIZ_INK.muted : good ? VIZ_INK.good : VIZ_INK.bad}">${adminEsc(thin ? `${deltaText} · thin` : deltaText)}</text>
       </g>`;
     }).join('')}
   </svg>`;
 }
 
-function svgLineChart(title, rows) {
-  const width = 720;
-  const height = 260;
-  const left = 44;
-  const top = 34;
-  const innerW = width - left - 24;
-  const innerH = height - top - 46;
-  const indexes = Array.from(new Set(rows.map(r => Number(r.task_index)).filter(Number.isFinite))).sort((a, b) => a - b);
-  const series = ['grounding', 'nongrounding'].map(condition => ({
-    condition,
-    color: condition === 'grounding' ? '#7857ff' : '#0f6b43',
-    points: indexes.map(i => ({
-      i,
-      value: avgValues(rows.filter(r => r.condition === condition && Number(r.task_index) === i).map(r => r.time_ms)),
-    })).filter(p => p.value != null),
-  }));
-  const max = Math.max(1, ...series.flatMap(s => s.points.map(p => p.value)));
-  const minIndex = indexes.length ? indexes[0] : 0;
-  const maxIndex = indexes.length > 1 ? indexes[indexes.length - 1] : minIndex + 1;
-  const xOf = (i) => left + ((i - minIndex) / Math.max(1, maxIndex - minIndex)) * innerW;
-  const yOf = (v) => top + innerH - (v / max) * innerH;
-  return `<svg class="viz-svg viz-line-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${adminEsc(title)}">
-    <text x="${left}" y="20" class="viz-svg-title">${adminEsc(title)}</text>
-    <line x1="${left}" y1="${top + innerH}" x2="${width - 16}" y2="${top + innerH}" class="viz-axis"></line>
-    <line x1="${left}" y1="${top}" x2="${left}" y2="${top + innerH}" class="viz-axis"></line>
-    ${series.map(s => s.points.length ? `<polyline points="${s.points.map(p => `${xOf(p.i)},${yOf(p.value)}`).join(' ')}"
-      fill="none" stroke="${s.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
-      ${s.points.map(p => `<circle cx="${xOf(p.i)}" cy="${yOf(p.value)}" r="4" fill="${s.color}">
-        <title>${s.condition}, task ${p.i + 1}: ${seconds(p.value)}</title>
-      </circle>`).join('')}` : '').join('')}
-    <text x="${width - 170}" y="20" class="viz-svg-label" fill="#7857ff">Grounded</text>
-    <text x="${width - 88}" y="20" class="viz-svg-label" fill="#0f6b43">Non-grounded</text>
-    <text x="${left}" y="${height - 12}" class="viz-svg-label">Task order</text>
+/* Judging the claim and hunting for the evidence are different costs, and grounding is
+   only supposed to move the second one. Stacking them keeps the total honest. */
+function svgTimeSplit(cells) {
+  /* Wider viewBox than the dumbbells because this one sits in a full-width card: matching the
+     rendered width keeps its type the same size as everything around it. */
+  const width = 1040;
+  const rowH = 32;
+  const top = 12;
+  const left = 260;
+  const right = 96;
+  const innerW = width - left - right;
+  const height = top + Math.max(1, cells.length) * rowH + 28;
+  if (!cells.length) return emptySvg(width, 160, 'No rows match this filter');
+  const max = niceMax(Math.max(...cells.map(c => (c.judge || 0) + (c.locate || 0)), 0));
+  const wOf = (v) => Math.max(0, (v || 0) / max) * innerW;
+  const baseline = top + cells.length * rowH;
+  return `<svg class="viz-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Time split between judging and locating evidence">
+    ${[0, max / 2, max].map(t => `<line x1="${(left + wOf(t)).toFixed(1)}" y1="${top}" x2="${(left + wOf(t)).toFixed(1)}" y2="${baseline}" stroke="${VIZ_INK.grid}" stroke-width="1"></line>
+      <text x="${(left + wOf(t)).toFixed(1)}" y="${baseline + 18}" text-anchor="middle" class="viz-svg-label">${adminEsc(seconds(t))}</text>`).join('')}
+    ${cells.map((cell, i) => {
+      const y = top + i * rowH + 6;
+      const judgeW = wOf(cell.judge);
+      const locateW = Math.max(0, wOf(cell.locate) - 2);
+      const total = (cell.judge || 0) + (cell.locate || 0);
+      const share = total ? Math.round((cell.locate / total) * 100) : null;
+      const tip = {
+        title: cell.label,
+        rows: [
+          { color: VIZ_INK.judge, value: seconds(cell.judge), label: 'Judging the claim (Q1a)' },
+          { color: VIZ_INK.locate, value: seconds(cell.locate), label: 'Locating the evidence (Q1b)' },
+        ],
+        foot: share == null ? 'No timing recorded.' : `${seconds(total)} total · ${share}% of it spent locating`,
+      };
+      return `<g class="viz-row">
+        <rect class="viz-hit" x="0" y="${top + i * rowH}" width="${width}" height="${rowH}" ${tipData(tip)} aria-label="${adminEsc(`${cell.label}: ${seconds(total)} total`)}"></rect>
+        <rect x="${left}" y="${y}" width="${judgeW.toFixed(1)}" height="15" rx="3" fill="${VIZ_INK.judge}"></rect>
+        <rect x="${(left + judgeW + 2).toFixed(1)}" y="${y}" width="${locateW.toFixed(1)}" height="15" rx="3" fill="${VIZ_INK.locate}"></rect>
+        <text x="${left - 10}" y="${y + 12}" text-anchor="end" class="viz-svg-label">${adminEsc(cell.label)}</text>
+        <text x="${width - 6}" y="${y + 12}" text-anchor="end" class="viz-svg-value">${adminEsc(seconds(total))}</text>
+      </g>`;
+    }).join('')}
   </svg>`;
 }
 
-function piePath(cx, cy, r, start, end) {
-  const sx = cx + r * Math.cos(start);
-  const sy = cy + r * Math.sin(start);
-  const ex = cx + r * Math.cos(end);
-  const ey = cy + r * Math.sin(end);
-  const large = end - start > Math.PI ? 1 : 0;
-  return `M ${cx} ${cy} L ${sx} ${sy} A ${r} ${r} 0 ${large} 1 ${ex} ${ey} Z`;
-}
-
-function svgPieChart(title, slices) {
-  const total = slices.reduce((sum, s) => sum + Math.max(0, Number(s.value) || 0), 0);
-  let start = -Math.PI / 2;
-  return `<svg class="viz-svg viz-pie-svg" viewBox="0 0 360 220" role="img" aria-label="${adminEsc(title)}">
-    <text x="18" y="22" class="viz-svg-title">${adminEsc(title)}</text>
-    ${total ? slices.map((s, i) => {
-      const portion = Math.max(0, Number(s.value) || 0) / total;
-      const end = start + portion * Math.PI * 2;
-      const path = piePath(112, 116, 70, start, end);
-      start = end;
-      return `<path d="${path}" fill="${s.color}">
-        <title>${adminEsc(s.label)}: ${s.value} rows (${Math.round(portion * 100)}%)</title>
-      </path>
-      <rect x="212" y="${62 + i * 28}" width="10" height="10" rx="2" fill="${s.color}"></rect>
-      <text x="230" y="${72 + i * 28}" class="viz-svg-label">${adminEsc(s.label)} (${s.value})</text>`;
-    }).join('') : '<text x="88" y="120" class="viz-svg-label">No data</text>'}
-  </svg>`;
-}
-
-function metricRows(rows, filters) {
-  const find = rows.filter(r => r.task_type === 'find');
-  const guide = rows.filter(r => r.task_type === 'guide');
+function verdictHtml(rows) {
+  const speedCells = facetCells(rows, r => r.find_supporting_answer_ms);
+  const pooledSpeed = pooledCells(rows, r => r.find_supporting_answer_ms);
+  const pooledAccuracy = pooledCells(rows, answerCorrect);
   const sessions = new Set(rows.map(r => r.session_id || r.client_run_id || r.participant_id).filter(Boolean)).size;
-  const telemetryRows = rows.filter(r => r.interaction_summary);
-  return `
-    <div class="viz-kpis">
-      <div class="viz-kpi"><span>Visible rows</span><strong>${rows.length}</strong><small>${adminEsc(filters.taskType)} · ${adminEsc(filters.condition)} · ${adminEsc(filters.style)}</small></div>
-      <div class="viz-kpi"><span>Sessions</span><strong>${sessions}</strong><small>unique session/run identifiers</small></div>
-      <div class="viz-kpi"><span>Find answer accuracy</span><strong>${pct(boolRate(find, answerCorrect))}</strong><small>${find.length} Find rows</small></div>
-      <div class="viz-kpi"><span>Guide verdict accuracy</span><strong>${pct(boolRate(guide, answerCorrect))}</strong><small>${guide.length} Guide rows</small></div>
-      <div class="viz-kpi"><span>Telemetry coverage</span><strong>${pct(rows.length ? telemetryRows.length / rows.length : null)}</strong><small>scroll, Ctrl-F, clicks</small></div>
-    </div>`;
+  const telemetry = rows.length ? rows.filter(r => r.interaction_summary).length / rows.length : null;
+
+  const speedDelta = pooledSpeed.grounded.mean == null || pooledSpeed.nongrounded.mean == null
+    ? null : pooledSpeed.grounded.mean - pooledSpeed.nongrounded.mean;
+  const accuracyDelta = pooledAccuracy.grounded.mean == null || pooledAccuracy.nongrounded.mean == null
+    ? null : pooledAccuracy.grounded.mean - pooledAccuracy.nongrounded.mean;
+  const thin = cellsAreThin(speedCells);
+  const thinnest = speedCells.length ? thinnestCell(speedCells) : 0;
+
+  const headline = thin || speedDelta == null
+    ? 'Not enough rows to call it'
+    : `${seconds(Math.abs(speedDelta))} ${speedDelta < 0 ? 'faster' : 'slower'} to verify with grounding`;
+  const support = thin || speedDelta == null
+    ? `Every Find/Guide × Text/Visual cell needs ${MIN_CELL_N}+ rows per condition; the thinnest has ${thinnest}.`
+    : accuracyDelta == null
+      ? 'No scored answers in both conditions yet, so the accuracy side is still open.'
+      : Math.abs(accuracyDelta) < 0.05
+        ? `Accuracy is flat (${points(Math.abs(accuracyDelta))} apart), so the time difference is the whole story.`
+        : accuracyDelta > 0
+          ? `Accuracy is up ${points(accuracyDelta)} with grounding.`
+          : `Accuracy also drops ${points(Math.abs(accuracyDelta))} with grounding.`;
+
+  return `<div class="viz-verdict${thin ? ' viz-verdict-thin' : ''}">
+    <span>Grounded vs non-grounded · time to locate the evidence</span>
+    <strong>${adminEsc(headline)}</strong>
+    <p>${adminEsc(support)}</p>
+    <small>${rows.length} rows · ${sessions} session${sessions === 1 ? '' : 's'} · answer accuracy ${adminEsc(pct(boolRate(rows, answerCorrect)))} · telemetry ${adminEsc(pct(telemetry))}</small>
+  </div>`;
+}
+
+function compositionHtml(rows) {
+  const chip = (label, value) => `<span><b>${adminEsc(label)}</b> ${value}</span>`;
+  const styles = VIZ_STYLES.map(s => chip(VIZ_STYLE_LABEL[s], rows.filter(r => taskStyle(r) === s).length));
+  return `<div class="viz-composition">
+    ${chip('Find', rows.filter(r => r.task_type === 'find').length)}
+    ${chip('Guide', rows.filter(r => r.task_type === 'guide').length)}
+    ${chip('Grounded', conditionRows(rows, 'grounding').length)}
+    ${chip('Non-grounded', conditionRows(rows, 'nongrounding').length)}
+    ${styles.join('')}
+  </div>`;
 }
 
 function controlsHtml(rows, filters) {
@@ -520,12 +613,17 @@ function controlsHtml(rows, filters) {
   </div>`;
 }
 
+/* Collapsed by default: the charts are the answer, and the raw rows are what you open when you
+   want to argue with them. The open state survives a re-render so a filter change does not
+   slam it shut mid-read. */
+let vizTableOpen = false;
+
 function tableHtml(rows) {
-  return `<div class="viz-card viz-table-card">
-    <div class="viz-card-head">
+  return `<details class="viz-card viz-table-card" id="viz-table-details"${vizTableOpen ? ' open' : ''}>
+    <summary>
       <h4>Result rows</h4>
       <span>${rows.length > 40 ? 'showing first 40' : `${rows.length} shown`}</span>
-    </div>
+    </summary>
     <div class="viz-table-wrap">
       <table class="viz-table">
         <thead><tr><th>Participant</th><th>Task</th><th>Condition</th><th>Style</th><th>Answer</th><th>Evidence / localization</th><th>Behavior</th><th>Time split</th></tr></thead>
@@ -550,36 +648,68 @@ function tableHtml(rows) {
         </tbody>
       </table>
     </div>
+  </details>`;
+}
+
+/* Nobody reads a dumbbell chart cold. This is the sentence that turns the marks into a
+   reading, and it stays visible rather than hiding behind a help icon. */
+function howToReadHtml() {
+  return `<div class="viz-guide">
+    <span>How to read these charts</span>
+    <p>Each row is one slice of the study — Find or Guide, Text or Visual. The
+      <b class="viz-guide-ng">orange dot</b> is where that slice landed <b>without</b> grounding and the
+      <b class="viz-guide-g">blue dot</b> is where it landed <b>with</b> it; the grey rule between them is
+      the effect, so a long rule means grounding changed something and a short one means it did not.
+      Direction is what matters: on the time chart, blue to the <b>left</b> of orange means grounding
+      was faster; on the accuracy and localization charts, blue to the <b>right</b> means grounding was
+      better. The pale dots scattered along each row are the individual trials behind the two means —
+      when they are spread wide, the means are standing on very little. A <b>hollow</b> dot marks a cell
+      with fewer than ${MIN_CELL_N} rows: read it as "not measured yet", not as a result. The numbers on the
+      right restate each row as <b>non-grounded → grounded</b> plus the gap, and <b>n 4 vs 4</b> on the left
+      is how many rows each dot averages. Hover or tab onto any row for the full breakdown.</p>
   </div>`;
 }
 
 function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all', style: 'all', participant: 'all', search: '' }) {
   const rows = rowsFor(allRows, filters);
-  const find = rows.filter(r => r.task_type === 'find');
-  const guide = rows.filter(r => r.task_type === 'guide');
-  const speedBars = [
-    { label: 'Find G', value: avg(find.filter(r => r.condition === 'grounding'), 'find_supporting_answer_ms'), color: '#7857ff', format: seconds },
-    { label: 'Find NG', value: avg(find.filter(r => r.condition === 'nongrounding'), 'find_supporting_answer_ms'), color: '#0f6b43', format: seconds },
-    { label: 'Guide G', value: avg(guide.filter(r => r.condition === 'grounding'), 'find_supporting_answer_ms'), color: '#9b84ff', format: seconds },
-    { label: 'Guide NG', value: avg(guide.filter(r => r.condition === 'nongrounding'), 'find_supporting_answer_ms'), color: '#2f8f66', format: seconds },
+  const conditionLegend = legendHtml([
+    { label: 'Non-grounded', color: VIZ_INK.nongrounded },
+    { label: 'Grounded', color: VIZ_INK.grounded },
+  ]);
+
+  const speedCells = facetCells(rows, r => r.find_supporting_answer_ms);
+  const accuracyCells = facetCells(rows, answerCorrect);
+  const evidenceCells = facetCells(rows, evidenceQuality);
+
+  const timeSplitCells = [];
+  ['find', 'guide'].forEach(taskType => {
+    VIZ_STYLES.forEach(style => {
+      const facet = rows.filter(r => r.task_type === taskType && taskStyle(r) === style);
+      if (!facet.length) return;
+      [['nongrounding', 'non-grounded'], ['grounding', 'grounded']].forEach(([condition, word]) => {
+        const subset = conditionRows(facet, condition);
+        if (!subset.length) return;
+        timeSplitCells.push({
+          label: `${taskType === 'find' ? 'Find' : 'Guide'} · ${VIZ_STYLE_LABEL[style]} · ${word}`,
+          judge: avg(subset, 'answer_multiple_choice_ms') || 0,
+          locate: avg(subset, 'find_supporting_answer_ms') || 0,
+        });
+      });
+    });
+  });
+
+  const behaviorKeys = [
+    { key: 'scroll_count', label: 'Scrolls' },
+    { key: 'ctrl_f_count', label: 'Ctrl-F uses' },
+    { key: 'website_click_count', label: 'Page clicks' },
+    { key: 'panel_click_count', label: 'Panel clicks' },
   ];
-  const accuracyBars = [
-    { label: 'Find G', value: boolRate(find.filter(r => r.condition === 'grounding'), answerCorrect), color: '#7857ff', format: pct },
-    { label: 'Find NG', value: boolRate(find.filter(r => r.condition === 'nongrounding'), answerCorrect), color: '#0f6b43', format: pct },
-    { label: 'Guide G', value: boolRate(guide.filter(r => r.condition === 'grounding'), answerCorrect), color: '#9b84ff', format: pct },
-    { label: 'Guide NG', value: boolRate(guide.filter(r => r.condition === 'nongrounding'), answerCorrect), color: '#2f8f66', format: pct },
-  ];
-  const behaviorBars = [
-    { label: 'Scroll', value: interactionAvg(rows, 'scroll_count'), color: '#7857ff' },
-    { label: 'Ctrl-F', value: interactionAvg(rows, 'ctrl_f_count'), color: '#5b3fd6' },
-    { label: 'Page clicks', value: interactionAvg(rows, 'website_click_count'), color: '#0f6b43' },
-    { label: 'Panel clicks', value: interactionAvg(rows, 'panel_click_count'), color: '#8a5300' },
-  ];
-  const styleCounts = ['text', 'visual', 'unknown'].map((style, i) => ({
-    label: style[0].toUpperCase() + style.slice(1),
-    value: rows.filter(r => taskStyle(r) === style).length,
-    color: ['#7857ff', '#0f6b43', '#c97a00'][i],
-  }));
+  const behaviorCells = behaviorKeys.map(({ key, label }) => ({
+    key,
+    label,
+    grounded: cellFor(conditionRows(rows, 'grounding'), r => r?.interaction_summary?.[key]),
+    nongrounded: cellFor(conditionRows(rows, 'nongrounding'), r => r?.interaction_summary?.[key]),
+  })).filter(c => c.grounded.n || c.nongrounded.n);
 
   return `<div class="viz-dashboard">
     <div class="viz-protocol">
@@ -587,32 +717,139 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
         <span>Research question</span>
         <strong>Does grounding make verification faster without costing accuracy?</strong>
       </div>
-      <p>Use the filters to compare grounded vs non-grounded, Find vs Guide, and Text vs Visual tasks. Charts update immediately.</p>
+      <p>Every chart reads left to right as non-grounded → grounded, split by Find/Guide × Text/Visual. Hollow dots mean fewer than ${MIN_CELL_N} rows in that cell.</p>
     </div>
     ${controlsHtml(allRows, filters)}
-    ${metricRows(rows, filters)}
-    <div class="viz-insights">
-      ${speedInsight(rows, 'find', 'find_supporting_answer_ms')}
-      ${speedInsight(rows, 'guide', 'find_supporting_answer_ms')}
-      ${accuracyInsight(rows)}
-      ${evidenceInsight(rows)}
-    </div>
+    ${verdictHtml(rows)}
+    ${howToReadHtml()}
     <div class="viz-chart-grid">
-      <div class="viz-card">${svgBarChart('Evidence/step-finding time', speedBars, { max: Math.max(1, ...speedBars.map(b => b.value || 0)) })}</div>
-      <div class="viz-card">${svgBarChart('Answer accuracy', accuracyBars, { max: 1 })}</div>
-      <div class="viz-card viz-card-wide">${svgLineChart('Average total time by task order', rows)}</div>
-      <div class="viz-card">${svgPieChart('Task style mix', styleCounts)}</div>
-      <div class="viz-card">${svgPieChart('Task type mix', [
-        { label: 'Find', value: find.length, color: '#7857ff' },
-        { label: 'Guide', value: guide.length, color: '#0f6b43' },
-      ])}</div>
-      <div class="viz-card viz-card-wide">${svgBarChart('Average behavior traces', behaviorBars)}</div>
+      <div class="viz-card">
+        <h4>Time to locate the evidence</h4>
+        ${conditionLegend}
+        ${svgDumbbell(speedCells, { format: seconds, betterLower: true, deltaWords: ['faster', 'slower'], aria: 'Evidence-finding time, non-grounded versus grounded' })}
+        <p class="viz-note">Q1b duration. Faint dots are individual rows.</p>
+      </div>
+      <div class="viz-card">
+        <h4>Answer accuracy</h4>
+        ${conditionLegend}
+        ${svgDumbbell(accuracyCells, { format: pct, deltaFormat: points, max: 1, betterLower: false, deltaWords: ['more accurate', 'less accurate'], aria: 'Answer accuracy, non-grounded versus grounded' })}
+        <p class="viz-note">Find uses the Q1a claim judgment; Guide uses the verdict.</p>
+      </div>
+      <div class="viz-card">
+        <h4>Evidence localization quality</h4>
+        ${conditionLegend}
+        ${svgDumbbell(evidenceCells, { format: pct, deltaFormat: points, max: 1, betterLower: false, deltaWords: ['better', 'worse'], aria: 'Evidence localization quality, non-grounded versus grounded' })}
+        <p class="viz-note">Find: paragraph precision and recall. Guide: error type and step recall.</p>
+      </div>
+      <div class="viz-card">
+        <h4>Effort spent verifying</h4>
+        ${conditionLegend}
+        ${behaviorCells.length
+          ? `${svgDumbbell(behaviorCells, { format: oneDecimal, betterLower: true, deltaWords: ['less', 'more'], aria: 'Behavioral traces, non-grounded versus grounded' })}
+             <p class="viz-note">Mean per row. Fewer scrolls and Ctrl-F uses is the predicted direction.</p>`
+          : '<div class="viz-empty">No telemetry recorded yet — scroll, Ctrl-F and click counts are missing from every visible row.</div>'}
+      </div>
+      <div class="viz-card viz-card-wide">
+        <h4>Where the time goes</h4>
+        ${legendHtml([
+          { label: 'Judging the claim (Q1a)', color: VIZ_INK.judge },
+          { label: 'Locating the evidence (Q1b)', color: VIZ_INK.locate },
+        ])}
+        ${svgTimeSplit(timeSplitCells)}
+        <p class="viz-note">Grounding is only expected to move the second segment.</p>
+      </div>
     </div>
+    ${compositionHtml(rows)}
     ${tableHtml(rows)}
   </div>`;
 }
 
+/* One tooltip element for the whole dashboard, and one set of delegated listeners: the panel is
+   rebuilt from scratch on every keystroke in the search box, so anything bound to a mark would
+   be thrown away with it. */
+let vizTipEl = null;
+let vizTipBound = false;
+
+function vizTip() {
+  if (vizTipEl && document.body.contains(vizTipEl)) return vizTipEl;
+  vizTipEl = document.createElement('div');
+  vizTipEl.className = 'viz-tip';
+  vizTipEl.hidden = true;
+  document.body.appendChild(vizTipEl);
+  return vizTipEl;
+}
+
+function showVizTip(target, x, y) {
+  let payload;
+  try {
+    payload = JSON.parse(target.getAttribute('data-tip') || '');
+  } catch (e) {
+    return;
+  }
+  const tip = vizTip();
+  tip.textContent = '';
+
+  const title = document.createElement('b');
+  title.textContent = payload.title || '';
+  tip.appendChild(title);
+
+  (payload.rows || []).forEach(row => {
+    const line = document.createElement('span');
+    const key = document.createElement('i');
+    key.style.background = row.color;
+    const value = document.createElement('strong');
+    value.textContent = row.value;
+    const label = document.createElement('em');
+    label.textContent = row.label;
+    line.append(key, value, label);
+    tip.appendChild(line);
+  });
+
+  if (payload.foot) {
+    const foot = document.createElement('small');
+    foot.textContent = payload.foot;
+    tip.appendChild(foot);
+  }
+
+  tip.hidden = false;
+  const box = tip.getBoundingClientRect();
+  const pad = 12;
+  const left = Math.min(Math.max(pad, x + 14), window.innerWidth - box.width - pad);
+  const top = y - box.height - 14 < pad ? y + 20 : y - box.height - 14;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+function hideVizTip() {
+  if (vizTipEl) vizTipEl.hidden = true;
+}
+
+function bindVizTooltip() {
+  if (vizTipBound) return;
+  vizTipBound = true;
+  document.addEventListener('pointermove', (e) => {
+    const hit = e.target.closest?.('[data-tip]');
+    if (hit) showVizTip(hit, e.clientX, e.clientY);
+    else hideVizTip();
+  });
+  document.addEventListener('pointerleave', hideVizTip);
+  document.addEventListener('scroll', hideVizTip, true);
+  /* Keyboard gets the same readout: tab through the rows, Esc dismisses. */
+  document.addEventListener('focusin', (e) => {
+    const hit = e.target.closest?.('[data-tip]');
+    if (!hit) return hideVizTip();
+    const box = hit.getBoundingClientRect();
+    showVizTip(hit, box.left + box.width / 2, box.top + box.height);
+  });
+  document.addEventListener('focusout', hideVizTip);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideVizTip(); });
+}
+
 function bindVisualizationControls() {
+  bindVizTooltip();
+  document.getElementById('viz-table-details')?.addEventListener('toggle', (e) => {
+    vizTableOpen = e.target.open;
+  });
   ['viz-filter-task', 'viz-filter-condition', 'viz-filter-style', 'viz-filter-participant'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', () => renderAdminVisualizations(adminVizRows, currentVizFilters()));
   });
