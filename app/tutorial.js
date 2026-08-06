@@ -730,6 +730,60 @@
     layer.querySelector('.tut-tip-skip').onclick = skipAll;
     layer.querySelector('.tut-tip-back').onclick = () => go(-1);
     layer.querySelector('.tut-tip-next').onclick = () => go(1);
+
+    setupTipDrag();
+  }
+
+  let userDragPos = null;
+  let isDraggingTip = false;
+  let dragStart = null;
+
+  function setupTipDrag() {
+    if (!tip) return;
+    const startDrag = (e) => {
+      if (e.target.closest('button, a, input, select, textarea')) return;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const rect = tip.getBoundingClientRect();
+      dragStart = { x: clientX - rect.left, y: clientY - rect.top };
+      isDraggingTip = true;
+      tip.classList.add('is-dragging');
+      if (e.cancelable && e.type === 'touchstart') e.preventDefault();
+    };
+
+    const onDrag = (e) => {
+      if (!isDraggingTip || !dragStart) return;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const tw = tip.offsetWidth;
+      const th = tip.offsetHeight;
+
+      let left = clientX - dragStart.x;
+      let top = clientY - dragStart.y;
+      left = Math.min(Math.max(8, left), vw - tw - 8);
+      top = Math.min(Math.max(8, top), vh - th - 8);
+
+      userDragPos = { left, top };
+      tip.style.left = `${left}px`;
+      tip.style.top = `${top}px`;
+      if (e.cancelable) e.preventDefault();
+    };
+
+    const endDrag = () => {
+      if (isDraggingTip) {
+        isDraggingTip = false;
+        tip?.classList.remove('is-dragging');
+      }
+    };
+
+    tip.addEventListener('mousedown', startDrag);
+    tip.addEventListener('touchstart', startDrag, { passive: false });
+    window.addEventListener('mousemove', onDrag);
+    window.addEventListener('touchmove', onDrag, { passive: false });
+    window.addEventListener('mouseup', endDrag);
+    window.addEventListener('touchend', endDrag);
   }
 
   function clearHoles() {
@@ -762,6 +816,7 @@
     if (frame) { cancelAnimationFrame(frame); frame = 0; }
     clearHoles();
     tipAnchor = null;
+    userDragPos = null;
     if (layer) layer.classList.remove('is-on', 'is-waiting');
   }
 
@@ -912,6 +967,12 @@
       h.ring.style.width = `${r.width + pad * 2}px`;
       h.ring.style.height = `${r.height + pad * 2}px`;
     });
+
+    if (userDragPos) {
+      tip.style.top = `${Math.min(Math.max(8, userDragPos.top), vh - tip.offsetHeight - 8)}px`;
+      tip.style.left = `${Math.min(Math.max(8, userDragPos.left), vw - tip.offsetWidth - 8)}px`;
+      return;
+    }
 
     const rect = tipAnchor
       ? rectOf(step.tipTarget, tipAnchor)
