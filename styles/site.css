@@ -730,6 +730,9 @@ body {
 
 .admin-panel {
   margin-top: 18px;
+  width: min(1120px, calc(100vw - 48px));
+  margin-left: 50%;
+  transform: translateX(-50%);
   background: var(--card);
   border: 1px solid var(--line);
   border-left: 3px solid #8a5300;
@@ -771,6 +774,143 @@ body {
   text-decoration: underline;
   cursor: pointer;
 }
+.admin-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 12px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.035);
+}
+.admin-tab {
+  flex: 1;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 10px;
+  font: 800 12px/1.4 inherit;
+  cursor: pointer;
+}
+.admin-tab:hover { color: var(--accent-dark); }
+.admin-tab-on {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(20, 12, 50, 0.08);
+}
+.viz-loading,
+.viz-empty {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  color: var(--muted);
+  text-align: center;
+  font-weight: 700;
+}
+.viz-dashboard { display: grid; gap: 12px; }
+.viz-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 760px) { .viz-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.viz-kpi,
+.viz-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(20, 12, 50, 0.04);
+}
+.viz-kpi { padding: 11px 12px; min-width: 0; }
+.viz-kpi span,
+.viz-kpi small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.viz-kpi strong {
+  display: block;
+  margin: 3px 0 2px;
+  font-size: 24px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 760px) { .viz-grid { grid-template-columns: 1fr; } }
+.viz-card { padding: 12px; min-width: 0; }
+.viz-card-wide,
+.viz-table-card { grid-column: 1 / -1; }
+.viz-card h4 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.25;
+}
+.viz-bar-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(90px, 1.4fr) minmax(78px, auto);
+  align-items: center;
+  gap: 8px;
+  margin: 7px 0;
+  font-size: 12px;
+}
+.viz-bar-label { color: rgba(0, 0, 0, 0.72); font-weight: 700; }
+.viz-bar-track {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(120, 87, 255, 0.11);
+}
+.viz-bar-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.viz-bar-track-muted span { background: #0f6b43; }
+.viz-bar-value {
+  text-align: right;
+  color: var(--ink);
+  font-weight: 800;
+  white-space: nowrap;
+}
+.viz-bar-value span { color: var(--muted); font-weight: 600; }
+.viz-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.viz-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.viz-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.viz-table th,
+.viz-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  text-align: left;
+  vertical-align: top;
+}
+.viz-table th {
+  background: rgba(0, 0, 0, 0.035);
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.viz-table tr:last-child td { border-bottom: 0; }
 
 /* The frozen page a Find task is about. Fills its pane: the participant is reading an article, and
    a letterboxed article is a different reading task from the one the extension arm gets. */

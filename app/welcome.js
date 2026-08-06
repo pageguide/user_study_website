@@ -157,11 +157,41 @@ async function init() {
 // to every visitor — so its one real power is to NOT write, which is exactly what a reviewer
 // clicking through sixteen tasks needs. See app/admin.js on why the password is a speed bump.
 
+function adminEsc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}
+
 function showAdminPanel() {
   const o = window.StudyAdmin.adminOptions();
   adminPanel.hidden = false;
   adminPanel.innerHTML = `
-    <div class="admin-title">🔓 Admin — review mode <span class="admin-warn">nothing is recorded</span></div>
+    <div class="admin-title">🔓 Admin <span class="admin-warn">review mode writes nothing</span></div>
+    <div class="admin-tabs" id="admin-tabs">
+      ${[['review', 'Review tasks'], ['viz', 'Visualizations']].map(([id, label]) => `
+        <button class="admin-tab${o.tab === id ? ' admin-tab-on' : ''}" data-admin-tab="${id}">${label}</button>`).join('')}
+    </div>
+    <div id="admin-content"></div>`;
+
+  adminPanel.querySelectorAll('[data-admin-tab]').forEach(b => {
+    b.onclick = () => {
+      window.StudyAdmin.setAdminOptions({ tab: b.dataset.adminTab });
+      showAdminPanel();
+    };
+  });
+
+  if (o.tab === 'viz') {
+    showAdminVisualizations();
+    return;
+  }
+  showAdminReviewControls();
+}
+
+function showAdminReviewControls() {
+  const o = window.StudyAdmin.adminOptions();
+  const content = document.getElementById('admin-content');
+  content.innerHTML = `
     <label class="welcome-label">Which tasks?</label>
     <div class="admin-row" id="admin-half">
       ${[['all', 'Everything'], ['find', '🔍 Find only'], ['guide', '📘 Guide only']].map(([id, label]) => `
@@ -175,10 +205,10 @@ function showAdminPanel() {
     <button class="welcome-btn" id="admin-go">Review →</button>
     <button class="admin-exit" id="admin-exit">Leave admin mode</button>`;
 
-  adminPanel.querySelectorAll('[data-half]').forEach(b => {
+  content.querySelectorAll('[data-half]').forEach(b => {
     b.onclick = () => { window.StudyAdmin.setAdminOptions({ half: b.dataset.half }); showAdminPanel(); };
   });
-  adminPanel.querySelectorAll('[data-arm]').forEach(b => {
+  content.querySelectorAll('[data-arm]').forEach(b => {
     b.onclick = () => { window.StudyAdmin.setAdminOptions({ arm: b.dataset.arm }); showAdminPanel(); };
   });
   document.getElementById('admin-exit').onclick = () => {
@@ -203,6 +233,177 @@ function showAdminPanel() {
     });
     window.StudySession.saveReview();
     location.href = 'study.html';
+  };
+}
+
+function boolRate(rows, key) {
+  const vals = rows.map(r => r?.[key]).filter(v => v === true || v === false);
+  if (!vals.length) return null;
+  return vals.filter(Boolean).length / vals.length;
+}
+
+function avg(rows, key) {
+  const vals = rows.map(r => Number(r?.[key])).filter(Number.isFinite);
+  if (!vals.length) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+function pct(value) {
+  return value == null ? 'No data' : `${Math.round(value * 100)}%`;
+}
+
+function oneDecimal(value) {
+  return value == null ? 'No data' : String(Math.round(value * 10) / 10);
+}
+
+function seconds(value) {
+  return value == null ? 'No data' : `${Math.round(value / 1000)}s`;
+}
+
+function metricBar(label, value, detail = '') {
+  const width = value == null ? 0 : Math.max(0, Math.min(100, Math.round(value * 100)));
+  return `
+    <div class="viz-bar-row">
+      <div class="viz-bar-label">${adminEsc(label)}</div>
+      <div class="viz-bar-track"><span style="width:${width}%"></span></div>
+      <div class="viz-bar-value">${value == null ? 'No data' : `${width}%`}${detail ? ` <span>${adminEsc(detail)}</span>` : ''}</div>
+    </div>`;
+}
+
+function metricNumberBar(label, value, max) {
+  const width = value == null || !max ? 0 : Math.max(0, Math.min(100, Math.round((value / max) * 100)));
+  return `
+    <div class="viz-bar-row">
+      <div class="viz-bar-label">${adminEsc(label)}</div>
+      <div class="viz-bar-track viz-bar-track-muted"><span style="width:${width}%"></span></div>
+      <div class="viz-bar-value">${oneDecimal(value)}</div>
+    </div>`;
+}
+
+function groupedRows(rows, taskType, condition) {
+  return rows.filter(r => r.task_type === taskType && r.condition === condition);
+}
+
+function interactionAvg(rows, key) {
+  const vals = rows
+    .map(r => Number(r?.interaction_summary?.[key]))
+    .filter(Number.isFinite);
+  if (!vals.length) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+function visualizationHtml(rows) {
+  const find = rows.filter(r => r.task_type === 'find');
+  const guide = rows.filter(r => r.task_type === 'guide');
+  const sessions = new Set(rows.map(r => r.session_id || r.client_run_id || r.participant_id).filter(Boolean)).size;
+  const completedSessions = new Set(rows
+    .filter(r => r.session_id != null)
+    .map(r => r.session_id)
+    .filter(id => rows.filter(r => r.session_id === id).length >= 8)).size;
+  const allTime = avg(rows, 'time_ms');
+  const interactionKeys = ['scroll_count', 'ctrl_f_count', 'website_click_count', 'panel_click_count'];
+  const interactionMax = Math.max(1, ...interactionKeys.flatMap(key => [
+    interactionAvg(find, key) || 0,
+    interactionAvg(guide, key) || 0,
+  ]));
+
+  const conditionBars = (taskType, key, title) => `
+    <div class="viz-card">
+      <h4>${adminEsc(title)}</h4>
+      ${metricBar('Grounded', boolRate(groupedRows(rows, taskType, 'grounding'), key))}
+      ${metricBar('Non-grounded', boolRate(groupedRows(rows, taskType, 'nongrounding'), key))}
+    </div>`;
+
+  return `
+    <div class="viz-dashboard">
+      <div class="viz-kpis">
+        <div class="viz-kpi"><span>Sessions</span><strong>${sessions}</strong><small>${completedSessions} completed 8 tasks</small></div>
+        <div class="viz-kpi"><span>Rows</span><strong>${rows.length}</strong><small>${find.length} Find · ${guide.length} Guide</small></div>
+        <div class="viz-kpi"><span>Find accuracy</span><strong>${pct(boolRate(find, 'score_answer_correct'))}</strong><small>answer correctness</small></div>
+        <div class="viz-kpi"><span>Guide accuracy</span><strong>${pct(boolRate(guide, 'score_verdict_correct'))}</strong><small>verdict correctness</small></div>
+        <div class="viz-kpi"><span>Avg time</span><strong>${seconds(allTime)}</strong><small>per task row</small></div>
+      </div>
+
+      <div class="viz-grid">
+        ${conditionBars('find', 'score_answer_correct', 'Find answer correctness')}
+        ${conditionBars('guide', 'score_verdict_correct', 'Guide verdict correctness')}
+        <div class="viz-card">
+          <h4>Find supporting evidence</h4>
+          ${metricBar('Precision', avg(find, 'score_evidence_precision'))}
+          ${metricBar('Recall', avg(find, 'score_evidence_recall'))}
+          ${metricBar('Exact match', boolRate(find, 'score_evidence_exact'))}
+        </div>
+        <div class="viz-card">
+          <h4>Guide localization quality</h4>
+          ${metricBar('Type precision', avg(guide, 'score_type_precision'))}
+          ${metricBar('Type recall', avg(guide, 'score_type_recall'))}
+          ${metricBar('Step precision', avg(guide, 'score_step_precision'))}
+          ${metricBar('Step recall', avg(guide, 'score_step_recall'))}
+        </div>
+        <div class="viz-card viz-card-wide">
+          <h4>Average interactions per task</h4>
+          ${metricNumberBar('Find scroll sessions', interactionAvg(find, 'scroll_count'), interactionMax)}
+          ${metricNumberBar('Guide scroll sessions', interactionAvg(guide, 'scroll_count'), interactionMax)}
+          ${metricNumberBar('Find Ctrl-F', interactionAvg(find, 'ctrl_f_count'), interactionMax)}
+          ${metricNumberBar('Guide Ctrl-F', interactionAvg(guide, 'ctrl_f_count'), interactionMax)}
+          ${metricNumberBar('Find website clicks', interactionAvg(find, 'website_click_count'), interactionMax)}
+          ${metricNumberBar('Guide website clicks', interactionAvg(guide, 'website_click_count'), interactionMax)}
+          ${metricNumberBar('Find panel clicks', interactionAvg(find, 'panel_click_count'), interactionMax)}
+          ${metricNumberBar('Guide panel clicks', interactionAvg(guide, 'panel_click_count'), interactionMax)}
+          <p class="viz-note">Interaction telemetry appears only for rows collected after this dashboard update.</p>
+        </div>
+      </div>
+
+      <div class="viz-card viz-table-card">
+        <h4>Recent result rows</h4>
+        <div class="viz-table-wrap">
+          <table class="viz-table">
+            <thead><tr><th>Participant</th><th>Task</th><th>Condition</th><th>Answer</th><th>Evidence</th><th>Interactions</th><th>Time</th></tr></thead>
+            <tbody>
+              ${rows.slice(0, 30).map(row => {
+                const isFind = row.task_type === 'find';
+                const answer = isFind ? pct(row.score_answer_correct == null ? null : Number(row.score_answer_correct)) : pct(row.score_verdict_correct == null ? null : Number(row.score_verdict_correct));
+                const evidence = isFind
+                  ? pct(row.score_evidence_precision)
+                  : pct(row.score_step_recall ?? row.score_type_recall);
+                const inter = row.interaction_summary
+                  ? `${Number(row.interaction_summary.scroll_count || 0)} scroll · ${Number(row.interaction_summary.ctrl_f_count || 0)} find · ${Number(row.interaction_summary.website_click_count || 0)} clicks`
+                  : 'No data';
+                return `<tr>
+                  <td>${adminEsc(row.participant_id)}</td>
+                  <td>${adminEsc(row.task_type)} · ${adminEsc(row.task_id)}</td>
+                  <td>${adminEsc(row.condition)}</td>
+                  <td>${answer}</td>
+                  <td>${evidence}</td>
+                  <td>${adminEsc(inter)}</td>
+                  <td>${seconds(row.time_ms)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function showAdminVisualizations() {
+  const content = document.getElementById('admin-content');
+  content.innerHTML = '<div class="viz-loading">Loading study results…</div>';
+  try {
+    const rows = await window.StudyDB.listStudyResults();
+    if (!rows.length) {
+      content.innerHTML = '<div class="viz-empty">No result rows yet.</div><button class="admin-exit" id="admin-exit">Leave admin mode</button>';
+    } else {
+      content.innerHTML = visualizationHtml(rows) + '<button class="admin-exit" id="admin-exit">Leave admin mode</button>';
+    }
+  } catch (e) {
+    content.innerHTML = `<div class="welcome-status welcome-status-bad">Could not load result rows: ${adminEsc(e.message || e)}</div>
+      <button class="admin-exit" id="admin-exit">Leave admin mode</button>`;
+  }
+  document.getElementById('admin-exit').onclick = () => {
+    window.StudyAdmin.revokeAdmin();
+    adminPanel.hidden = true;
+    adminPanel.innerHTML = '';
   };
 }
 

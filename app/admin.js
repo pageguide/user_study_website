@@ -35,7 +35,7 @@ function revokeAdmin() {
 
 /** The reviewer's choices, remembered across a reload so paging through is not restarted. */
 const ADMIN_OPTIONS_KEY = 'pageguide_web_study_admin_opts';
-const DEFAULT_OPTIONS = { half: 'all', arm: 'grounding' };
+const DEFAULT_OPTIONS = { half: 'all', arm: 'grounding', tab: 'review' };
 
 function adminOptions() {
   try {

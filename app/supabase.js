@@ -166,6 +166,7 @@ const STUDY_TASK_RESULT_COLUMNS = new Set([
   'score_verdict_correct', 'score_problem_precision', 'score_problem_recall', 'score_problem_exact',
   'score_type_precision', 'score_type_recall', 'score_step_precision', 'score_step_recall',
   'score_step_exact', 'score_no_error_agreement', 'confidence', 'helpfulness', 'notes',
+  'interaction_summary',
 ]);
 
 function normalizeStudyResultRecord(record) {
@@ -187,17 +188,27 @@ function normalizeStudyResultRecord(record) {
  */
 async function insertStudyResult(record) {
   const row = normalizeStudyResultRecord(record);
-  const res = await upsert('study_task_results_v2', row, 'result_key', { detail: true });
-  if (res.ok) return true;
+  const optionalColumns = ['notes', 'interaction_summary'];
+  for (let attempt = 0; attempt <= optionalColumns.length; attempt++) {
+    const res = await upsert('study_task_results_v2', row, 'result_key', { detail: true });
+    if (res.ok) return true;
 
-  const missingNotes = /notes/.test(res.error || '') && /column|schema cache/i.test(res.error || '');
-  if (!missingNotes || !Object.prototype.hasOwnProperty.call(row, 'notes')) return null;
+    const missingOptionalColumn = optionalColumns.find(key =>
+      Object.prototype.hasOwnProperty.call(row, key)
+      && new RegExp(`\\b${key}\\b`).test(res.error || '')
+      && /column|schema cache/i.test(res.error || ''));
+    if (!missingOptionalColumn) return null;
 
-  console.warn('[study] this database has no `notes` column yet — saving the row without the note. '
-    + 'Run supabase_results_v2.sql in the Supabase SQL editor to keep participants\' notes.');
-  const { notes, ...withoutNotes } = row;
-  const retry = await upsert('study_task_results_v2', withoutNotes, 'result_key', { detail: true });
-  return retry.ok ? true : null;
+    console.warn(`[study] this database has no \`${missingOptionalColumn}\` column yet; saving the row without it. `
+      + 'Run supabase_results_v2.sql in the Supabase SQL editor to keep all result fields.');
+    delete row[missingOptionalColumn];
+  }
+  return null;
+}
+
+async function listStudyResults() {
+  const rows = await get('study_task_results_v2?select=*&order=created_at.desc&limit=1000');
+  return Array.isArray(rows) ? rows : [];
 }
 
 async function updateCannedResponseGrounding(taskId, condition, patch) {
@@ -315,4 +326,5 @@ window.StudyDB = {
   claimStudyAssignment,
   insertStudySession,
   insertStudyResult,
+  listStudyResults,
 };

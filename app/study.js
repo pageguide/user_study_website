@@ -7,11 +7,86 @@
 const stimulusPane = document.getElementById('stimulus-pane');
 const questionPane = document.getElementById('question-pane');
 const S = window.StudySession;
+let taskTelemetry = null;
 
 // The data source, chosen once. demo.html sets window.STUDY_SOURCE to a local fixture bank before
 // this file loads, so the demo walks THIS code — the same queue, timers, validation and scoring a
 // participant gets — rather than a parallel implementation that could drift from it.
 const DB = window.STUDY_SOURCE || window.StudyDB;
+
+function startTaskTelemetry(task) {
+  stopTaskTelemetry();
+  const summary = {
+    scroll_count: 0,
+    ctrl_f_count: 0,
+    website_click_count: 0,
+    panel_click_count: 0,
+    started_at: Date.now(),
+  };
+  const cleanups = [];
+  const scrollTimers = new WeakMap();
+  const onScroll = (target) => {
+    if (!target) return;
+    if (!scrollTimers.has(target)) summary.scroll_count++;
+    clearTimeout(scrollTimers.get(target));
+    scrollTimers.set(target, setTimeout(() => scrollTimers.delete(target), 500));
+  };
+  const add = (target, event, handler, options) => {
+    if (!target?.addEventListener) return;
+    target.addEventListener(event, handler, options);
+    cleanups.push(() => target.removeEventListener(event, handler, options));
+  };
+  add(stimulusPane, 'scroll', () => onScroll(stimulusPane), { passive: true });
+  add(questionPane, 'scroll', () => onScroll(questionPane), { passive: true });
+  add(stimulusPane, 'click', () => { summary.website_click_count++; }, true);
+  add(questionPane, 'click', () => { summary.panel_click_count++; }, true);
+  add(document, 'keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && String(e.key || '').toLowerCase() === 'f') {
+      summary.ctrl_f_count++;
+    }
+  }, true);
+  taskTelemetry = {
+    task_id: task?.id || '',
+    task_type: task?.taskType || '',
+    summary,
+    addIframe(frame) {
+      let doc;
+      try { doc = frame?.contentDocument; } catch (e) { return; }
+      if (!doc) return;
+      add(doc, 'scroll', () => onScroll(doc), { passive: true });
+      add(doc, 'click', () => { summary.website_click_count++; }, true);
+      add(doc, 'keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && String(e.key || '').toLowerCase() === 'f') {
+          summary.ctrl_f_count++;
+        }
+      }, true);
+    },
+    snapshot() {
+      return {
+        scroll_count: summary.scroll_count,
+        ctrl_f_count: summary.ctrl_f_count,
+        website_click_count: summary.website_click_count,
+        panel_click_count: summary.panel_click_count,
+        active_ms: Math.max(0, Date.now() - summary.started_at),
+      };
+    },
+    stop() {
+      cleanups.splice(0).forEach(fn => {
+        try { fn(); } catch (e) { /* ignore */ }
+      });
+    },
+  };
+}
+
+function taskInteractionSummary() {
+  return taskTelemetry ? taskTelemetry.snapshot() : null;
+}
+
+function stopTaskTelemetry() {
+  if (!taskTelemetry) return;
+  taskTelemetry.stop();
+  taskTelemetry = null;
+}
 
 /**
  * WHICH CONDITION THIS QUESTION IS IN, said out loud at the top of the material.
@@ -145,6 +220,7 @@ async function showTask() {
   if (idx >= queue.length) return finish();
 
   const task = queue[idx];
+  startTaskTelemetry(task);
   const arm = S.taskArm ? S.taskArm(task) : S.conditionLabel(task?.arm || S.state.arm);
   panelMessage('<p class="q-text">Loading the next task…</p>');
   if (task.taskType === 'find') return showFindTask(task);
@@ -257,7 +333,10 @@ async function showFindTask(task) {
   if (page?.html) {
     const frame = document.getElementById('find-page');
     frame.srcdoc = page.html;
-    frame.addEventListener('load', () => applyFindGrounding(frame, canned, arm), { once: true });
+    frame.addEventListener('load', () => {
+      taskTelemetry?.addIframe(frame);
+      applyFindGrounding(frame, canned, arm);
+    }, { once: true });
   }
 
   const cites = parseFindCitations(answer);
@@ -481,6 +560,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
       findSupportingMs: supportStartedAt == null ? null : Math.max(0, Date.now() - supportStartedAt),
       evidenceResponses: picked.map((v, i) => ({ hop: i + 1, prompt: hops[i].prompt, kind: hops[i].kind, ...v })),
       findScores: scoreFindEvidence(picked, groundTruth),
+      interactionSummary: taskInteractionSummary(),
     });
   };
 }
@@ -2837,7 +2917,12 @@ function askPostQuestions(task, record, timings) {
     done.disabled = true;
 
     const row = S.buildResultRow({
-      task, record, timings, confidence: conf.value, helpfulness: help.value, notes: postTaskNotes(),
+      task,
+      record,
+      timings: Object.assign({}, timings, { interactionSummary: taskInteractionSummary() }),
+      confidence: conf.value,
+      helpfulness: help.value,
+      notes: postTaskNotes(),
     });
     S.state.results.push(row);
     S.state.idx++;
@@ -2860,6 +2945,7 @@ function askPostQuestions(task, record, timings) {
 }
 
 function finish() {
+  stopTaskTelemetry();
   const pending = pendingResultCount();
   stimulusPane.innerHTML = '<div class="tv-done">Thank you — that was the last task.</div>';
   questionPane.innerHTML = `

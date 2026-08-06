@@ -115,6 +115,9 @@ create table if not exists public.study_task_results_v2 (
 
   confidence text,
   helpfulness text,
+  -- Passive per-task browser interaction counts, such as scroll sessions, page clicks and Ctrl-F.
+  -- Nullable because older rows were recorded before this telemetry existed.
+  interaction_summary jsonb,
   -- The optional free-text note from the task follow-up. Nullable and unconstrained on purpose: it
   -- is what a participant chose to say, and the client already caps it at 2000 characters.
   notes text,
@@ -125,6 +128,9 @@ create table if not exists public.study_task_results_v2 (
 -- For a database created before the note existed. Safe to re-run.
 alter table public.study_task_results_v2
   add column if not exists notes text;
+
+alter table public.study_task_results_v2
+  add column if not exists interaction_summary jsonb;
 
 create index if not exists idx_str_v2_session_id on public.study_task_results_v2 (session_id);
 create index if not exists idx_str_v2_participant on public.study_task_results_v2 (participant_id);

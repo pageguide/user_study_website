@@ -180,6 +180,7 @@ function buildResultRow({ task, record, timings, confidence, helpfulness, notes 
     question_or_task: record?.goal || task.goal || '',
     confidence: confidence || null,
     helpfulness: helpfulness || null,
+    interaction_summary: timings.interactionSummary || null,
     notes: notes || null,
   };
 }
@@ -242,6 +243,7 @@ function buildFindResultRow({ task, payload, confidence, helpfulness, notes }) {
     question_or_task: task?.question || '',
     confidence: confidence || null,
     helpfulness: helpfulness || null,
+    interaction_summary: payload.interactionSummary || null,
     notes: notes || null,
   };
 }
