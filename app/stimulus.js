@@ -232,10 +232,21 @@ function segmentHasTarget(seg) {
   return milestoneHasShot(seg?.step);
 }
 
+function renderMarkdown(escaped) {
+  return String(escaped || '')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/___([^_]+)___/g, '<strong><em>$1</em></strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+    .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>');
+}
+
 /** Both passes over one piece of prose: underline the linked phrases, then number the markers. */
 function richText(text) {
-  if (!showShots) return esc(text || '');
-  return chipify(linkPhrases(text));
+  if (!showShots) return renderMarkdown(esc(text || ''));
+  return renderMarkdown(chipify(linkPhrases(text)));
 }
 
 /**
