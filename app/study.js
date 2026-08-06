@@ -411,7 +411,15 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
 }
 
 function normalizeEvidenceText(value) {
-  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return cleanEvidenceSentenceText(value).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function cleanEvidenceSentenceText(value) {
+  return String(value || '')
+    .replace(/\[\s*(?:[a-z]+)?\d+\s*\]/gi, ' ')
+    .replace(/^\s*\d+\]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function groundTruthText(hit) {
@@ -746,11 +754,9 @@ function sentencePicksInBlock(doc, block) {
   while (start < full.length) {
     while (start < full.length && /\s/.test(full[start])) start++;
     if (start >= full.length) break;
-    let end = start;
-    while (end < full.length && !/[.!?]/.test(full[end])) end++;
-    if (end < full.length) end++;
+    let end = sentenceEndAfter(full, start);
     while (end > start && /\s/.test(full[end - 1])) end--;
-    const text = full.slice(start, end).replace(/\s+/g, ' ').trim();
+    const text = cleanEvidenceSentenceText(full.slice(start, end));
     if (text) picks.push({ text, range: rangeForTextOffsets(doc, nodes, start, end), start, end });
     start = Math.max(end + 1, start + 1);
   }
@@ -760,17 +766,70 @@ function sentencePicksInBlock(doc, block) {
 function sentencePickAtOffset(doc, nodes, offset) {
   const full = nodes.map(n => n.nodeValue || '').join('');
   if (!full.trim()) return null;
-  let start = Math.max(0, Math.min(offset, full.length));
-  let end = start;
-  while (start > 0 && !/[.!?]\s/.test(full.slice(Math.max(0, start - 2), start))) start--;
-  while (start < full.length && /\s/.test(full[start])) start++;
-  while (end < full.length && !/[.!?]/.test(full[end])) end++;
-  if (end < full.length) end++;
+  const hit = Math.max(0, Math.min(offset, full.length));
+  let start = sentenceStartBefore(full, hit);
+  let end = sentenceEndAfter(full, hit);
+  start = skipLeadingCitationMarkers(full, start);
   while (end > start && /\s/.test(full[end - 1])) end--;
   if (end <= start) return null;
   const range = rangeForTextOffsets(doc, nodes, start, end);
-  const text = full.slice(start, end).replace(/\s+/g, ' ').trim();
+  const text = cleanEvidenceSentenceText(full.slice(start, end));
   return text ? { text, range, start, end } : null;
+}
+
+function sentenceStartBefore(text, offset) {
+  let i = Math.max(0, Math.min(offset, text.length));
+  while (i > 0) {
+    if (isSentenceBoundaryAt(text, i - 1)) return sentenceBoundaryEnd(text, i - 1);
+    i--;
+  }
+  return 0;
+}
+
+function sentenceEndAfter(text, offset) {
+  let i = Math.max(0, Math.min(offset, text.length));
+  while (i < text.length) {
+    if (isSentenceBoundaryAt(text, i)) return sentenceBoundaryEnd(text, i);
+    i++;
+  }
+  return text.length;
+}
+
+function isSentenceBoundaryAt(text, i) {
+  const ch = text[i];
+  if (!/[.!?]/.test(ch)) return false;
+  if (ch === '.' && /\d/.test(text[i - 1] || '') && /\d/.test(text[i + 1] || '')) return false;
+  let j = i + 1;
+  while (j < text.length && /["')\]]/.test(text[j])) j++;
+  while (j < text.length && /\[\s*(?:[a-z]+)?\d+\s*\]/i.test(text.slice(j, j + 12))) {
+    const m = text.slice(j).match(/^\[\s*(?:[a-z]+)?\d+\s*\]/i);
+    if (!m) break;
+    j += m[0].length;
+  }
+  return j >= text.length || /\s/.test(text[j]);
+}
+
+function sentenceBoundaryEnd(text, i) {
+  let j = i + 1;
+  while (j < text.length && /["')\]]/.test(text[j])) j++;
+  while (j < text.length) {
+    const m = text.slice(j).match(/^\[\s*(?:[a-z]+)?\d+\s*\]/i);
+    if (!m) break;
+    j += m[0].length;
+  }
+  while (j < text.length && /\s/.test(text[j])) j++;
+  return j;
+}
+
+function skipLeadingCitationMarkers(text, start) {
+  let i = start;
+  while (i < text.length) {
+    while (i < text.length && /\s/.test(text[i])) i++;
+    const m = text.slice(i).match(/^(?:\[\s*(?:[a-z]+)?\d+\s*\]|\d+\]\s*)/i);
+    if (!m) return i;
+    i += m[0].length;
+  }
+  return i;
 }
 
 function textNodesIn(root) {
