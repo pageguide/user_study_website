@@ -1698,17 +1698,49 @@ function renderMarkdown(escaped) {
  *
  * The non-grounded arm gets nothing. That is the arm.
  */
+function cleanupFindSnapshotObstructions(doc) {
+  if (!doc?.body || doc.getElementById('pg-snapshot-cleanup-style')) return;
+  const style = doc.createElement('style');
+  style.id = 'pg-snapshot-cleanup-style';
+  style.textContent = `
+    html, body { overflow: auto !important; }
+    .pg-hidden-snapshot-obstruction { display: none !important; }`;
+  doc.head?.appendChild(style);
+
+  const win = doc.defaultView;
+  const viewportW = win?.innerWidth || doc.documentElement?.clientWidth || 0;
+  const viewportH = win?.innerHeight || doc.documentElement?.clientHeight || 0;
+  if (!win || !viewportW || !viewportH) return;
+
+  const promoText = /\b(donate|newsletter|subscribe|subscription|support us|support our|sign up)\b/i;
+  const candidates = Array.from(doc.body.querySelectorAll('*'));
+  for (const el of candidates) {
+    if (!(el instanceof win.HTMLElement)) continue;
+    const computed = win.getComputedStyle(el);
+    if (computed.position !== 'fixed' && computed.position !== 'sticky') continue;
+    const text = normText(el.textContent || '');
+    if (!promoText.test(text)) continue;
+    const rect = el.getBoundingClientRect();
+    const largeEnough = rect.width >= viewportW * 0.35 && rect.height >= Math.max(70, viewportH * 0.08);
+    const blocksReadingArea = rect.top >= viewportH * 0.35 || rect.bottom >= viewportH * 0.8;
+    if (largeEnough && blocksReadingArea) {
+      el.classList.add('pg-hidden-snapshot-obstruction');
+    }
+  }
+}
+
 function applyFindGrounding(frame, canned, arm) {
+  let doc;
+  try { doc = frame.contentDocument; } catch (e) { return; }
+  if (!doc?.body) return;
+  cleanupFindSnapshotObstructions(doc);
+
   if (arm === 'nongrounding') return;
   const answer = canned?.answer_display || canned?.answer_raw || '';
   const cites = parseFindCitations(answer);
   const linkedEvidence = linkedFindEvidence(answer, canned?.evidence);
   const hasEvidenceMarks = linkedEvidence.some(hasPageLinkedEvidence);
   if (!cites.length && !hasEvidenceMarks) return;
-
-  let doc;
-  try { doc = frame.contentDocument; } catch (e) { return; }
-  if (!doc?.body) return;
 
   // THE EXTENSION'S OWN STYLING, copied from content/content.css rather than approximated. A
   // participant who saw the live page in the extension and the snapshot here must be looking at the
