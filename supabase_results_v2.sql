@@ -119,6 +119,16 @@ create table if not exists public.study_task_results_v2 (
   -- Passive per-task browser interaction counts, such as scroll sessions, page clicks and Ctrl-F.
   -- Nullable because older rows were recorded before this telemetry existed.
   interaction_summary jsonb,
+  -- The same counts again, flat, under the names study_task_results already uses in the extension
+  -- study, so one query can pool the browser half with the extension half. NULLABLE AND NOT
+  -- DEFAULTED TO ZERO: a row written before this telemetry existed, or one whose instrumentation
+  -- never started, observed nothing — and a 0 there would average in as a participant who sat
+  -- perfectly still rather than as the missing measurement it is.
+  scroll_user_count integer,
+  ctrl_f_count integer,
+  text_select_count integer,
+  click_count integer,
+  mouse_move_px integer,
   -- The optional free-text note from the task follow-up. Nullable and unconstrained on purpose: it
   -- is what a participant chose to say, and the client already caps it at 2000 characters.
   notes text,
@@ -135,6 +145,14 @@ alter table public.study_task_results_v2
 
 alter table public.study_task_results_v2
   add column if not exists task_style text;
+
+-- The behavioural counts, for a database created before them. Safe to re-run.
+alter table public.study_task_results_v2
+  add column if not exists scroll_user_count integer,
+  add column if not exists ctrl_f_count integer,
+  add column if not exists text_select_count integer,
+  add column if not exists click_count integer,
+  add column if not exists mouse_move_px integer;
 
 create index if not exists idx_str_v2_session_id on public.study_task_results_v2 (session_id);
 create index if not exists idx_str_v2_participant on public.study_task_results_v2 (participant_id);

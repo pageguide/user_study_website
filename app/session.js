@@ -128,6 +128,29 @@ function resultKey(task, taskType) {
 }
 
 /**
+ * The behavioural counts as their own columns, lifted out of the interaction summary.
+ *
+ * The jsonb stays — it carries the finer breakdown (the click split, active_ms) and it is where new
+ * measures land first. These five are duplicated flat because they are the ones that get ANALYSED,
+ * under the names the extension's study_task_results already uses: a query over both halves of the
+ * study should not have to know that one of them buried the number inside a jsonb.
+ *
+ * Null rather than 0 when there is no summary at all. A task whose telemetry never started did not
+ * observe a participant sitting still; it observed nothing, and a zero would average in as if it had.
+ */
+function interactionColumns(interactionSummary) {
+  const s = interactionSummary || null;
+  const count = (key) => (s && Number.isFinite(Number(s[key])) ? Math.round(Number(s[key])) : null);
+  return {
+    scroll_user_count: count('scroll_count'),
+    ctrl_f_count: count('ctrl_f_count'),
+    text_select_count: count('text_select_count'),
+    click_count: count('click_count'),
+    mouse_move_px: count('mouse_move_px'),
+  };
+}
+
+/**
  * Build one result row.
  *
  * Build the clean browser result row. Guide scoring still uses the vendored _scoreGuideAnswer so
@@ -182,6 +205,7 @@ function buildResultRow({ task, record, timings, confidence, helpfulness, notes 
     confidence: confidence || null,
     helpfulness: helpfulness || null,
     interaction_summary: timings.interactionSummary || null,
+    ...interactionColumns(timings.interactionSummary),
     notes: notes || null,
   };
 }
@@ -246,6 +270,7 @@ function buildFindResultRow({ task, payload, confidence, helpfulness, notes }) {
     confidence: confidence || null,
     helpfulness: helpfulness || null,
     interaction_summary: payload.interactionSummary || null,
+    ...interactionColumns(payload.interactionSummary),
     notes: notes || null,
   };
 }

@@ -167,7 +167,21 @@ const STUDY_TASK_RESULT_COLUMNS = new Set([
   'score_type_precision', 'score_type_recall', 'score_step_precision', 'score_step_recall',
   'score_step_exact', 'score_no_error_agreement', 'confidence', 'helpfulness', 'notes',
   'interaction_summary',
+  // The behavioural counts, flat, under the same names study_task_results uses in the extension.
+  'scroll_user_count', 'ctrl_f_count', 'text_select_count', 'click_count', 'mouse_move_px',
 ]);
+
+/**
+ * Columns a database may not have yet, dropped one at a time on a schema-cache rejection.
+ *
+ * Ordered newest-first only for legibility; insertStudyResult removes whichever one the error
+ * names. The behavioural counts belong here because the site is deployed independently of the SQL —
+ * losing an entire answer to a missing count column would be the worst of both.
+ */
+const OPTIONAL_RESULT_COLUMNS = [
+  'notes', 'interaction_summary', 'task_style',
+  'scroll_user_count', 'ctrl_f_count', 'text_select_count', 'click_count', 'mouse_move_px',
+];
 
 function normalizeStudyResultRecord(record) {
   const clean = {};
@@ -186,7 +200,7 @@ function normalizeStudyResultRecord(record) {
  */
 async function insertStudyResult(record) {
   const row = normalizeStudyResultRecord(record);
-  const optionalColumns = ['notes', 'interaction_summary', 'task_style'];
+  const optionalColumns = OPTIONAL_RESULT_COLUMNS;
   for (let attempt = 0; attempt <= optionalColumns.length; attempt++) {
     const res = await upsert('study_task_results_v2', row, 'result_key', { detail: true });
     if (res.ok) return true;

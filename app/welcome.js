@@ -947,17 +947,25 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
     });
   });
 
+  // `column` is the flat copy, preferred when present: rows written before the jsonb existed can
+  // still carry the count, and rows written before the columns existed still carry the jsonb.
   const behaviorKeys = [
-    { key: 'scroll_count', label: 'Scrolls' },
-    { key: 'ctrl_f_count', label: 'Ctrl-F uses' },
+    { key: 'scroll_count', column: 'scroll_user_count', label: 'Scrolls' },
+    { key: 'ctrl_f_count', column: 'ctrl_f_count', label: 'Ctrl-F uses' },
+    { key: 'text_select_count', column: 'text_select_count', label: 'Text selections' },
+    { key: 'mouse_move_px', column: 'mouse_move_px', label: 'Mouse travel (px)' },
     { key: 'website_click_count', label: 'Page clicks' },
     { key: 'panel_click_count', label: 'Panel clicks' },
   ];
-  const behaviorCells = behaviorKeys.map(({ key, label }) => ({
+  const behaviorValue = (row, key, column) => {
+    const flat = column ? row?.[column] : null;
+    return flat == null ? row?.interaction_summary?.[key] : flat;
+  };
+  const behaviorCells = behaviorKeys.map(({ key, column, label }) => ({
     key,
     label,
-    grounded: cellFor(conditionRows(rows, 'grounding'), r => r?.interaction_summary?.[key]),
-    nongrounded: cellFor(conditionRows(rows, 'nongrounding'), r => r?.interaction_summary?.[key]),
+    grounded: cellFor(conditionRows(rows, 'grounding'), r => behaviorValue(r, key, column)),
+    nongrounded: cellFor(conditionRows(rows, 'nongrounding'), r => behaviorValue(r, key, column)),
   })).filter(c => c.grounded.n || c.nongrounded.n);
 
   return `<div class="viz-dashboard">

@@ -30,6 +30,10 @@ function startTaskTelemetry(task) {
     ctrl_f_count: 0,
     website_click_count: 0,
     panel_click_count: 0,
+    text_select_count: 0,
+    // Kept as a float and rounded only at snapshot: a slow drag is a long run of sub-pixel steps,
+    // and rounding each one to 0 would report a stationary mouse for a pointer that crossed the page.
+    mouse_move_px: 0,
     started_at: Date.now(),
   };
   const cleanups = [];
@@ -40,6 +44,30 @@ function startTaskTelemetry(task) {
     clearTimeout(scrollTimers.get(target));
     scrollTimers.set(target, setTimeout(() => scrollTimers.delete(target), 500));
   };
+
+  // Distance travelled, tracked PER DOCUMENT. A pointer position inside the snapshot frame and one
+  // in the top document are in different coordinate spaces, so a single last-point would score the
+  // jump between them as real travel every time the pointer crossed the frame border.
+  const lastPoint = new WeakMap();
+  const onMouseMove = (doc, e) => {
+    const prev = lastPoint.get(doc);
+    lastPoint.set(doc, { x: e.clientX, y: e.clientY });
+    if (!prev) return;
+    summary.mouse_move_px += Math.hypot(e.clientX - prev.x, e.clientY - prev.y);
+  };
+
+  // One selection, not one selectionchange. Dragging across a paragraph fires the event on every
+  // character it grows by, so what is counted is the EDGE from nothing selected to something
+  // selected — which is the gesture "the participant highlighted a passage".
+  const selectionOpen = new WeakMap();
+  const onSelectionChange = (doc) => {
+    let text = '';
+    try { text = String(doc.getSelection?.() || '').trim(); } catch (e) { return; }
+    const open = text.length > 0;
+    if (open && selectionOpen.get(doc) !== true) summary.text_select_count++;
+    selectionOpen.set(doc, open);
+  };
+
   const add = (target, event, handler, options) => {
     if (!target?.addEventListener) return;
     target.addEventListener(event, handler, options);
@@ -49,6 +77,8 @@ function startTaskTelemetry(task) {
   add(questionPane, 'scroll', () => onScroll(questionPane), { passive: true });
   add(stimulusPane, 'click', () => { summary.website_click_count++; }, true);
   add(questionPane, 'click', () => { summary.panel_click_count++; }, true);
+  add(document, 'mousemove', (e) => onMouseMove(document, e), { passive: true, capture: true });
+  add(document, 'selectionchange', () => onSelectionChange(document));
   add(document, 'keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && String(e.key || '').toLowerCase() === 'f') {
       summary.ctrl_f_count++;
@@ -64,6 +94,11 @@ function startTaskTelemetry(task) {
       if (!doc) return;
       add(doc, 'scroll', () => onScroll(doc), { passive: true });
       add(doc, 'click', () => { summary.website_click_count++; }, true);
+      // The snapshot is where a Find participant does their reading, so its selections and its
+      // pointer travel are the ones that matter most — an unwired frame would report the hunt as
+      // having happened without a mouse.
+      add(doc, 'mousemove', (e) => onMouseMove(doc, e), { passive: true, capture: true });
+      add(doc, 'selectionchange', () => onSelectionChange(doc));
       add(doc, 'keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && String(e.key || '').toLowerCase() === 'f') {
           summary.ctrl_f_count++;
@@ -76,6 +111,11 @@ function startTaskTelemetry(task) {
         ctrl_f_count: summary.ctrl_f_count,
         website_click_count: summary.website_click_count,
         panel_click_count: summary.panel_click_count,
+        text_select_count: summary.text_select_count,
+        mouse_move_px: Math.round(summary.mouse_move_px),
+        // The flat column's name and meaning, kept here so the jsonb and the columns cannot drift:
+        // every click in the task, either pane, matching study_task_results.click_count.
+        click_count: summary.website_click_count + summary.panel_click_count,
         active_ms: Math.max(0, Date.now() - summary.started_at),
       };
     },
