@@ -2117,8 +2117,23 @@ function renderFindAnswer(answer, arm) {
  * asterisk from every pair and turn **Jupiter** into *Jupiter*.
  *
  * Runs on ALREADY-ESCAPED text, so the only tags in the result are the ones added here.
+ *
+ * ONLY THE PROSE BETWEEN TAGS. renderFindAnswer builds the citation and evidence chips before
+ * calling this, so the input is a mix of text and markup, and the emphasis rules cannot tell them
+ * apart. `_` is legal in an evidence key and common in one, an answer is a single line, and
+ * `[^_\n]+` will run from the underscore inside one tag's attribute to the underscore inside the
+ * next tag's — rewriting data-ev-key="orange_added" to data-ev-key="orange<em>added", a chip that
+ * still shows its number but no longer matches any evidence. Splitting on tags leaves attribute
+ * values alone.
  */
 function renderMarkdown(escaped) {
+  return String(escaped || '')
+    .split(/(<[^>]*>)/)
+    .map((part, i) => (i % 2 ? part : inlineMarkdown(part)))
+    .join('');
+}
+
+function inlineMarkdown(escaped) {
   return String(escaped || '')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')

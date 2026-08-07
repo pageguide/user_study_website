@@ -232,7 +232,25 @@ function segmentHasTarget(seg) {
   return milestoneHasShot(seg?.step);
 }
 
+/**
+ * Markdown, applied ONLY to the prose between tags.
+ *
+ * richText splices the chips and refs in first, so what arrives here is a mix of text and markup —
+ * and the emphasis rules do not know the difference. `_` is legal in an evidence key and common in
+ * one ("orange_added", "business_post_1"), the whole answer is a single line, and `[^_\n]+` will
+ * happily run from the underscore inside one tag's attribute to the underscore inside the next
+ * tag's. The result was `data-ev-key="orange<em>added"`: a chip that still renders its number, but
+ * whose key now matches no evidence, so hovering or clicking it found nothing to show. Splitting on
+ * tags keeps the markers where they belong and leaves attribute values untouched.
+ */
 function renderMarkdown(escaped) {
+  return String(escaped || '')
+    .split(/(<[^>]*>)/)
+    .map((part, i) => (i % 2 ? part : inlineMarkdown(part)))
+    .join('');
+}
+
+function inlineMarkdown(escaped) {
   return String(escaped || '')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
@@ -395,6 +413,14 @@ function bindPreviews() {
       <div class="tv-pop-title">${esc(item.title)}</div>
       <div class="tv-pop-note">${esc(item.note)}</div>
       ${item.url ? `<div class="tv-step-url">${esc(item.url)}</div>` : ''}`;
+    // A data: URI still decodes asynchronously, so at append time the card is a caption with a
+    // zero-height picture above it — about 60px where the finished card is nearer 370. Positioned
+    // once off that measurement, a chip low in the answer got a card placed just below it and then
+    // grown off the bottom of a FIXED-position viewport: the note visible, the screenshot cut away
+    // and unreachable by scrolling. Measure again once the shot has a size.
+    pop.querySelector('.tv-pop-shot')?.addEventListener('load', () => {
+      if (pop.isConnected) position(pop, anchor);
+    });
     pop.addEventListener('mouseenter', cancelHide);
     pop.addEventListener('mouseleave', scheduleHide);
     pop.addEventListener('click', (ev) => {
@@ -423,13 +449,24 @@ function anchorKey(el) {
     : el.dataset.evKey != null ? `k${el.dataset.evKey}` : `e${el.dataset.evStep}`;
 }
 
-/** Sit under the row, clamped to the viewport — the card is taller than most rows have room for. */
+/**
+ * Sit under the row, clamped to the viewport — the card is taller than most rows have room for.
+ *
+ * Below if it fits, above if it fits there instead, and otherwise WHEREVER IT FITS: the last case is
+ * the one that matters, because a chip in the middle of a long answer has room for a 370px card in
+ * neither direction, and the old code fell through to "below" and let the screenshot hang off the
+ * bottom edge. The card is fixed-position, so anything past that edge cannot be scrolled to — it is
+ * simply gone. Pushing the card up to sit flush against the bottom keeps the picture on screen; the
+ * max-height in stimulus.css catches the remaining case where even the whole viewport is too short.
+ */
 function position(pop, anchor) {
   const r = anchor.getBoundingClientRect();
   const box = pop.getBoundingClientRect();
-  const top = (r.bottom + box.height + 12 > window.innerHeight && r.top - box.height - 8 > 0)
-    ? r.top - box.height - 8
-    : r.bottom + 8;
+  const fitsBelow = r.bottom + box.height + 12 <= window.innerHeight;
+  const fitsAbove = r.top - box.height - 8 > 0;
+  const top = fitsBelow ? r.bottom + 8
+    : fitsAbove ? r.top - box.height - 8
+    : window.innerHeight - box.height - 8;
   pop.style.top = `${Math.max(8, top)}px`;
   pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - box.width - 8))}px`;
 }
