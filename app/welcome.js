@@ -90,20 +90,48 @@ function withArm(item, arm, order) {
   return Object.assign({}, item, { arm, assignedOrder: order });
 }
 
+/**
+ * The eight tasks one participant walks, and the order they walk them in.
+ *
+ * WHICH task is in WHICH arm comes from the slot: grounded is drawn at `n`, non-grounded at `n + 1`.
+ * The offset is what stops a participant meeting the same task twice — once with grounding and once
+ * without, where the second encounter would be a memory test rather than a measurement. Rotating `n`
+ * across participants is what puts every task through both arms over the sample.
+ *
+ * WHEN each arm is seen is counterbalanced here, and it did not used to be. This returned all four
+ * grounded tasks and then all four non-grounded ones, which left condition perfectly confounded with
+ * position: every practice effect — a participant getting quicker as the interface stops being new —
+ * and every fatigue effect landed entirely on the non-grounded half. A non-grounded half that came
+ * out slower could not be told apart from a first half that was slower because it came first.
+ *
+ * So the arms INTERLEAVE, a style at a time, and which arm leads each pair alternates by slot. The
+ * interleave evens out the drift within a session; the alternation stops "grounded goes first"
+ * from being true of every participant. The slot is already the counterbalancing handle, so neither
+ * needs any state that is not here.
+ */
 function buildRoundRobinQueue(list, slot) {
   const buckets = styleBuckets(list);
   const missing = missingStyles(buckets);
   if (missing.length) throw new Error(`Missing published study questions for: ${missing.join(', ')}.`);
   const n = Math.max(0, Number(slot) || 0);
-  const grounded = STYLE_ORDER.map((style, i) => {
+  // Kept in step with the condition_order label built by claim_study_assignment
+  // (supabase_results_v2.sql) — the same `slot % 2` rule names the layout there.
+  const arms = n % 2 === 0
+    ? ['grounding', 'nongrounding']
+    : ['nongrounding', 'grounding'];
+
+  const queue = [];
+  STYLE_ORDER.forEach(style => {
     const bucket = buckets[style.id];
-    return withArm(bucket[n % bucket.length], 'grounding', i);
+    const byArm = {
+      grounding: bucket[n % bucket.length],
+      nongrounding: bucket[(n + 1) % bucket.length],
+    };
+    // assignedOrder is the position the participant actually meets it in, so it stays usable as a
+    // covariate for the very order effect the interleave exists to spread.
+    arms.forEach(arm => queue.push(withArm(byArm[arm], arm, queue.length)));
   });
-  const nongrounded = STYLE_ORDER.map((style, i) => {
-    const bucket = buckets[style.id];
-    return withArm(bucket[(n + 1) % bucket.length], 'nongrounding', STYLE_ORDER.length + i);
-  });
-  return grounded.concat(nongrounded);
+  return queue;
 }
 
 window.__studyDebugBuckets = async function __studyDebugBuckets() {
@@ -165,13 +193,25 @@ function adminEsc(value) {
 
 function showAdminPanel() {
   const o = window.StudyAdmin.adminOptions();
+  // THE TABS ARE THE PERMISSION. A narrow password does not merely hide the other tab — the tab
+  // strip is built from what the role may open, and the branch below is chosen from the same list.
+  // That matters because `tab` is remembered in sessionStorage: an earlier full unlock leaves
+  // `tab: 'review'` sitting there, and a hide-only version would drop the next, narrower unlock
+  // straight into the recorder.
+  const allowed = window.StudyAdmin.adminTabs();
+  if (!allowed.length) return showAdminLogin();
+  const tab = allowed.includes(o.tab) ? o.tab : allowed[0];
+  const label = { review: 'Review tasks', viz: 'Visualizations' };
+  const title = allowed.length > 1 ? 'Admin' : label[tab];
+  const warn = tab === 'viz' ? 'read-only — results dashboard' : 'review mode writes nothing';
+
   adminPanel.hidden = false;
   adminPanel.innerHTML = `
-    <div class="admin-title">🔓 Admin <span class="admin-warn">review mode writes nothing</span></div>
-    <div class="admin-tabs" id="admin-tabs">
-      ${[['review', 'Review tasks'], ['viz', 'Visualizations']].map(([id, label]) => `
-        <button class="admin-tab${o.tab === id ? ' admin-tab-on' : ''}" data-admin-tab="${id}">${label}</button>`).join('')}
-    </div>
+    <div class="admin-title">🔓 ${adminEsc(title)} <span class="admin-warn">${warn}</span></div>
+    ${allowed.length > 1 ? `<div class="admin-tabs" id="admin-tabs">
+      ${allowed.map(id => `
+        <button class="admin-tab${tab === id ? ' admin-tab-on' : ''}" data-admin-tab="${id}">${label[id]}</button>`).join('')}
+    </div>` : ''}
     <div id="admin-content"></div>`;
 
   adminPanel.querySelectorAll('[data-admin-tab]').forEach(b => {
@@ -181,7 +221,7 @@ function showAdminPanel() {
     };
   });
 
-  if (o.tab === 'viz') {
+  if (tab === 'viz') {
     showAdminVisualizations();
     return;
   }
@@ -244,7 +284,22 @@ function showAdminReviewControls() {
 
 let adminVizRows = [];
 
+/**
+ * A number, or null if there isn't one. NULL AND '' ARE NOT ZERO.
+ *
+ * `Number(null)` is 0 in JavaScript, and `Number.isFinite(0)` is true, so the obvious version of
+ * this let every unrecorded score into the averages as a zero. It mattered most where nulls are
+ * legitimate: a Guide row on which the participant correctly said "no error" has nothing to
+ * localize, so score_type_recall and score_step_recall are null — and a perfect judgment was being
+ * averaged in as 0% localization. Guide × Text read "0% → 11% (n 8 vs 9)" when the rows that
+ * actually carry the measure say "0% → 20% (n 1 vs 5)": a different number, and an n far below
+ * MIN_CELL_N that the card should be refusing to draw a conclusion from.
+ *
+ * A missing measurement has to leave the average rather than land in it, or "we did not record
+ * this" and "they scored nothing" become the same reading.
+ */
 function num(value) {
+  if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -338,6 +393,33 @@ function answerCorrect(row) {
   return null;
 }
 
+/**
+ * The two timed stages of a task, and the whole of it.
+ *
+ * JUDGE is `answer_multiple_choice_ms` — deciding the answer from what the agent reported.
+ * LOCATE is `find_supporting_answer_ms` — then pointing at what backs it, in the page.
+ *
+ * The split IS the measurement: grounding should help the second far more than the first, and a
+ * single combined duration hides exactly that. app/find_task.js says the same thing from the
+ * recording side, which is why the two are timed apart in the first place.
+ *
+ * BEWARE THE COLUMN CALLED `answer_time_ms`. It is not the answering stage — it is the whole task,
+ * and it duplicates `time_ms` byte for byte on every row. The answering STAGE is
+ * `answer_multiple_choice_ms`. Reading the obvious-looking column would silently report the total
+ * as if it were one half of itself.
+ *
+ * Total is summed from the two stages rather than read off `time_ms`, so it can never disagree with
+ * the parts printed beside it. It is null unless BOTH stages are present: a total missing one of
+ * its halves is just the other half wearing a bigger label.
+ */
+function judgeTime(row) { return num(row?.answer_multiple_choice_ms); }
+function locateTime(row) { return num(row?.find_supporting_answer_ms); }
+function totalTime(row) {
+  const judge = judgeTime(row);
+  const locate = locateTime(row);
+  return judge == null || locate == null ? null : judge + locate;
+}
+
 function evidenceQuality(row) {
   if (row?.task_type === 'find') {
     return avgValues([row.score_evidence_precision, row.score_evidence_recall]);
@@ -398,6 +480,27 @@ const VIZ_STYLE_LABEL = { text: 'Text', visual: 'Visual', unknown: 'Unlabeled' }
 
 function conditionRows(rows, condition) {
   return rows.filter(r => r.condition === condition);
+}
+
+/**
+ * How many PEOPLE are behind a set of rows, counted by distinct session_id.
+ *
+ * The `n` on a card counts ROWS, and rows are not participants: one sitting writes eight of them,
+ * so "n 8 vs 9" can be nine people or it can be two. Both numbers are worth showing and they answer
+ * different questions — n says how much the average rests on, participants says how far it
+ * generalises.
+ *
+ * session_id is the right key because it is one study sitting, which is what a participant is here.
+ * participant_id is not: it is optional and nearly every row carries the default `anon`, so counting
+ * it would report one participant for the whole study. client_run_id is the fallback for a row
+ * written when the assignment RPC was unreachable and no session row exists.
+ */
+function participantCount(rows) {
+  return new Set(
+    (Array.isArray(rows) ? rows : [])
+      .map(r => (r?.session_id != null ? `s${r.session_id}` : (r?.client_run_id ? `r${r.client_run_id}` : null)))
+      .filter(Boolean)
+  ).size;
 }
 
 /* Booleans count as 1/0 so accuracy and duration go through the same path. */
@@ -677,7 +780,9 @@ function facetDelta(rows, metricFn) {
 
 function researchAnswerCard(spec, allRows) {
   const rows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
-  const speed = facetDelta(rows, r => r.find_supporting_answer_ms);
+  const speed = facetDelta(rows, locateTime);
+  const judge = facetDelta(rows, judgeTime);
+  const total = facetDelta(rows, totalTime);
   const accuracy = facetDelta(rows, answerCorrect);
   const localization = facetDelta(rows, evidenceQuality);
   const lead = spec.kind === 'speed' ? speed : localization;
@@ -714,21 +819,36 @@ function researchAnswerCard(spec, allRows) {
             : `It takes ${seconds(Math.abs(speed.delta))} longer to locate.`,
     ].filter(Boolean).join(' ');
 
+  const leadName = spec.kind === 'speed'
+    ? 'locate time (find_supporting_answer_ms)'
+    : 'localization (error-type and step recall)';
+
   const stat = (name, cell, format) => `<div class="viz-answer-stat">
       <span>${adminEsc(name)}</span>
       <b>${adminEsc(format(cell.nongrounded.mean))} → ${adminEsc(format(cell.grounded.mean))}</b>
     </div>`;
 
+  // Rows AND people, because they are different questions and the card was only answering one. The
+  // n is what the headline average rests on; the participant count is how many sittings produced it.
+  const people = participantCount(rows);
   return `<article class="viz-answer viz-answer-${tone}${thin ? ' is-thin' : ''}">
     <header>
       <span class="viz-answer-facet">${adminEsc(spec.label)}</span>
-      <span class="viz-answer-n">n ${lead.nongrounded.n} vs ${lead.grounded.n}</span>
+      <span class="viz-answer-n">n ${lead.nongrounded.n} vs ${lead.grounded.n}
+        · ${people} participant${people === 1 ? '' : 's'}</span>
     </header>
     <p class="viz-answer-q">${adminEsc(spec.question)}</p>
     <strong class="viz-answer-headline">${adminEsc(headline)}</strong>
     <p class="viz-answer-guard">${adminEsc(guard)}</p>
+    <!-- Which number the headline is actually made of. Five figures sit below it and only one of
+         them drives the verdict; leaving that to be inferred is how "62s faster" gets read as the
+         whole task when it is one of its two stages. -->
+    <p class="viz-answer-basis">Verdict above is from <b>${adminEsc(leadName)}</b>${
+      spec.kind === 'speed' ? ', not total time' : ''}.</p>
     <div class="viz-answer-stats">
+      ${stat('Judge time', judge, seconds)}
       ${stat('Locate time', speed, seconds)}
+      ${stat('Total time', total, seconds)}
       ${stat('Accuracy', accuracy, pct)}
       ${stat('Localization', localization, pct)}
     </div>
@@ -749,7 +869,9 @@ function analysisSummary(rows) {
     n_nongrounded: c.nongrounded.n, n_grounded: c.grounded.n });
   return {
     rows_total: rows.length,
-    sessions: new Set(rows.map(r => r.session_id || r.client_run_id || r.participant_id).filter(Boolean)).size,
+    // The same count the cards show. It used to fall back to participant_id, which is `anon` on
+    // nearly every row — so a study with nine sittings could be handed to the model as one person.
+    sessions: participantCount(rows),
     min_rows_per_cell_for_confidence: MIN_CELL_N,
     facets: RESEARCH_QUESTIONS.map(spec => {
       const facet = rows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
@@ -758,8 +880,12 @@ function analysisSummary(rows) {
         question: spec.question,
         leads_on: spec.kind === 'speed' ? 'time to locate the evidence' : 'error-type and step recall',
         rows: facet.length,
-        locate_time_ms: cell(facetDelta(facet, r => r.find_supporting_answer_ms)),
-        judge_time_ms: cell(facetDelta(facet, r => r.answer_multiple_choice_ms)),
+        participants: participantCount(facet),
+        // Named so the model cannot mistake one stage for the task: judge is deciding the answer,
+        // locate is then finding what backs it, total is their sum. The verdict uses locate alone.
+        locate_time_ms: cell(facetDelta(facet, locateTime)),
+        judge_time_ms: cell(facetDelta(facet, judgeTime)),
+        total_time_ms: cell(facetDelta(facet, totalTime)),
         accuracy: cell(facetDelta(facet, answerCorrect)),
         localization: cell(facetDelta(facet, evidenceQuality)),
         confidence_very_or_somewhat: cell(facetDelta(facet, r =>
@@ -785,6 +911,7 @@ function analysisNotes(rows) {
 
 function researchAnswersHtml(rows) {
   const noteCount = analysisNotes(rows).length;
+  const people = participantCount(rows);
   return `<section class="viz-answers">
     <div class="viz-answers-head">
       <div>
@@ -793,6 +920,20 @@ function researchAnswersHtml(rows) {
           <b>faster</b>, with accuracy as the guardrail; Guide asks how well the evidence supports
           checking a run <b>step by step</b>, with time as the guardrail. Every number reads
           non-grounded → grounded.</p>
+        <p class="viz-answers-lead">Every figure is a <b>mean</b> over the matching rows in
+          <code>study_task_results_v2</code>, read live from Supabase. Rows with no value for a
+          measure are left out of its average rather than counted as zero, so each card's
+          <b>n</b> can differ from its row count. Currently
+          <b>${people} participant${people === 1 ? '' : 's'}</b>
+          (distinct <code>session_id</code>) across <b>${rows.length} rows</b>.</p>
+        <p class="viz-answers-lead">A task is timed in two stages, and each card shows both plus
+          their sum. <b>Judge time</b> (<code>answer_multiple_choice_ms</code>) is deciding the
+          answer from what the agent reported; <b>locate time</b>
+          (<code>find_supporting_answer_ms</code>) is then pointing at what backs it, in the page;
+          <b>total time</b> is the two added together. The Find verdicts are judged on
+          <b>locate time only</b> — that is the stage grounding is meant to change, and pooling it
+          with judging dilutes the effect. Do not use the <code>answer_time_ms</code> column for
+          the answering stage: it holds the whole task and duplicates <code>time_ms</code>.</p>
       </div>
       <!-- The cards are computed here and always current; this asks a model to read them out and
            say what they mean, which is the part arithmetic cannot do. -->

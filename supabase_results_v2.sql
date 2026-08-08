@@ -45,7 +45,16 @@ begin
 
   assignment_index := claimed_index;
   assignment_slot := claimed_index;
-  condition_order := 'rr_mixed_g' || assignment_slot::text || '_ng' || (assignment_slot + 1)::text;
+  -- The layout this session was dealt, as a label. `rr_inter` says the arms INTERLEAVE task by task;
+  -- rows written before that change read `rr_mixed` and ran all four grounded tasks first, so the
+  -- prefix is what separates the two designs at analysis time. Pooling them without splitting on it
+  -- puts the order confound the interleave removed back into the numbers.
+  --
+  -- The `% 2` rule is duplicated in buildRoundRobinQueue (app/welcome.js), which is authoritative
+  -- for the order actually shown; this only names it. Change one, change the other.
+  condition_order := 'rr_inter_g' || assignment_slot::text
+    || '_ng' || (assignment_slot + 1)::text
+    || case when assignment_slot % 2 = 0 then '_gfirst' else '_ngfirst' end;
 
   insert into public.study_sessions (
     participant_id,

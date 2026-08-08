@@ -140,6 +140,19 @@ async function insertStudySession(participantId, conditionLabel) {
   return (row && row.id) || null;
 }
 
+/**
+ * The label describing the layout a slot was dealt, for when the RPC did not return one.
+ *
+ * Matches claim_study_assignment (supabase_results_v2.sql) exactly, including the `% 2` rule that
+ * decides which arm leads each pair in buildRoundRobinQueue. A fallback that kept saying `rr_mixed`
+ * would file an interleaved session under the old block-order design — the one distinction the
+ * analysis has to make.
+ */
+function conditionOrderLabel(slot) {
+  const n = Math.max(0, Number(slot) || 0);
+  return `rr_inter_g${n}_ng${n + 1}_${n % 2 === 0 ? 'gfirst' : 'ngfirst'}`;
+}
+
 async function claimStudyAssignment(participantId, assignmentKey = 'default') {
   const rows = await rpc('claim_study_assignment', {
     p_participant_id: participantId,
@@ -151,7 +164,7 @@ async function claimStudyAssignment(participantId, assignmentKey = 'default') {
     sessionId: row.session_id ?? row.id ?? null,
     assignmentIndex: Number(row.assignment_index ?? 0),
     assignmentSlot: Number(row.assignment_slot ?? row.assignment_index ?? 0),
-    conditionOrder: row.condition_order || `rr_mixed_g${Number(row.assignment_slot ?? 0)}_ng${Number(row.assignment_slot ?? 0) + 1}`,
+    conditionOrder: row.condition_order || conditionOrderLabel(row.assignment_slot),
   };
 }
 

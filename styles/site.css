@@ -1699,6 +1699,15 @@ body {
   color: var(--muted);
 }
 
+/* Which figure the verdict rests on. Quiet, but above the stat row rather than inside it — it is a
+   caption for the headline, not a sixth number. */
+.viz-answer-basis {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 .viz-answer-stats {
   display: flex;
   flex-wrap: wrap;

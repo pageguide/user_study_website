@@ -15,18 +15,72 @@
 // tasks to check wording would otherwise leave sixteen rows that look exactly like a real
 // participant who answered impossibly fast, and no column would say otherwise.
 
-const ADMIN_PASSWORD = 'PageGuide2026';
 const ADMIN_KEY = 'pageguide_web_study_admin';
 
-/** Session-scoped, so closing the tab drops it — a shared machine does not stay unlocked. */
-function isAdmin() {
-  try { return sessionStorage.getItem(ADMIN_KEY) === '1'; } catch (e) { return false; }
+/**
+ * The doors, and what each one opens.
+ *
+ * THREE PASSWORDS, NOT THREE PRIVILEGES. Each unlocks a subset of the same panel; none reaches
+ * anything the others could not already read, because the tables behind it are anon-readable to
+ * every visitor anyway. What the split buys is not having to hand out the full password to show
+ * somebody a chart — and, in the other direction, being able to send a reviewer to check task
+ * wording without also handing them the running results, which is the one thing that could colour
+ * how they read a trajectory.
+ *
+ * Kept as one table so a role cannot gain a tab in the password list and lose it in the panel: the
+ * tabs ARE the permission, and welcome.js builds its tab strip straight from this.
+ */
+const ADMIN_DOORS = [
+  { password: 'PageGuide2026', role: 'full', tabs: ['review', 'viz'] },
+  { password: 'visualization', role: 'viz', tabs: ['viz'] },
+  { password: 'review', role: 'review', tabs: ['review'] },
+];
+
+const ROLE_TABS = Object.fromEntries(ADMIN_DOORS.map(d => [d.role, d.tabs]));
+
+/**
+ * Which door was opened: 'full' | 'viz' | 'review' | null.
+ *
+ * Session-scoped, so closing the tab drops it — a shared machine does not stay unlocked. '1' is what
+ * the single-password build wrote, and is read as full: a tab unlocked before this change should not
+ * be silently locked out by it. Anything unrecognised is locked, not guessed at.
+ */
+function adminRole() {
+  try {
+    const raw = sessionStorage.getItem(ADMIN_KEY);
+    if (raw === '1') return 'full';
+    return Object.prototype.hasOwnProperty.call(ROLE_TABS, raw) ? raw : null;
+  } catch (e) {
+    return null;
+  }
 }
 
+function isAdmin() {
+  return adminRole() != null;
+}
+
+/** The panel tabs this role may open, in the order they should appear. */
+function adminTabs() {
+  return ROLE_TABS[adminRole()] || [];
+}
+
+/** The task recorder and the review walkthrough. */
+function canReviewTasks() {
+  return adminTabs().includes('review');
+}
+
+/** The results dashboard. */
+function canViewVisualizations() {
+  return adminTabs().includes('viz');
+}
+
+/** The role granted (truthy), or false. Trimmed, because a pasted password carries a space. */
 function grantAdmin(password) {
-  if (String(password || '') !== ADMIN_PASSWORD) return false;
-  try { sessionStorage.setItem(ADMIN_KEY, '1'); } catch (e) { /* private mode: mode lasts this page */ }
-  return true;
+  const value = String(password || '').trim();
+  const door = ADMIN_DOORS.find(d => d.password === value);
+  if (!door) return false;
+  try { sessionStorage.setItem(ADMIN_KEY, door.role); } catch (e) { /* private mode: mode lasts this page */ }
+  return door.role;
 }
 
 function revokeAdmin() {
@@ -66,6 +120,10 @@ function filterQueueByHalf(queue, half) {
 
 window.StudyAdmin = {
   isAdmin,
+  adminRole,
+  adminTabs,
+  canReviewTasks,
+  canViewVisualizations,
   grantAdmin,
   revokeAdmin,
   adminOptions,
