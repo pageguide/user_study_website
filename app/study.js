@@ -2130,9 +2130,11 @@ function renderFindAnswer(answer, arm) {
     // esc() has already turned the quotes into &quot;, so the pattern matches the escaped form.
     .replace(/\[(\d+):&quot;([\s\S]*?)&quot;\]/g, (m, index, text) => {
       n++;
-      return `<span class="find-cite" data-cite-text="${text}" data-cite-n="${n}"
-        title="Show this on the page"
-        ><span class="citation-text">${text}</span><sup class="citation-index">[${n}]</sup></span>`;
+      // ON ONE LINE, deliberately. renderStudyMarkdown is line-based and joins the lines of a
+      // paragraph with <br>; a newline inside this tag puts that <br> inside it, and its `>` closes
+      // the span early — leaving `title="Show this on the page"` on the page as prose. Same for the
+      // evidence button below. Keep every generated tag that passes through the renderer unbroken.
+      return `<span class="find-cite" data-cite-text="${text}" data-cite-n="${n}" title="Show this on the page"><span class="citation-text">${text}</span><sup class="citation-index">[${n}]</sup></span>`;
     })
     // [ev:key] is SAVED VISUAL EVIDENCE: a crop of the region the claim rests on, taken at record
     // time. Its `note` is a description rather than a quotation, so it cannot be found in the page
@@ -2141,8 +2143,7 @@ function renderFindAnswer(answer, arm) {
     // citation into the page.
     .replace(/\[ev:([^\]]+)\]/g, (m, key) => {
       e++;
-      return `<button type="button" class="find-ev" data-ev-key="${key}"
-        title="Open the saved evidence for this claim">📎<sup class="citation-index">[E${e}]</sup></button>`;
+      return `<button type="button" class="find-ev" data-ev-key="${key}" title="Open the saved evidence for this claim">📎<sup class="citation-index">[E${e}]</sup></button>`;
     });
 
   return renderMarkdown(withChips);
