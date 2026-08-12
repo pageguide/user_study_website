@@ -424,15 +424,7 @@ async function showFindTask(task) {
   // grounded arm would have nothing to show. The snapshot carries its own restrictive CSP and had
   // its scripts stripped at capture, so nothing in it runs.
   if (page?.html) {
-    const frame = document.getElementById('find-page');
-    // Kept so the frame can be rebuilt if it ever ends up somewhere else: see sealSnapshot.
-    frame.__pgSnapshotHtml = page.html;
-    frame.srcdoc = page.html;
-    frame.addEventListener('load', () => {
-      taskTelemetry?.addIframe(frame);
-      applyFindGrounding(frame, canned, arm);
-      sealSnapshot(frame);
-    }, { once: true });
+    mountSnapshot(document.getElementById('find-page'), page.html, canned, arm);
   }
 
   const cites = parseFindCitations(answer);
@@ -793,7 +785,15 @@ function fmtClock(ms) {
 function snapshotDoc(frame) {
   try {
     const doc = frame?.contentDocument;
-    return doc?.body ? doc : null;
+    if (!doc?.body) return null;
+    // SAME-ORIGIN IS NOT ENOUGH, which is what this used to test. Most links in a captured page are
+    // relative, and srcdoc resolves them against THIS site — so a click on one does not go
+    // cross-origin and throw, it lands the frame on the study host's own 404 page, which is
+    // same-origin, has a body, and reads as a perfectly good document. Everything downstream then
+    // believed the snapshot was still there: picking armed, the participant clicked in the page,
+    // and nothing happened — no error, no recovery, and no way on but a reload. Only a document
+    // this file mounted and stamped counts.
+    return doc.documentElement?.dataset?.pgSnapshot === '1' ? doc : null;
   } catch (e) {
     return null;
   }
@@ -839,13 +839,122 @@ function restoreSnapshot(frame, canned, arm) {
   return new Promise((resolve) => {
     const html = frame?.__pgSnapshotHtml;
     if (!frame || !html) return resolve(null);
-    frame.addEventListener('load', () => {
-      applyFindGrounding(frame, canned, arm);
-      sealSnapshot(frame);
-      resolve(snapshotDoc(frame));
-    }, { once: true });
-    frame.srcdoc = html;
+    mountSnapshot(frame, html, canned, arm, () => resolve(snapshotDoc(frame)));
   });
+}
+
+/** How long to keep watching for the snapshot's document before giving up on it. */
+const SNAPSHOT_ADOPT_TIMEOUT_MS = 20000;
+
+/**
+ * Put the snapshot in the frame and TAKE OWNERSHIP OF IT AS SOON AS IT EXISTS.
+ *
+ * NOT on the frame's load event, which is what this used to wait for. A captured page is 5–8MB with
+ * a hundred inlined images, so `load` fires seconds after the parser has already put the page on
+ * screen — and for those seconds the participant could read, scroll and click a page that had not
+ * been sealed, grounded or instrumented yet. Every one of those is now installed on the first
+ * document the frame produces, which is the one the participant is looking at.
+ *
+ * Adoption happens ONCE per mount. The first document with a body of its own is the snapshot
+ * (about:blank has a body too, and it is empty); it is stamped, and snapshotDoc trusts nothing that
+ * is not. `load` is still listened for, because a document that appears only after all its images
+ * are in is one the poll may never have seen.
+ */
+function mountSnapshot(frame, html, canned, arm, onAdopted) {
+  if (!frame) return;
+  // Kept so the frame can be rebuilt if it ever ends up somewhere else: see sealSnapshot.
+  frame.__pgSnapshotHtml = html;
+  frame.__pgAdopted = false;
+  // WHAT IS IN THE FRAME RIGHT NOW IS NOT THE SNAPSHOT. Assigning srcdoc starts a navigation; it
+  // does not finish one, so for the next tick contentDocument is still the document being replaced
+  // — on a restore, the very page the participant got stranded on. Adopting it would stamp the
+  // wreck as the snapshot and leave nothing able to tell the difference.
+  let previousDoc = null;
+  try { previousDoc = frame.contentDocument; } catch (e) { /* already gone cross-origin */ }
+  let settled = false;
+  const finish = (ok) => {
+    if (settled) return;
+    settled = true;
+    frame.removeEventListener('load', onLoad);
+    onAdopted?.(ok);
+  };
+  function onLoad() {
+    if (adoptSnapshot(frame, canned, arm, previousDoc)) finish(true);
+    groundSnapshot(frame, canned, arm);
+  }
+  // One listener per mount: a restore that stacked another one would re-adopt on every later load.
+  if (frame.__pgAdoptListener) frame.removeEventListener('load', frame.__pgAdoptListener);
+  frame.__pgAdoptListener = onLoad;
+  frame.addEventListener('load', onLoad);
+  frame.srcdoc = html;
+
+  const startedAt = Date.now();
+  const poll = () => {
+    const adopted = adoptSnapshot(frame, canned, arm, previousDoc);
+    // The frame is pickable the moment it is adopted, so a caller waiting on a restore is told then
+    // rather than after the last image arrives.
+    if (adopted) finish(true);
+    // TWO MOMENTS, NOT ONE. Sealing wants the FIRST document there is; grounding wants the WHOLE of
+    // it — marking citations against a document still being parsed would highlight only the part
+    // that had arrived, and silently under-ground the arm the study is measuring. So the poll
+    // continues after adoption until the parser is done.
+    if (adopted && groundSnapshot(frame, canned, arm)) return;
+    if (Date.now() - startedAt > SNAPSHOT_ADOPT_TIMEOUT_MS) {
+      // Give up rather than poll forever, and say so: a caller waiting on a restore that will never
+      // land needs to be told, not left holding a button that says "Restoring the page…".
+      finish(false);
+      if (adopted) console.warn('[study] the snapshot never finished loading; it is sealed and '
+        + 'pickable but may not be fully grounded.');
+      return;
+    }
+    setTimeout(poll, 50);
+  };
+  poll();
+}
+
+/**
+ * Claim the document in the frame as the snapshot: stamp it, seal it, instrument it.
+ *
+ * SEALED BEFORE ANYTHING ELSE, and before grounding in particular — see groundSnapshot. The seal is
+ * the part a participant cannot recover from losing, so nothing that is allowed to fail runs first.
+ */
+function adoptSnapshot(frame, canned, arm, previousDoc) {
+  if (!frame || frame.__pgAdopted) return true;
+  let doc;
+  try { doc = frame.contentDocument; } catch (e) { return false; }
+  if (!doc?.body || !doc.body.childElementCount) return false;
+  if (previousDoc && doc === previousDoc) return false;
+
+  frame.__pgAdopted = true;
+  frame.__pgGrounded = false;
+  try { doc.documentElement.dataset.pgSnapshot = '1'; } catch (e) { /* ignore */ }
+  sealSnapshot(frame);
+  taskTelemetry?.addIframe(frame);
+  return true;
+}
+
+/**
+ * Mark the citations, once the document is all there. Returns whether that is done with.
+ *
+ * Grounding walks markup this code did not write and can throw on it. When it did, and this ran
+ * before the seal, the seal was never installed and the page stayed live for the rest of the task —
+ * so it is deliberately the LAST thing to happen to a snapshot and the only one allowed to fail.
+ */
+function groundSnapshot(frame, canned, arm) {
+  if (!frame || frame.__pgGrounded) return true;
+  const doc = snapshotDoc(frame);
+  // PARSED IS ENOUGH — 'interactive', not 'complete'. Every citation is matched against the DOM, and
+  // the DOM is finished at 'interactive'; 'complete' additionally waits for a hundred inlined images
+  // to decode and for whatever remote ones a capture kept to answer, which is a long time to show a
+  // grounded participant an ungrounded page.
+  if (!doc || doc.readyState === 'loading') return false;
+  frame.__pgGrounded = true;
+  try {
+    applyFindGrounding(frame, canned, arm);
+  } catch (e) {
+    console.error('[study] the snapshot could not be grounded; it is still sealed and pickable', e);
+  }
+  return true;
 }
 
 /**
