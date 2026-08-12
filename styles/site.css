@@ -2022,3 +2022,35 @@ body {
   color: var(--muted);
   line-height: 1.4;
 }
+
+/* ── Which side of a pair is which ─────────────────────────────────────────────
+   "14.5 → 11.6" carries no clue about the order, and a reader who guesses wrong inverts every
+   finding on the card. Told apart three ways — position, weight and colour — so it survives being
+   skimmed, printed in greyscale, or read by someone who cannot separate the two hues. */
+.viz-answer-legend {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: .01em;
+  color: var(--muted);
+}
+
+.viz-v-ng {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.viz-v-g {
+  color: var(--accent-dark);
+  font-weight: 800;
+}
+
+.viz-v-arrow {
+  color: rgba(0, 0, 0, .3);
+  font-weight: 500;
+  padding: 0 1px;
+}
+
+/* In the legend the two words carry the same treatment as the numbers they describe, so the key
+   and the data are visibly the same thing rather than two lists to hold in your head. */
+.viz-answer-legend .viz-v-ng,
+.viz-answer-legend .viz-v-g { font-size: 11px; }

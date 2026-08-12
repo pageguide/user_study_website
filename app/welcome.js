@@ -1033,11 +1033,21 @@ function researchAnswerCard(spec, allRows) {
     ? 'locate time (find_supporting_answer_ms)'
     : 'localization (step recall, or a correct “no error” in full)';
 
+  // WHICH SIDE IS WHICH, on every value. "14.5 → 11.6" is unreadable without knowing the order, and
+  // the one sentence explaining it sits several cards above. The two halves are told apart three
+  // ways over — position, weight and colour — plus a legend at the head of the block, because a
+  // reader who guesses wrong here inverts every finding on the card.
   const stat = (name, cell, format, foot) => `<div class="viz-answer-stat">
       <span>${adminEsc(name)}</span>
-      <b>${adminEsc(format(cell.nongrounded.mean))} → ${adminEsc(format(cell.grounded.mean))}</b>
+      <b><span class="viz-v-ng" title="non-grounded">${adminEsc(format(cell.nongrounded.mean))}</span>
+        <span class="viz-v-arrow">→</span>
+        <span class="viz-v-g" title="grounded">${adminEsc(format(cell.grounded.mean))}</span></b>
       ${foot ? `<small>${adminEsc(foot)}</small>` : ''}
     </div>`;
+
+  const readingLegend = `<p class="viz-answer-legend">
+    Each pair reads <span class="viz-v-ng">non-grounded</span>
+    <span class="viz-v-arrow">→</span> <span class="viz-v-g">grounded</span>.</p>`;
 
   // Rows AND people, because they are different questions and the card was only answering one. The
   // n is what the headline average rests on; the participant count is how many sittings produced it.
@@ -1064,6 +1074,7 @@ function researchAnswerCard(spec, allRows) {
          whole task when it is one of its two stages. -->
     <p class="viz-answer-basis">Verdict above is from <b>${adminEsc(leadName)}</b>${
       spec.kind === 'speed' ? ', not total time' : ''}.</p>
+    ${readingLegend}
     <div class="viz-answer-stats">
       ${stat('Judge time', judge, seconds)}
       ${stat('Locate time', speed, seconds)}
