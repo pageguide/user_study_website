@@ -1962,6 +1962,12 @@ body {
   border-top-style: dashed;
 }
 
+/* What they SAID, kept visually apart from what they did: same grid, dotted rule above it. */
+.viz-answer-selfreport {
+  margin-top: 8px;
+  border-top-style: dotted;
+}
+
 /* ── Per-card task selection ───────────────────────────────────────────────── */
 .viz-answer-filtered {
   margin: 0 0 8px;

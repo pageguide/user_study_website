@@ -458,6 +458,45 @@ const BEHAVIOR_METRICS = [
   { key: 'mouse_move_px', column: 'mouse_move_px', label: 'Mouse travel', short: 'mouse travel' },
 ];
 
+/**
+ * The two post-task scales, as numbers: what the participant SAID about a task.
+ *
+ * 4 is the good end of both — very confident, very useful — and 1 the bad end, matching the order
+ * the options are shown in (POST_TASK_CONFIDENCE / POST_TASK_HELPFULNESS, app/study.js). Averaging
+ * these ASSUMES THE STEPS ARE EVEN, which an ordinal scale cannot promise: the distance from "very"
+ * to "somewhat" is not measurably the distance from "not sure" to "mostly guessing". The mean is
+ * printed as x.x/4 rather than as a percentage so it keeps saying which scale it came off, and it
+ * belongs beside the behavioural counts — what someone felt, next to what they did.
+ *
+ * Unanswered is null, not zero. Both questions are required, so a null here is a row written before
+ * the question existed, and scoring it as "no confidence at all" would invent the worst answer on
+ * the scale for a participant who was never asked.
+ */
+const SELF_REPORT_METRICS = [
+  {
+    field: 'confidence',
+    label: 'Confidence',
+    short: 'confidence in their own answer',
+    values: { very: 4, somewhat: 3, notsure: 2, guessed: 1 },
+  },
+  {
+    field: 'helpfulness',
+    label: 'Usefulness',
+    short: 'usefulness of what was shown',
+    values: { very: 4, somewhat: 3, notmuch: 2, notatall: 1 },
+  },
+];
+
+function selfReportValue(row, metric) {
+  const key = String(row?.[metric.field] || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(metric.values, key) ? metric.values[key] : null;
+}
+
+/** A point on a four-point scale, said as one — never as a bare number or a percentage. */
+function scaleOf4(value) {
+  return value == null ? 'No data' : `${value.toFixed(1)}/4`;
+}
+
 function behaviorValue(row, key, column) {
   const flat = column ? num(row?.[column]) : null;
   return flat == null ? num(row?.interaction_summary?.[key]) : flat;
@@ -1093,6 +1132,17 @@ function researchAnswerCard(spec, allRows) {
         return stat(m.label, cell, m.key === 'mouse_move_px' ? pixels : oneDecimal);
       }).join('')}
     </div>
+
+    <!-- WHAT THEY SAID, under what they did. Both scales run 1–4 with 4 as the good end; the arrow
+         reads the same way as every pair above it. Confidence is about their own answer, usefulness
+         about what the condition showed them — so usefulness is the one the arms should move. -->
+    <div class="viz-answer-stats viz-answer-selfreport">
+      ${SELF_REPORT_METRICS.map(m => {
+        const cell = facetDelta(rows, r => selfReportValue(r, m));
+        if (cell.nongrounded.mean == null && cell.grounded.mean == null) return '';
+        return stat(m.label, cell, scaleOf4);
+      }).join('')}
+    </div>
     ${thin ? `<p class="viz-answer-thin">Too early to call — this needs ${MIN_CELL_N}+ rows per
       condition, and the thinner side has ${lead.n}. The direction is shown, not the finding.</p>` : ''}
   </article>`;
@@ -1129,10 +1179,18 @@ function analysisSummary(rows) {
         total_time_ms: cell(facetDelta(facet, totalTime)),
         accuracy: cell(facetDelta(facet, answerCorrect)),
         localization: cell(facetDelta(facet, evidenceQuality)),
-        confidence_very_or_somewhat: cell(facetDelta(facet, r =>
-          (r.confidence === 'very' || r.confidence === 'somewhat') ? 1 : 0)),
-        helpfulness_very_or_somewhat: cell(facetDelta(facet, r =>
-          (r.helpfulness === 'very' || r.helpfulness === 'somewhat') ? 1 : 0)),
+        // Both readings of the same two answers, because they fail differently: the mean uses the
+        // whole scale and assumes its steps are even, the top-two box assumes nothing about spacing
+        // but throws away how far apart the ends are. Named with their scale so neither can be read
+        // as the other.
+        confidence_mean_1_to_4: cell(facetDelta(facet, r => selfReportValue(r, SELF_REPORT_METRICS[0]))),
+        helpfulness_mean_1_to_4: cell(facetDelta(facet, r => selfReportValue(r, SELF_REPORT_METRICS[1]))),
+        // An unanswered scale is null, not a "no" — scoring it 0 would count a question nobody was
+        // asked as a vote against.
+        confidence_very_or_somewhat: cell(facetDelta(facet, r => (r.confidence
+          ? ((r.confidence === 'very' || r.confidence === 'somewhat') ? 1 : 0) : null))),
+        helpfulness_very_or_somewhat: cell(facetDelta(facet, r => (r.helpfulness
+          ? ((r.helpfulness === 'very' || r.helpfulness === 'somewhat') ? 1 : 0) : null))),
       };
     }),
   };
