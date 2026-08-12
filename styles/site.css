@@ -1727,6 +1727,135 @@ body {
 
 .viz-answer-stat b { font-size: 13px; }
 
+/* ── Trajectory editor ─────────────────────────────────────────────────────── */
+.edit-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 8px 16px; margin: 14px 0 4px;
+}
+
+.edit-live { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+
+.edit-steps { margin: 10px 0 4px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+
+.edit-step {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+}
+
+/* A step the ground truth blames, marked in form as well as colour. */
+.edit-step.is-blamed { border-color: var(--bad); background: rgba(190, 60, 50, .06); }
+
+.edit-step-n { min-width: 22px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
+.edit-step-text { flex: 1; font-size: 13.5px; }
+
+.edit-step-flag {
+  margin-left: 8px; padding: 1px 6px; border-radius: 999px;
+  background: var(--bad); color: #fff; font-size: 10.5px; font-style: normal; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+
+.edit-step-noshot { background: var(--muted); }
+
+/* The write-a-step form, sitting in the gap it will insert into. */
+.edit-slot { list-style: none; }
+
+.edit-new {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 4px 0; padding: 12px;
+  border: 1px dashed var(--accent); border-radius: 8px;
+  background: rgba(120, 87, 255, .04);
+}
+
+/* The screenshot this step already has, so "replace" is a choice made with both in view. */
+.edit-thumb {
+  display: block; max-width: 340px; width: 100%;
+  border: 1px solid var(--line); border-radius: 6px;
+}
+
+.edit-new-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.edit-new-row input[type="file"] { flex: 1; min-width: 180px; font-size: 12.5px; }
+.edit-new-note { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+
+/* ── Answer + evidence editing ─────────────────────────────────────────────── */
+.edit-answer { min-height: 120px; font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 13px; line-height: 1.6; }
+.edit-answer-count { font-size: 12px; color: var(--muted); }
+
+.edit-preview {
+  padding: 12px 14px; margin-bottom: 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card, #fff);
+  font-size: 14px; line-height: 1.65;
+}
+
+/* The preview's chip mirrors the stimulus chip, so the numbering is checked against what ships. */
+.edit-preview .tv-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; margin: 0 2px; padding: 0 5px; vertical-align: 1px;
+  background: rgba(120, 87, 255, .12); border: 1px solid rgba(120, 87, 255, .35);
+  border-radius: 6px; color: #4a2fc0; font: 700 11px/1 inherit;
+}
+
+.edit-ev-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+
+.edit-ev {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+}
+
+.edit-ev-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.edit-ev-head code { font-size: 12.5px; font-weight: 700; }
+.edit-ev-head .edit-ev-del { margin-left: auto; }
+
+.edit-ev-flag {
+  padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase;
+  background: rgba(22, 143, 90, .14); color: var(--ok);
+}
+
+.edit-ev-flag.is-unused { background: rgba(190, 60, 50, .12); color: var(--bad); }
+.edit-ev-step { font-size: 11.5px; color: var(--muted); }
+
+.edit-reset-panel {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-top: 10px; padding: 12px;
+  border: 1px dashed var(--bad); border-radius: 8px;
+  background: rgba(190, 60, 50, .04);
+}
+
+.edit-errors { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.edit-error-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.edit-error-row span { flex: 1; }
+.edit-error-steps { max-width: 150px; }
+
+.edit-problem {
+  margin: 10px 0 0; padding: 8px 10px; border-radius: 8px;
+  background: rgba(190, 60, 50, .08); color: var(--bad); font-size: 12.5px; line-height: 1.5;
+}
+
+/* Provenance for the whole pane: what was read, and when. */
+.viz-freshness {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The count behind a rate. Quieter than the rate it qualifies — it is evidence for that number,
+   not a number of its own. */
+.viz-answer-stat small {
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .viz-answer-thin {
   margin: 10px 0 0;
   font-size: 11.5px;
@@ -1816,4 +1945,80 @@ body {
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--muted);
+}
+
+/* The editor preview renders through the same module as the stimulus, so it needs the same list
+   treatment or the preview would lie about spacing. */
+.edit-preview ul,
+.edit-preview ol { margin: 6px 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
+.edit-preview li { line-height: 1.55; }
+.edit-preview p { margin: 0 0 8px; }
+.edit-preview p:last-child { margin-bottom: 0; }
+
+/* The behavioural row, separated from the outcome measures above it — these describe HOW the task
+   was worked, not how well, and reading them as a second kind of score would be a mistake. */
+.viz-answer-behaviour {
+  margin-top: 8px;
+  border-top-style: dashed;
+}
+
+/* ── Per-card task selection ───────────────────────────────────────────────── */
+.viz-answer-filtered {
+  margin: 0 0 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(234, 179, 8, .12);
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, .72);
+}
+
+.viz-task-reset {
+  border: 0; background: none; padding: 0; margin-left: 4px;
+  font: inherit; font-weight: 700; color: var(--accent-dark);
+  text-decoration: underline; cursor: pointer;
+}
+
+.viz-task-picker { margin: 0 0 10px; }
+
+.viz-task-picker > summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  color: var(--muted);
+}
+
+.viz-task-picker[open] > summary { margin-bottom: 6px; }
+
+.viz-task-list { display: flex; flex-direction: column; gap: 3px; }
+
+.viz-task-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.viz-task-row:hover { background: rgba(120, 87, 255, .06); }
+.viz-task-row code { font-size: 11.5px; font-weight: 700; }
+.viz-task-row input { accent-color: var(--accent); }
+
+.viz-task-n {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The question wraps onto its own row rather than truncating mid-word in a narrow card. */
+.viz-task-q {
+  grid-column: 2 / -1;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.4;
 }

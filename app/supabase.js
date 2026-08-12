@@ -26,9 +26,18 @@ function headers(prefer) {
   return h;
 }
 
+/**
+ * One read. NEVER FROM THE BROWSER CACHE.
+ *
+ * `cache: 'no-store'` because every GET here asks "what is in the table right now": the results a
+ * researcher is watching accumulate, and the stimuli they may have just republished. PostgREST sets
+ * no validators, which leaves the response open to heuristic caching — so reopening the dashboard
+ * could redraw the same numbers from memory and look exactly like a study where nobody had run a
+ * task since. A stale answer to that question is worse than a slow one.
+ */
 async function get(path) {
   if (!supabaseConfigured()) throw new Error('Supabase is not configured — copy app/config.example.js to app/config.js.');
-  const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/${path}`, { headers: headers() });
+  const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/${path}`, { headers: headers(), cache: 'no-store' });
   if (!res.ok) {
     throw new Error(`Supabase ${res.status} on ${path}: ${await res.text().catch(() => '')}`);
   }
@@ -231,9 +240,133 @@ async function insertStudyResult(record) {
   return null;
 }
 
-async function listStudyResults() {
-  const rows = await get('study_task_results_v2?select=*&order=created_at.desc&limit=1000');
+/**
+ * Every result row, newest first.
+ *
+ * The cap is high enough not to bind — 8 rows per participant puts 20000 past two thousand
+ * sittings — but it is still a cap, and a silent one would mean the dashboard quietly stops
+ * including the newest work. So say so if we ever come back exactly full.
+ */
+const STUDY_RESULT_LIMIT = 20000;
+
+/**
+ * Every trajectory the editor can open, published or not.
+ *
+ * listStudyTrajectories is filtered to `in_study` because that is the participant queue. This one
+ * is not: a trajectory being prepared has `in_study = false` precisely so it stays out of the
+ * rotation until its errors are annotated, and that is exactly when it needs editing.
+ */
+async function listAllStudyTrajectories() {
+  const rows = await get('study_guide_trajectories?select=id,goal,title,condition,in_study,ground_truth'
+    + '&order=captured_at.desc');
   return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Write an edited trajectory back.
+ *
+ * PATCH by id, and only the columns handed in — a trajectory row carries megabytes of screenshots,
+ * and a full-row write would put all of them back on the wire to change one step number.
+ *
+ * `return=representation` IS THE POINT, not a convenience. anon may SELECT this table but has no
+ * UPDATE policy, so a write matches zero rows — and PostgREST answers that with **204, exactly the
+ * same as success**. Asked for `return=minimal`, this function reported "Saved" over a table that
+ * had not changed, which is the worst failure a save button has: the edit is gone and the screen
+ * says it is not. Counting the returned rows is the only way to tell the two apart.
+ *
+ * Falling back to the loopback helper when the row count is zero mirrors
+ * updateCannedResponseGrounding: the stimuli are deliberately not anon-writable — a study whose
+ * material any visitor could rewrite is not a study — so a real save goes through the process that
+ * holds the secret key.
+ */
+async function updateStudyTrajectory(id, patch) {
+  if (!supabaseConfigured()) throw new Error('Supabase is not configured.');
+  try {
+    const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/study_guide_trajectories`
+      + `?id=eq.${encodeURIComponent(id)}&select=id`, {
+      method: 'PATCH',
+      headers: headers('return=representation'),
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const rows = await res.json().catch(() => []);
+      if (Array.isArray(rows) && rows.length) return true;
+      throw new Error('Supabase accepted the request but updated no rows — RLS blocked the write.');
+    }
+    throw new Error(await res.text().catch(() => `Supabase update failed (${res.status})`));
+  } catch (e) {
+    return updateTrajectoryViaAdminHelper(id, patch, e);
+  }
+}
+
+async function updateTrajectoryViaAdminHelper(id, patch, originalError) {
+  let token = '';
+  try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
+  if (!token) {
+    token = (window.prompt('Editing a trajectory needs the local publish helper.\n\n'
+      + 'Run `node scripts/publish.mjs --serve` and paste the admin save token it prints:') || '').trim();
+    if (token) {
+      try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
+    }
+  }
+  if (!token) throw originalError;
+
+  let res;
+  try {
+    res = await fetch('http://127.0.0.1:8790/admin/trajectory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
+      body: JSON.stringify({ id, patch }),
+    });
+  } catch (e) {
+    throw new Error('Could not reach the publish helper on 127.0.0.1:8790. '
+      + 'Start it with `node scripts/publish.mjs --serve`, then save again.');
+  }
+  if (res.ok) return true;
+  if (res.status === 401 || res.status === 403) {
+    try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
+  }
+  const body = await res.text().catch(() => '');
+  throw new Error(body || originalError?.message || `admin helper returned ${res.status}`);
+}
+
+/**
+ * How many pictures each task's material holds, keyed by task id.
+ *
+ * COUNTED ONCE AND STORED, never derived here. A Find page is 3–8 MB of saved HTML; counting its
+ * <img> tags in the dashboard would mean pulling fifty megabytes to print one average. The counts
+ * are written by scripts/publish.mjs --count-images and read back as two small integers.
+ *
+ * Missing columns are not an error: the site deploys independently of the SQL, and a dashboard that
+ * refused to draw because one optional number was absent would be worse than one that omits it.
+ */
+async function listTaskImageCounts() {
+  const out = new Map();
+  const add = (rows, idKey) => (Array.isArray(rows) ? rows : []).forEach(r => {
+    const n = Number(r?.image_count);
+    if (r?.[idKey] && Number.isFinite(n)) out.set(String(r[idKey]), n);
+  });
+  try {
+    add(await get('study_task_pages?select=task_id,image_count'), 'task_id');
+  } catch (e) {
+    console.info('[study] no image_count on study_task_pages yet — run the SQL to enable it.');
+  }
+  try {
+    add(await get('study_guide_trajectories?select=id,image_count&in_study=is.true'), 'id');
+  } catch (e) {
+    console.info('[study] no image_count on study_guide_trajectories yet.');
+  }
+  return out;
+}
+
+async function listStudyResults() {
+  const rows = await get(`study_task_results_v2?select=*&order=created_at.desc&limit=${STUDY_RESULT_LIMIT}`);
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.length >= STUDY_RESULT_LIMIT) {
+    console.warn(`[study] result fetch hit the ${STUDY_RESULT_LIMIT}-row cap — the dashboard is not `
+      + 'showing every row. Raise STUDY_RESULT_LIMIT in app/supabase.js or start paginating.');
+  }
+  return list;
 }
 
 async function updateCannedResponseGrounding(taskId, condition, patch) {
@@ -382,7 +515,9 @@ window.StudyDB = {
   requestAnalysis,
   supabaseConfigured,
   listStudyTrajectories,
+  listAllStudyTrajectories,
   getStudyTrajectory,
+  updateStudyTrajectory,
   listStudyTasks,
   getCannedResponse,
   getStudyGroundTruth,
@@ -391,4 +526,5 @@ window.StudyDB = {
   insertStudySession,
   insertStudyResult,
   listStudyResults,
+  listTaskImageCounts,
 };

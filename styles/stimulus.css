@@ -456,3 +456,23 @@ body {
   font-size: 13px;
   color: rgba(0, 0, 0, 0.7);
 }
+
+/* Lists in an agent answer. An answer that was written as a numbered list has to READ as one —
+   collapsed into a paragraph, "1. … 2. … 3." becomes a wall of prose with digits in it, and the
+   participant is asked to judge a claim they now have to parse first. */
+.tv-answer ul,
+.tv-answer ol,
+.tv-trail-summary ul,
+.tv-trail-summary ol {
+  margin: 6px 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tv-answer li,
+.tv-trail-summary li { line-height: 1.55; }
+
+.tv-answer p { margin: 0 0 8px; }
+.tv-answer p:last-child { margin-bottom: 0; }

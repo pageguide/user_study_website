@@ -2148,40 +2148,9 @@ function renderFindAnswer(answer, arm) {
   return renderMarkdown(withChips);
 }
 
-/**
- * The markdown an answer is written in, as the panel renders it.
- *
- * An agent's answer contains **bold** — "the planet name … is **Jupiter**" — and shown raw those
- * asterisks are visible noise in the middle of the sentence a participant is being asked to judge.
- * Bold first, then single-asterisk italics, in that order: doing italics first would eat one
- * asterisk from every pair and turn **Jupiter** into *Jupiter*.
- *
- * Runs on ALREADY-ESCAPED text, so the only tags in the result are the ones added here.
- *
- * ONLY THE PROSE BETWEEN TAGS. renderFindAnswer builds the citation and evidence chips before
- * calling this, so the input is a mix of text and markup, and the emphasis rules cannot tell them
- * apart. `_` is legal in an evidence key and common in one, an answer is a single line, and
- * `[^_\n]+` will run from the underscore inside one tag's attribute to the underscore inside the
- * next tag's — rewriting data-ev-key="orange_added" to data-ev-key="orange<em>added", a chip that
- * still shows its number but no longer matches any evidence. Splitting on tags leaves attribute
- * values alone.
- */
+/** The shared renderer (app/markdown.js) — one renderer for the stimulus, Find and the editor. */
 function renderMarkdown(escaped) {
-  return String(escaped || '')
-    .split(/(<[^>]*>)/)
-    .map((part, i) => (i % 2 ? part : inlineMarkdown(part)))
-    .join('');
-}
-
-function inlineMarkdown(escaped) {
-  return String(escaped || '')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/___([^_]+)___/g, '<strong><em>$1</em></strong>')
-    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
-    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
-    .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>');
+  return window.StudyMarkdown.render(escaped);
 }
 
 /**
@@ -3196,10 +3165,21 @@ function bindAdminNav() {
   if (quit) quit.onclick = () => { S.clearReview(); location.href = 'index.html'; };
 }
 
+/**
+ * What a task is called in the jump list.
+ *
+ * THE QUESTION, not just the id. A Find task's id carries a hint of its content ("MUFC-V1-TEXT"),
+ * but a guide id is a timestamp and a random suffix — `gv2-ed05972e-i5fi3b` says nothing about which
+ * run it is, so finding a particular task meant opening them one at a time. The goal is the thing a
+ * reviewer is actually looking for, so it goes in the label; the id stays because it is what the
+ * editor and the database call it.
+ */
 function adminTaskLabel(task, i, total) {
   const id = task?.id || `Task ${i + 1}`;
   const type = task?.taskType === 'find' ? 'Find' : 'Guide';
-  return `${i + 1}/${total} · ${id} · ${type}`;
+  const question = String(task?.question || task?.goal || task?.title || '').replace(/\s+/g, ' ').trim();
+  const short = question.length > 70 ? `${question.slice(0, 69)}…` : question;
+  return `${i + 1}/${total} · ${type} · ${id}${short ? ` — ${short}` : ''}`;
 }
 
 /**

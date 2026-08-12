@@ -298,6 +298,47 @@ async function updateCannedResponse(env, payload) {
   return { status: 200, body: { ok: true, updated: rows[0] } };
 }
 
+/**
+ * Save an edited trajectory, with the key that is allowed to.
+ *
+ * The site's editor cannot write this table — anon may read the stimuli and nothing else, on
+ * purpose — so it hands the patch here. Only the columns the editor actually edits are accepted:
+ * a request that could set any column would let the browser rewrite ids, conditions or capture
+ * times through a loopback port.
+ */
+const TRAJECTORY_PATCH_COLUMNS = ['arms', 'ground_truth', 'in_study', 'goal', 'title', 'condition'];
+
+async function updateTrajectory(env, payload) {
+  const id = String(payload?.id || '').trim();
+  if (!id) return { status: 400, body: { error: 'No trajectory id given.' } };
+  const patch = {};
+  TRAJECTORY_PATCH_COLUMNS.forEach(k => {
+    if (Object.prototype.hasOwnProperty.call(payload?.patch || {}, k)) patch[k] = payload.patch[k];
+  });
+  if (!Object.keys(patch).length) {
+    return { status: 400, body: { error: 'Nothing to update.' } };
+  }
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/study_guide_trajectories`
+    + `?id=eq.${encodeURIComponent(id)}&select=id,in_study`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: env.SUPABASE_SECRET_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SECRET_KEY}`,
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    return { status: res.status, body: { error: await res.text().catch(() => '') } };
+  }
+  const rows = await res.json().catch(() => []);
+  if (!Array.isArray(rows) || !rows.length) {
+    return { status: 404, body: { error: `No trajectory matched ${id}` } };
+  }
+  return { status: 200, body: { ok: true, updated: rows[0] } };
+}
+
 // ── The analysis endpoint ────────────────────────────────────────────────────────────────────────
 // WHY THIS LIVES HERE AND NOT IN THE BROWSER. An LLM key is a spending credential. app/config.js is
 // served to every participant, so anything in it is public — the same reason the Supabase secret key
@@ -452,6 +493,54 @@ if (args[0] === '--apply-review-patch') {
   process.exit(0);
 }
 
+/**
+ * Count the pictures in every task's material and store the number.
+ *
+ * Runs here rather than in the dashboard because the material is huge and the answer never changes:
+ * a Find page is megabytes of saved HTML, a guide run is a dozen base64 screenshots, and the count
+ * is a property of the task, not of any participant. Counting it once turns a 50 MB question into
+ * two integers per row.
+ *
+ * An <img> with no src, or one sized 1×1, is not counted — a tracking pixel is not something a
+ * participant can look at, and including it would make a page look richer than it reads.
+ */
+async function countImages(env) {
+  const H = {
+    'Content-Type': 'application/json',
+    apikey: env.SUPABASE_SECRET_KEY,
+    Authorization: `Bearer ${env.SUPABASE_SECRET_KEY}`,
+  };
+  const get = async (p) => (await fetch(`${env.SUPABASE_URL}/rest/v1/${p}`, { headers: H })).json();
+  const patch = async (p, body) => fetch(`${env.SUPABASE_URL}/rest/v1/${p}`, {
+    method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(body),
+  });
+
+  const pages = await get('study_task_pages?select=task_id');
+  for (const { task_id: id } of pages) {
+    const [row] = await get(`study_task_pages?select=html&task_id=eq.${encodeURIComponent(id)}`);
+    const tags = String(row?.html || '').match(/<img\b[^>]*>/gi) || [];
+    const real = tags.filter(t => /\bsrc\s*=\s*["']?\S/i.test(t) && !/\b(width|height)\s*=\s*["']?[01]["']?[\s>]/i.test(t));
+    await patch(`study_task_pages?task_id=eq.${encodeURIComponent(id)}`, { image_count: real.length });
+    console.log(`  ${id}: ${real.length} images`);
+  }
+
+  const trajectories = await get('study_guide_trajectories?select=id');
+  for (const { id } of trajectories) {
+    const [row] = await get(`study_guide_trajectories?select=arms&id=eq.${encodeURIComponent(id)}`);
+    const g = row?.arms?.grounding || {};
+    const steps = (g.steps || []).filter(s => s?.screenshot).length;
+    const evidence = (g.answer_evidence || []).filter(e => e?.screenshot).length;
+    await patch(`study_guide_trajectories?id=eq.${encodeURIComponent(id)}`, { image_count: steps + evidence });
+    console.log(`  ${id}: ${steps} step shots + ${evidence} evidence = ${steps + evidence}`);
+  }
+  console.log('✓ image counts written');
+}
+
+if (args[0] === '--count-images') {
+  await countImages(env);
+  process.exit(0);
+}
+
 if (args[0] === '--serve') {
   // The extension cannot hold the secret key, so it posts the bundle here instead. Bound to
   // 127.0.0.1: this endpoint uploads with a privileged key and has no business being reachable from
@@ -485,6 +574,32 @@ if (args[0] === '--serve') {
         }
         console.log(`→ analysis requested (${payload?.notes?.length || 0} notes included)`);
         const out = await runAnalysis(env, payload);
+        if (out.status !== 200) console.error(`  ✗ ${out.body.error}`);
+        res.writeHead(out.status, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(out.body));
+      });
+      return;
+    }
+    if (req.method === 'POST' && req.url.startsWith('/admin/trajectory')) {
+      if (!tokenMatches(req.headers['x-pageguide-admin-token'])) {
+        res.writeHead(403, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Bad or missing admin save token.' }));
+        return;
+      }
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', async () => {
+        let payload;
+        try {
+          payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch (e) {
+          res.writeHead(400, { ...cors, 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'The request was not valid JSON.' }));
+          return;
+        }
+        const steps = payload?.patch?.arms?.grounding?.steps?.length;
+        console.log(`→ trajectory ${payload?.id} (${steps == null ? '?' : steps} steps)`);
+        const out = await updateTrajectory(env, payload);
         if (out.status !== 200) console.error(`  ✗ ${out.body.error}`);
         res.writeHead(out.status, { ...cors, 'Content-Type': 'application/json' });
         res.end(JSON.stringify(out.body));

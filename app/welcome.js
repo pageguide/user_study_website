@@ -201,7 +201,7 @@ function showAdminPanel() {
   const allowed = window.StudyAdmin.adminTabs();
   if (!allowed.length) return showAdminLogin();
   const tab = allowed.includes(o.tab) ? o.tab : allowed[0];
-  const label = { review: 'Review tasks', viz: 'Visualizations' };
+  const label = { review: 'Review tasks', viz: 'Visualizations', edit: 'Edit trajectory' };
   const title = allowed.length > 1 ? 'Admin' : label[tab];
   const warn = tab === 'viz' ? 'read-only — results dashboard' : 'review mode writes nothing';
 
@@ -223,6 +223,10 @@ function showAdminPanel() {
 
   if (tab === 'viz') {
     showAdminVisualizations();
+    return;
+  }
+  if (tab === 'edit') {
+    showTrajectoryEditor();
     return;
   }
   showAdminReviewControls();
@@ -283,6 +287,29 @@ function showAdminReviewControls() {
 }
 
 let adminVizRows = [];
+/** When adminVizRows last came off the wire, so the pane can prove it is current. */
+let vizLoadedAt = null;
+/** task_id → how many pictures its material holds. Empty until the image_count columns exist. */
+let taskImageCounts = new Map();
+
+/**
+ * Which tasks each card counts, when the answer should not rest on all of them.
+ *
+ * Keyed by facet; a facet absent from here uses every task it has, which is the default and the
+ * honest one. This exists because a task can be broken in a way the numbers cannot see — a
+ * mis-annotated ground truth, a question two participants read differently, a page that changed
+ * under the study — and the choice to drop it belongs to the researcher, not to a heuristic.
+ *
+ * Held in memory only. A filter that survived a reload would silently keep excluding a task long
+ * after the reason was forgotten, and every number on the card would quietly be about a different
+ * study than the one it names. The banner on the card says when one is active for the same reason.
+ */
+const facetTaskFilters = new Map();   // facetKey -> Set(task_id)
+const facetPickerOpen = new Set();
+
+function facetKey(spec) {
+  return `${spec.taskType}_${spec.style}`;
+}
 
 /**
  * A number, or null if there isn't one. NULL AND '' ARE NOT ZERO.
@@ -412,6 +439,36 @@ function answerCorrect(row) {
  * the parts printed beside it. It is null unless BOTH stages are present: a total missing one of
  * its halves is just the other half wearing a bigger label.
  */
+/**
+ * The passive traces of HOW a task was worked, not just how long it took.
+ *
+ * Time says a task was hard; these say what the participant did about it. Scrolling and Ctrl-F are
+ * hunting — a reader who cannot see where the answer is goes looking for it — so grounding should
+ * bring them DOWN even where it does not move the clock. That makes them the measure most likely to
+ * show an effect the timings are too noisy to carry.
+ *
+ * `column` is the flat copy, preferred when present; the jsonb is the fallback for rows written
+ * before those columns existed. Reading only one of the two would quietly drop half the study.
+ */
+const BEHAVIOR_METRICS = [
+  { key: 'scroll_count', column: 'scroll_user_count', label: 'Scrolls', short: 'scrolls' },
+  { key: 'ctrl_f_count', column: 'ctrl_f_count', label: 'Ctrl-F', short: 'Ctrl-F uses' },
+  { key: 'text_select_count', column: 'text_select_count', label: 'Selections', short: 'text selections' },
+  { key: 'click_count', column: 'click_count', label: 'Clicks', short: 'clicks' },
+  { key: 'mouse_move_px', column: 'mouse_move_px', label: 'Mouse travel', short: 'mouse travel' },
+];
+
+function behaviorValue(row, key, column) {
+  const flat = column ? num(row?.[column]) : null;
+  return flat == null ? num(row?.interaction_summary?.[key]) : flat;
+}
+
+/** Pixels of pointer travel, in a unit a person can hold in their head. */
+function pixels(value) {
+  if (value == null) return 'No data';
+  return value >= 10000 ? `${(value / 1000).toFixed(1)}k px` : `${Math.round(value)} px`;
+}
+
 function judgeTime(row) { return num(row?.answer_multiple_choice_ms); }
 function locateTime(row) { return num(row?.find_supporting_answer_ms); }
 function totalTime(row) {
@@ -420,12 +477,33 @@ function totalTime(row) {
   return judge == null || locate == null ? null : judge + locate;
 }
 
+/**
+ * Did the participant place the failure correctly — INCLUDING placing it nowhere?
+ *
+ * Find is precision and recall over the passages they picked. Guide is error-type and step recall
+ * over the steps they blamed — except that recall has no denominator on a run that contains no
+ * error, and three of the five Guide × Text runs contain none. Scored on recall alone, those rows
+ * drop out, and the facet was deciding a verdict from 2 rows against 7.
+ *
+ * So a run with nothing to localize is scored on the judgment it DOES afford: saying "no error"
+ * when there was none is a correct placement and counts in full; claiming one that was not there is
+ * a wrong placement and counts as zero. That is what `no_error_agreement` already records, and it
+ * brings every guide row into the average.
+ *
+ * KNOW WHAT THIS POOLS. A binary "correctly saw nothing wrong" and a partial step recall are not
+ * the same difficulty, so a facet whose runs are mostly error-free scores high on the easy half.
+ * That is only safe while both arms draw the same mix of runs — and on Guide × Text they currently
+ * do not. Read that facet with the task pool in view, not as a clean arm comparison.
+ */
 function evidenceQuality(row) {
   if (row?.task_type === 'find') {
     return avgValues([row.score_evidence_precision, row.score_evidence_recall]);
   }
   if (row?.task_type === 'guide') {
-    return avgValues([row.score_type_recall, row.score_step_recall]);
+    const recall = avgValues([row.score_type_recall, row.score_step_recall]);
+    if (recall != null) return recall;
+    const agreed = row.score_no_error_agreement;
+    return agreed == null ? null : (agreed ? 1 : 0);
   }
   return null;
 }
@@ -769,6 +847,57 @@ const RESEARCH_QUESTIONS = [
   },
 ];
 
+/**
+ * Which tasks this card counts, as a list you can tick.
+ *
+ * EVERY number on the card follows this — the verdict, the timings, accuracy, localization, the
+ * behavioural row, the participant count and the images figure all come from the rows that survive
+ * it. That is the point: a task excluded from the average but still counted in "26 participants"
+ * would be the most misleading version of this feature.
+ *
+ * When a filter is active the card says so, loudly, and offers the way back. A dashboard quietly
+ * showing a subset is how a number ends up in a paper describing a study nobody ran.
+ */
+function facetTaskPickerHtml(spec, facetRows, chosen) {
+  const key = facetKey(spec);
+  const byTask = new Map();
+  facetRows.forEach(r => {
+    const id = String(r.task_id || '');
+    if (!id) return;
+    if (!byTask.has(id)) byTask.set(id, { id, ng: 0, g: 0, question: r.question_or_task || '' });
+    const t = byTask.get(id);
+    if (r.condition === 'grounding') t.g++; else t.ng++;
+  });
+  const tasks = Array.from(byTask.values()).sort((a, b) => a.id.localeCompare(b.id));
+  if (tasks.length < 2) return '';
+
+  const active = !!chosen;
+  const kept = tasks.filter(t => !chosen || chosen.has(t.id)).length;
+  const open = facetPickerOpen.has(key);
+
+  return `
+    ${active ? `<p class="viz-answer-filtered">Counting ${kept} of ${tasks.length} tasks — every
+      number below is from those only.
+      <button type="button" class="viz-task-reset" data-facet="${key}">Use all tasks</button></p>` : ''}
+    <details class="viz-task-picker" data-facet="${key}"${open ? ' open' : ''}>
+      <summary>Tasks in this card (${kept}/${tasks.length})</summary>
+      <div class="viz-task-list">
+        ${tasks.map(t => {
+          const on = !chosen || chosen.has(t.id);
+          const imgs = taskImageCounts.get(t.id);
+          return `<label class="viz-task-row">
+            <input type="checkbox" class="viz-task-check" data-facet="${key}"
+              data-task="${adminEsc(t.id)}"${on ? ' checked' : ''}>
+            <code>${adminEsc(t.id)}</code>
+            <span class="viz-task-n">${t.ng} vs ${t.g} rows${
+              Number.isFinite(imgs) ? ` · ${imgs} images` : ''}</span>
+            <span class="viz-task-q">${adminEsc(String(t.question).slice(0, 60))}</span>
+          </label>`;
+        }).join('')}
+      </div>
+    </details>`;
+}
+
 /** grounded − non-grounded for one metric over one facet, with the n behind each side. */
 function facetDelta(rows, metricFn) {
   const grounded = cellFor(conditionRows(rows, 'grounding'), metricFn);
@@ -778,8 +907,118 @@ function facetDelta(rows, metricFn) {
   return { grounded, nongrounded, delta, n: Math.min(grounded.n, nongrounded.n) };
 }
 
+/** Below these, a difference is noise dressed as a result. */
+const FLAT_MS = 1000;
+const FLAT_PTS = 0.05;
+
+/**
+ * How many answers were actually wrong, on each side — "0/14 → 1/15 wrong".
+ *
+ * A percentage hides its own weight. "100% → 93%" reads as a seven-point accuracy cost until you
+ * see it is ONE wrong answer out of fifteen, at which point it reads as a single participant having
+ * a bad minute. Counts are what tell those two apart, and they cost one line.
+ *
+ * Read off the cell's own values, which metricValues has already normalised to 1/0, so this can
+ * never disagree with the percentage printed above it.
+ */
+function wrongTally(cell) {
+  const side = (s) => {
+    const values = s?.values || [];
+    return values.length ? `${values.filter(v => v === 0).length}/${values.length}` : null;
+  };
+  const n = side(cell?.nongrounded);
+  const g = side(cell?.grounded);
+  return n && g ? `${n} → ${g} wrong` : null;
+}
+
+/** "44s faster" / "16s slower" / null when there is nothing to say. Negative delta = quicker. */
+function timeSwing(delta) {
+  if (delta == null) return null;
+  if (Math.abs(delta) < FLAT_MS) return 'no change in time';
+  return `${seconds(Math.abs(delta))} ${delta < 0 ? 'faster' : 'slower'}`;
+}
+
+/** A before → after pair with its swing, e.g. "73% → 83% (+11 pts)". */
+function movement(cell, format, deltaFormat) {
+  if (cell?.nongrounded?.mean == null || cell?.grounded?.mean == null) return null;
+  const sign = cell.delta > 0 ? '+' : '−';
+  return `${format(cell.nongrounded.mean)} → ${format(cell.grounded.mean)} `
+    + `(${sign}${deltaFormat(Math.abs(cell.delta))})`;
+}
+
+/**
+ * The whole answer to one question, in a headline and a sentence.
+ *
+ * A verdict on the lead measure ALONE is not an answer, it is half of one — "44s faster" and "16s
+ * slower" both leave the reader asking "at what cost?", which is the question the study exists to
+ * settle. So the headline names the TRADE-OFF shape (faster and more accurate; better but slower)
+ * and the sentence underneath spends the numbers on it: where each measure started, where it
+ * ended, and how far it moved.
+ *
+ * Direction depends on the measure, not on the sign: less time is better, more accuracy and more
+ * localization are better. Anything inside FLAT_MS / FLAT_PTS is called unchanged rather than
+ * dressed up as a small win — an 0.4s "improvement" over eleven rows is noise.
+ */
+function researchVerdict(spec, { lead, speed, accuracy, localization }) {
+  const leadHelps = lead.delta == null ? null
+    : (spec.kind === 'speed' ? lead.delta < 0 : lead.delta > 0);
+  const leadFlat = lead.delta == null
+    || Math.abs(lead.delta) < (spec.kind === 'speed' ? FLAT_MS : FLAT_PTS);
+  const accFlat = accuracy.delta == null || Math.abs(accuracy.delta) < FLAT_PTS;
+  const accHelps = accuracy.delta != null && accuracy.delta > 0;
+
+  if (lead.delta == null && accuracy.delta == null) {
+    return { tone: 'none', headline: 'No data yet', guard: 'Nothing scored on both sides of this question yet.' };
+  }
+
+  // The headline is the shape of the trade, so a win bought with accuracy reads as a trade rather
+  // than as a win. Only an unambiguous both-ways result gets the confident tone.
+  // "and" when both measures moved the same way, "but" when they disagree. Getting this backwards
+  // ("Slower, but less accurate") quietly tells the reader a trade-off happened where none did.
+  const conflict = !leadFlat && !accFlat && leadHelps !== accHelps;
+  const leadWord = spec.kind === 'speed'
+    ? (leadFlat ? 'No faster, no slower' : (leadHelps ? 'Faster' : 'Slower'))
+    : (leadFlat ? 'No better at locating' : (leadHelps ? 'Better at locating' : 'Worse at locating'));
+  const accWord = accFlat ? 'with accuracy unchanged'
+    : `${conflict ? 'but' : 'and'} ${accHelps ? 'more' : 'less'} accurate`;
+  const headline = `${leadWord}, ${accWord}`;
+
+  // A result that moved both ways is a TRADE, and colouring it green or red picks a side the data
+  // has not picked. Only agreement earns a verdict colour.
+  const tone = conflict || (leadFlat && accFlat) ? 'flat'
+    : (leadFlat ? (accHelps ? 'yes' : 'no') : (leadHelps ? 'yes' : 'no'));
+
+  // The sentence: every measure that has something to say, with its start, end and swing.
+  const parts = [];
+  const locateMove = movement(speed, seconds, seconds);
+  const accMove = movement(accuracy, pct, points);
+  const locMove = movement(localization, pct, points);
+
+  if (spec.kind === 'speed') {
+    if (locateMove) parts.push(`Locating the evidence goes ${locateMove}`);
+    if (accMove) parts.push(`answer accuracy goes ${accMove}`);
+    if (locMove) parts.push(`and localization goes ${locMove}`);
+  } else {
+    if (locMove) parts.push(`Localization goes ${locMove}`);
+    if (accMove) parts.push(`verdict accuracy goes ${accMove}`);
+    if (locateMove) parts.push(`and locating takes ${locateMove}`);
+  }
+  const sentence = parts.length ? `${parts.join(', ')}.` : '';
+
+  // The one reading that must never be left implicit: quicker, or better placed, but wronger.
+  const caveat = (!accFlat && !accHelps && !leadFlat && leadHelps)
+    ? ' A faster wrong answer is not a win.' : '';
+
+  return { tone, headline, guard: sentence + caveat };
+}
+
 function researchAnswerCard(spec, allRows) {
-  const rows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+  const facetRows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+  // The picker lists every task the facet HAS, not every task it currently counts — a list that
+  // shrank as you unticked things would make a dropped task unreachable to put back.
+  const key = facetKey(spec);
+  const chosen = facetTaskFilters.get(key) || null;
+  const rows = chosen ? facetRows.filter(r => chosen.has(String(r.task_id || ''))) : facetRows;
   const speed = facetDelta(rows, locateTime);
   const judge = facetDelta(rows, judgeTime);
   const total = facetDelta(rows, totalTime);
@@ -788,56 +1027,36 @@ function researchAnswerCard(spec, allRows) {
   const lead = spec.kind === 'speed' ? speed : localization;
   const thin = lead.n < MIN_CELL_N;
 
-  let tone = 'none';
-  let headline = 'No data yet';
-  if (lead.delta != null) {
-    // Faster is better for time; higher is better for localization.
-    const helps = spec.kind === 'speed' ? lead.delta < 0 : lead.delta > 0;
-    tone = Math.abs(lead.delta) < (spec.kind === 'speed' ? 1000 : 0.05) ? 'flat' : (helps ? 'yes' : 'no');
-    headline = spec.kind === 'speed'
-      ? (tone === 'flat' ? 'No faster, no slower'
-        : `${helps ? 'Yes' : 'No'} — ${seconds(Math.abs(lead.delta))} ${helps ? 'faster' : 'slower'}`)
-      : (tone === 'flat' ? 'It makes no difference'
-        : `${helps ? 'It helps' : 'It does not help'} — ${points(Math.abs(lead.delta))} ${helps ? 'better' : 'worse'} at locating the step`);
-  }
-
-  const guard = spec.kind === 'speed'
-    ? (accuracy.delta == null ? 'No scored answers on both sides yet, so the accuracy side is open.'
-      : Math.abs(accuracy.delta) < 0.05 ? `Accuracy is flat (${points(Math.abs(accuracy.delta))} apart), so the time is the whole story.`
-        : accuracy.delta > 0 ? `And accuracy is ${points(accuracy.delta)} higher with it.`
-          : `But accuracy is ${points(Math.abs(accuracy.delta))} lower with it — a faster wrong answer is not a win.`)
-    // A localization win with accuracy falling behind it is not a win, so the guardrail carries both
-    // — time only when accuracy has nothing to say.
-    : [
-      accuracy.delta != null && Math.abs(accuracy.delta) >= 0.05
-        ? (accuracy.delta > 0 ? `Accuracy is ${points(accuracy.delta)} higher with it.`
-          : `But accuracy is ${points(Math.abs(accuracy.delta))} lower with it.`)
-        : null,
-      speed.delta == null ? 'No paired timings yet, so the time side is open.'
-        : Math.abs(speed.delta) < 1000 ? 'Time to locate is unchanged.'
-          : speed.delta < 0 ? `It is ${seconds(Math.abs(speed.delta))} faster to locate.`
-            : `It takes ${seconds(Math.abs(speed.delta))} longer to locate.`,
-    ].filter(Boolean).join(' ');
+  const { tone, headline, guard } = researchVerdict(spec, { lead, speed, accuracy, localization });
 
   const leadName = spec.kind === 'speed'
     ? 'locate time (find_supporting_answer_ms)'
-    : 'localization (error-type and step recall)';
+    : 'localization (step recall, or a correct “no error” in full)';
 
-  const stat = (name, cell, format) => `<div class="viz-answer-stat">
+  const stat = (name, cell, format, foot) => `<div class="viz-answer-stat">
       <span>${adminEsc(name)}</span>
       <b>${adminEsc(format(cell.nongrounded.mean))} → ${adminEsc(format(cell.grounded.mean))}</b>
+      ${foot ? `<small>${adminEsc(foot)}</small>` : ''}
     </div>`;
 
   // Rows AND people, because they are different questions and the card was only answering one. The
   // n is what the headline average rests on; the participant count is how many sittings produced it.
   const people = participantCount(rows);
+  // How picture-heavy this facet's material is, averaged over the DISTINCT tasks it drew rather
+  // than over rows — a task drawn six times is one page, not six, and weighting by draws would
+  // report the popularity of a task as a property of the condition.
+  const facetTasks = Array.from(new Set(rows.map(r => String(r.task_id || '')).filter(Boolean)));
+  const counted = facetTasks.map(id => taskImageCounts.get(id)).filter(v => Number.isFinite(v));
+  const imageAvg = counted.length ? counted.reduce((a, b) => a + b, 0) / counted.length : null;
   return `<article class="viz-answer viz-answer-${tone}${thin ? ' is-thin' : ''}">
     <header>
       <span class="viz-answer-facet">${adminEsc(spec.label)}</span>
       <span class="viz-answer-n">n ${lead.nongrounded.n} vs ${lead.grounded.n}
-        · ${people} participant${people === 1 ? '' : 's'}</span>
+        · ${people} participant${people === 1 ? '' : 's'}${imageAvg == null ? ''
+          : ` · ${imageAvg.toFixed(1)} images/${spec.taskType === 'find' ? 'page' : 'run'}`}</span>
     </header>
     <p class="viz-answer-q">${adminEsc(spec.question)}</p>
+    ${facetTaskPickerHtml(spec, facetRows, chosen)}
     <strong class="viz-answer-headline">${adminEsc(headline)}</strong>
     <p class="viz-answer-guard">${adminEsc(guard)}</p>
     <!-- Which number the headline is actually made of. Five figures sit below it and only one of
@@ -849,8 +1068,19 @@ function researchAnswerCard(spec, allRows) {
       ${stat('Judge time', judge, seconds)}
       ${stat('Locate time', speed, seconds)}
       ${stat('Total time', total, seconds)}
-      ${stat('Accuracy', accuracy, pct)}
+      ${stat('Accuracy', accuracy, pct, wrongTally(accuracy))}
       ${stat('Localization', localization, pct)}
+    </div>
+
+    <!-- HOW the task was worked, not just how long it took. Scrolling and Ctrl-F are hunting: a
+         reader who cannot see where the answer is goes looking for it, so grounding should bring
+         these down even on a facet where the clock refuses to move. -->
+    <div class="viz-answer-stats viz-answer-behaviour">
+      ${BEHAVIOR_METRICS.map(m => {
+        const cell = facetDelta(rows, r => behaviorValue(r, m.key, m.column));
+        if (cell.nongrounded.mean == null && cell.grounded.mean == null) return '';
+        return stat(m.label, cell, m.key === 'mouse_move_px' ? pixels : oneDecimal);
+      }).join('')}
     </div>
     ${thin ? `<p class="viz-answer-thin">Too early to call — this needs ${MIN_CELL_N}+ rows per
       condition, and the thinner side has ${lead.n}. The direction is shown, not the finding.</p>` : ''}
@@ -1090,18 +1320,11 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
 
   // `column` is the flat copy, preferred when present: rows written before the jsonb existed can
   // still carry the count, and rows written before the columns existed still carry the jsonb.
-  const behaviorKeys = [
-    { key: 'scroll_count', column: 'scroll_user_count', label: 'Scrolls' },
-    { key: 'ctrl_f_count', column: 'ctrl_f_count', label: 'Ctrl-F uses' },
-    { key: 'text_select_count', column: 'text_select_count', label: 'Text selections' },
-    { key: 'mouse_move_px', column: 'mouse_move_px', label: 'Mouse travel (px)' },
+  // The shared list (BEHAVIOR_METRICS) plus the two the chart splits out but the cards do not.
+  const behaviorKeys = BEHAVIOR_METRICS.concat([
     { key: 'website_click_count', label: 'Page clicks' },
     { key: 'panel_click_count', label: 'Panel clicks' },
-  ];
-  const behaviorValue = (row, key, column) => {
-    const flat = column ? row?.[column] : null;
-    return flat == null ? row?.interaction_summary?.[key] : flat;
-  };
+  ]);
   const behaviorCells = behaviorKeys.map(({ key, column, label }) => ({
     key,
     label,
@@ -1117,6 +1340,7 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
       </div>
       <p>Every chart reads left to right as non-grounded → grounded, split by Find/Guide × Text/Visual. Hollow dots mean fewer than ${MIN_CELL_N} rows in that cell.</p>
     </div>
+    ${freshnessHtml(allRows)}
     ${missingStyleNoticeHtml(allRows)}
     ${controlsHtml(allRows, filters)}
     ${verdictHtml(rows)}
@@ -1139,7 +1363,8 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
         <h4>Evidence localization quality</h4>
         ${conditionLegend}
         ${svgDumbbell(evidenceCells, { format: pct, deltaFormat: points, max: 1, betterLower: false, deltaWords: ['better', 'worse'], aria: 'Evidence localization quality, non-grounded versus grounded' })}
-        <p class="viz-note">Find: paragraph precision and recall. Guide: error type and step recall.</p>
+        <p class="viz-note">Find: paragraph precision and recall. Guide: error type and step recall —
+          and on a run that contains no error, a correct “no error” scores in full so the row still counts.</p>
       </div>
       <div class="viz-card">
         <h4>Effort spent verifying</h4>
@@ -1325,9 +1550,54 @@ function renderAnalysisMarkdown(text) {
   return out.join('');
 }
 
+/** What this pane is showing and when it was read, with a way to read it again. */
+function freshnessHtml(allRows) {
+  const when = vizLoadedAt
+    ? vizLoadedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : 'not yet';
+  const people = participantCount(allRows);
+  return `<div class="viz-freshness">
+    <span>Read from Supabase at <b>${adminEsc(when)}</b> —
+      ${allRows.length} row${allRows.length === 1 ? '' : 's'},
+      ${people} participant${people === 1 ? '' : 's'}. Reopening this tab always refetches.</span>
+    <button class="admin-chip" id="viz-refresh" type="button">↻ Reload from Supabase</button>
+  </div>`;
+}
+
 function bindVisualizationControls() {
   bindVizTooltip();
   document.getElementById('viz-analyze')?.addEventListener('click', runVizAnalysis);
+  // Filters re-slice what is already in hand; this is the one control that goes back to the table.
+  document.getElementById('viz-refresh')?.addEventListener('click', () => showAdminVisualizations());
+
+  const redrawCards = () => renderAdminVisualizations(adminVizRows, currentVizFilters());
+  // The picker rebuilds the pane on every tick, so its open state has to be remembered or it would
+  // snap shut the moment you used it.
+  document.querySelectorAll('.viz-task-picker').forEach(d => {
+    d.addEventListener('toggle', () => {
+      if (d.open) facetPickerOpen.add(d.dataset.facet);
+      else facetPickerOpen.delete(d.dataset.facet);
+    });
+  });
+  document.querySelectorAll('.viz-task-check').forEach(box => {
+    box.addEventListener('change', () => {
+      const key = box.dataset.facet;
+      // Materialise "all" into a real set the first time one is unticked, so the two states are the
+      // same shape from here on.
+      const all = Array.from(document.querySelectorAll(`.viz-task-check[data-facet="${key}"]`));
+      const on = new Set(all.filter(b => b.checked).map(b => b.dataset.task));
+      if (!on.size) { box.checked = true; return; }   // a card counting nothing is not a view of it
+      if (on.size === all.length) facetTaskFilters.delete(key);
+      else facetTaskFilters.set(key, on);
+      redrawCards();
+    });
+  });
+  document.querySelectorAll('.viz-task-reset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      facetTaskFilters.delete(btn.dataset.facet);
+      redrawCards();
+    });
+  });
   // A re-render (a filter change, a search keystroke) rebuilds the pane; put the last analysis back
   // rather than making the researcher pay for it again, and say which rows it was written from.
   if (lastAnalysis) {
@@ -1368,12 +1638,665 @@ function bindAdminExit() {
   };
 }
 
+/**
+ * Refetch every time this pane is opened, and say when it was fetched.
+ *
+ * Opening the dashboard is the gesture that means "show me where the study is now", so it always
+ * goes back to Supabase — the reads are `no-store`, so no layer between here and the table can
+ * answer from memory. Filter changes deliberately do NOT refetch: they re-slice rows already in
+ * hand, and re-reading the table on every keystroke would be a request per character.
+ *
+ * The stamp exists because freshness is otherwise unfalsifiable. Numbers that have not moved since
+ * yesterday look identical whether nobody ran a task or the fetch quietly served a cached copy, and
+ * a researcher should not have to guess which.
+ */
+// ── Trajectory editor ────────────────────────────────────────────────────────
+// Turning a clean recorded run into one that contains an error, so the study has runs where
+// localization can be measured at all. The arithmetic lives in app/trajectory_edit.js; this is the
+// screen around it. Nothing is written until Save, and the record on screen is a working copy — a
+// half-finished edit is discarded by leaving, not published.
+
+let editRecord = null;      // the working copy, unsaved
+let editList = [];
+let editStatus = '';
+
+const GUIDE_ERROR_TYPES = [
+  { id: 'loop', label: 'Loop / no progress' },
+  { id: 'mismatch', label: 'Action–goal mismatch' },
+  { id: 'wrong_target', label: 'Wrong target / misclick' },
+];
+
+async function showTrajectoryEditor() {
+  const content = document.getElementById('admin-content');
+  content.innerHTML = '<div class="viz-loading">Loading trajectories…</div>';
+  try {
+    editList = await window.StudyDB.listAllStudyTrajectories();
+  } catch (e) {
+    content.innerHTML = `<div class="welcome-status welcome-status-bad">Could not load trajectories: ${adminEsc(e.message || e)}</div>`
+      + '<button class="admin-exit" id="admin-exit">Leave admin mode</button>';
+    bindAdminExit();
+    return;
+  }
+  renderTrajectoryEditor();
+}
+
+function renderTrajectoryEditor() {
+  const content = document.getElementById('admin-content');
+  const picked = editRecord?.id || '';
+  const options = editList.map(t => `<option value="${adminEsc(t.id)}"${t.id === picked ? ' selected' : ''}>`
+    + `${t.in_study ? '● live' : '○ draft'} · ${adminEsc(t.condition || '?')} · ${adminEsc(t.id)}`
+    + ` — ${adminEsc(String(t.goal || t.title || '').slice(0, 60))}</option>`).join('');
+
+  content.innerHTML = `
+    <label class="welcome-label" for="edit-pick">Trajectory</label>
+    <select class="welcome-input" id="edit-pick">
+      <option value="">Choose a trajectory…</option>
+      ${options}
+    </select>
+    <div id="edit-body">${editRecord ? trajectoryEditorBodyHtml(editRecord) : ''}</div>
+    <div class="welcome-status" id="edit-status">${adminEsc(editStatus)}</div>
+    <button class="admin-exit" id="admin-exit">Leave admin mode</button>`;
+
+  document.getElementById('edit-pick').onchange = async (e) => {
+    const id = e.target.value;
+    editStatus = '';
+    if (!id) { editRecord = null; return renderTrajectoryEditor(); }
+    setEditStatus('Loading…');
+    try {
+      editRecord = await window.StudyDB.getStudyTrajectory(id);
+    } catch (err) {
+      editRecord = null;
+      return setEditStatus(`Could not load: ${err.message || err}`, true);
+    }
+    editStatus = '';
+    renderTrajectoryEditor();
+  };
+  bindTrajectoryEditorBody();
+  bindAdminExit();
+}
+
+function setEditStatus(text, bad) {
+  editStatus = text;
+  const el = document.getElementById('edit-status');
+  if (el) {
+    el.textContent = text;
+    el.className = `welcome-status${bad ? ' welcome-status-bad' : ''}`;
+  }
+}
+
+/**
+ * The place a written step goes, closed until asked for.
+ *
+ * One slot per gap rather than a single form with a "where?" dropdown: the position is the thing
+ * being chosen, and choosing it by pointing at the gap cannot be got wrong. `after = 0` is the gap
+ * above step 1 — there is no step 0, and before the first step is a real place to add one.
+ */
+function addStepSlotHtml(after) {
+  return `<li class="edit-slot" data-after="${adminEsc(String(after))}" hidden>
+    <form class="edit-new edit-addform">
+      <label class="welcome-label">New step ${after === 0 ? 'before step 1' : `after step ${adminEsc(String(after))}`}</label>
+      <input type="text" class="welcome-input edit-new-text" placeholder="What the agent did, e.g. Click the 'Search' button again." required>
+      <div class="edit-new-row">
+        <input type="file" class="edit-new-shot" accept="image/*">
+        <button type="submit" class="q-btn">Insert step</button>
+        <button type="button" class="admin-chip edit-new-cancel">Cancel</button>
+      </div>
+      <p class="edit-new-note">The screenshot is the page this step happened on. A step without one
+        shows nothing when a grounded participant hovers it, so add one unless you mean it to be blank.</p>
+    </form>
+  </li>`;
+}
+
+/**
+ * The edit form for one step, closed until asked for.
+ *
+ * Shows the screenshot it already has. "Replace" is a claim about something you cannot see from a
+ * step number — swapping the wrong step's picture is invisible until a participant hovers it — so
+ * the current one is on screen while you choose the new one.
+ */
+function editStepSlotHtml(step) {
+  const n = adminEsc(String(step.n));
+  return `<li class="edit-slot edit-editslot" data-edit="${n}" hidden>
+    <form class="edit-new edit-editform">
+      <label class="welcome-label">Editing step ${n}</label>
+      <input type="text" class="welcome-input edit-edit-text" value="${adminEsc(step.instruction || '')}" required>
+      ${step.screenshot
+        ? `<img class="edit-thumb" src="data:image/jpeg;base64,${step.screenshot}" alt="Step ${n} screenshot">`
+        : '<p class="edit-new-note">This step has no screenshot.</p>'}
+      <div class="edit-new-row">
+        <input type="file" class="edit-edit-shot" accept="image/*">
+        <button type="submit" class="q-btn">Apply</button>
+        <button type="button" class="admin-chip edit-edit-cancel">Cancel</button>
+        ${step.screenshot
+          ? '<label class="edit-live"><input type="checkbox" class="edit-edit-clear"> Remove the screenshot</label>'
+          : ''}
+      </div>
+      <p class="edit-new-note">Leave the file box empty to keep the screenshot as it is. The text
+        changes in both conditions; the screenshot only in the grounded one.</p>
+    </form>
+  </li>`;
+}
+
+/**
+ * The agent's answer, its evidence, and a preview of how the two will render together.
+ *
+ * The preview earns its place: what a participant sees is not the text in the box. Markers become
+ * numbered chips, and the numbering follows what SURVIVES — delete three of five markers and the
+ * remaining two are chips 1 and 2, not 2 and 5. That renumbering is invisible in the source, so it
+ * is shown instead of explained.
+ */
+function answerEditorHtml(record) {
+  const arm = record.arms?.grounding || {};
+  const items = Array.isArray(arm.answer_evidence) ? arm.answer_evidence : [];
+  const report = window.TrajectoryEdit.answerEvidenceReport(record);
+
+  return `
+    <label class="welcome-label" for="edit-answer">Agent answer</label>
+    <p class="viz-note">Write <code>[ev:key]</code> where a claim rests on something the agent saw.
+      Remove a marker and the chips after it renumber themselves.</p>
+    <textarea class="welcome-input edit-answer" id="edit-answer" rows="6">${adminEsc(arm.answer || '')}</textarea>
+    <div class="admin-row">
+      <button type="button" class="q-btn" id="edit-answer-apply">Apply answer</button>
+      <span class="edit-answer-count">${report.shown} chip${report.shown === 1 ? '' : 's'} will show</span>
+    </div>
+
+    <label class="welcome-label">Preview — as the participant sees it</label>
+    <div class="edit-preview">${answerPreviewHtml(arm)}</div>
+
+    ${report.danglingMarkers.length ? `<p class="edit-problem">⚠ These markers have no evidence, so
+      they render as nothing: ${adminEsc(report.danglingMarkers.map(k => `[ev:${k}]`).join(' '))}.
+      Add evidence under that key, or take the marker out.</p>` : ''}
+    ${report.unusedEvidence.length ? `<p class="edit-problem">⚠ Evidence nobody can reach — no marker
+      points at ${adminEsc(report.unusedEvidence.join(', '))}. Add <code>[ev:key]</code> to the answer,
+      or remove it below.</p>` : ''}
+
+    <label class="welcome-label">Evidence behind the answer</label>
+    <div class="edit-ev-list">
+      ${items.length ? items.map(e => {
+        const key = String(e.key || '');
+        const used = !report.unusedEvidence.includes(key);
+        return `<div class="edit-ev">
+          <div class="edit-ev-head">
+            <code>${adminEsc(key)}</code>
+            <span class="edit-ev-flag${used ? '' : ' is-unused'}">${used ? 'linked' : 'not linked'}</span>
+            ${e.step != null ? `<span class="edit-ev-step">step ${adminEsc(String(e.step))}</span>` : ''}
+            <button type="button" class="admin-chip edit-ev-del" data-key="${adminEsc(key)}">✕ Remove</button>
+          </div>
+          <input type="text" class="admin-inline-input edit-ev-note" data-key="${adminEsc(key)}"
+            value="${adminEsc(e.note || '')}" placeholder="what this shows">
+          ${e.screenshot
+            ? `<img class="edit-thumb" src="data:image/jpeg;base64,${e.screenshot}" alt="${adminEsc(key)}">`
+            : '<p class="edit-new-note">No screenshot — the chip will open an empty card.</p>'}
+          <input type="file" class="edit-ev-shot" data-key="${adminEsc(key)}" accept="image/*">
+        </div>`;
+      }).join('') : '<p class="edit-new-note">No evidence recorded for this answer yet.</p>'}
+    </div>
+
+    <form class="edit-new edit-evform">
+      <label class="welcome-label">Add evidence</label>
+      <div class="edit-new-row">
+        <input type="text" class="admin-inline-input edit-ev-newkey" placeholder="key, e.g. cart_total" required>
+        <input type="text" class="admin-inline-input edit-ev-newnote" placeholder="what it shows">
+      </div>
+      <div class="edit-new-row">
+        <input type="file" class="edit-ev-newshot" accept="image/*">
+        <button type="submit" class="q-btn">Add evidence</button>
+      </div>
+      <p class="edit-new-note">Adding evidence does not cite it — put <code>[ev:key]</code> in the
+        answer where the claim it backs is made.</p>
+    </form>`;
+}
+
+/** The answer with its markers resolved, numbered exactly as stimulus.js will number them. */
+function answerPreviewHtml(arm) {
+  const byKey = new Map();
+  (arm.answer_evidence || []).forEach(e => {
+    if (e?.key) byKey.set(String(e.key).trim().toLowerCase(), e);
+  });
+  let shown = 0;
+  const withChips = adminEsc(arm.answer || '')
+    .replace(/\[ev:\s*([^\]]+)\]/gi, (m, rawKey) => {
+      const hit = byKey.get(String(rawKey).trim().toLowerCase());
+      if (!hit) return '';
+      shown++;
+      return `<span class="tv-chip" title="${adminEsc(hit.note || hit.key)}">${shown}</span>`;
+    })
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+([.,;:!?])/g, '$1');
+  // THE SAME RENDERER THE STIMULUS USES (app/markdown.js), not an approximation of it. A preview
+  // that lays text out differently from the page it previews is worse than none: it shows a layout
+  // no participant will see and hides the one they will.
+  const md = window.StudyMarkdown.render(withChips);
+  return md.trim() ? md : '<span class="edit-new-note">Nothing to preview yet.</span>';
+}
+
+/** A file, as the bare base64 the trajectory stores (no data: prefix — the renderers add it). */
+function readImageAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read that image.'));
+    reader.onload = () => resolve(String(reader.result || '').replace(/^data:[^,]*,/, ''));
+    reader.readAsDataURL(file);
+  });
+}
+
+function trajectoryEditorBodyHtml(record) {
+  const arm = record.arms?.grounding;
+  if (!arm) return '<div class="viz-empty">This trajectory has no grounded arm to edit.</div>';
+  const steps = arm.steps || [];
+  const gt = record.ground_truth || {};
+  const errors = Array.isArray(gt.errors) ? gt.errors : [];
+  const blamed = new Map();
+  errors.forEach(e => (e.steps || []).forEach(n => blamed.set(Number(n), e.type)));
+  const problem = window.TrajectoryEdit.groundTruthProblem(gt);
+
+  return `
+    <div class="edit-head">
+      <div><b>${adminEsc(record.goal || record.title || record.id)}</b></div>
+      <label class="edit-live">
+        <input type="checkbox" id="edit-in-study"${record.in_study ? ' checked' : ''}>
+        In study — shown to participants
+      </label>
+    </div>
+
+    <p class="viz-note">Duplicating a step repeats the action on the same page, which is what a
+      stuck agent looks like. Mark the repeats as a <b>loop</b> error below, then save.
+      <button type="button" class="admin-chip edit-add" data-step="0"
+        title="Write a new step and insert it before step 1">＋ Add step at the start</button></p>
+
+    <ol class="edit-steps">
+      ${addStepSlotHtml(0)}
+      ${steps.map(s => `
+        <li class="edit-step${blamed.has(Number(s.n)) ? ' is-blamed' : ''}">
+          <span class="edit-step-n">${adminEsc(String(s.n))}</span>
+          <span class="edit-step-text">${adminEsc(s.instruction || '')}
+            ${blamed.has(Number(s.n)) ? `<em class="edit-step-flag">${adminEsc(blamed.get(Number(s.n)))}</em>` : ''}
+            ${s.screenshot ? '' : '<em class="edit-step-flag edit-step-noshot">no screenshot</em>'}</span>
+          <button type="button" class="admin-chip edit-dup" data-step="${adminEsc(String(s.n))}"
+            title="Insert a copy of this step directly after it">⧉ Duplicate</button>
+          <button type="button" class="admin-chip edit-add" data-step="${adminEsc(String(s.n))}"
+            title="Write a new step and insert it after this one">＋ Add step</button>
+          <button type="button" class="admin-chip edit-edit" data-step="${adminEsc(String(s.n))}"
+            title="Change what this step says, or its screenshot">✎ Edit</button>
+          <button type="button" class="admin-chip edit-remove" data-step="${adminEsc(String(s.n))}"
+            title="Delete this step and renumber the rest"${steps.length <= 1 ? ' disabled' : ''}>✕ Remove</button>
+        </li>
+        ${editStepSlotHtml(s)}
+        ${addStepSlotHtml(s.n)}`).join('')}
+    </ol>
+
+    ${answerEditorHtml(record)}
+
+    <label class="welcome-label">Which error did the agent make, and where?</label>
+    <div class="edit-errors">
+      ${GUIDE_ERROR_TYPES.map(t => `
+        <label class="edit-error-row">
+          <input type="checkbox" class="edit-error-type" value="${t.id}"
+            ${errors.some(e => e.type === t.id) ? 'checked' : ''}>
+          <span>${adminEsc(t.label)}</span>
+          <input type="text" class="admin-inline-input edit-error-steps" data-type="${t.id}"
+            placeholder="steps, e.g. 7,8"
+            value="${adminEsc((errors.find(e => e.type === t.id)?.steps || []).join(','))}">
+        </label>`).join('')}
+    </div>
+
+    <label class="welcome-label" for="edit-correctness">Did the agent complete the task?</label>
+    <select class="welcome-input" id="edit-correctness">
+      ${['success', 'failure'].map(v => `<option value="${v}"${gt.correctness === v ? ' selected' : ''}>`
+        + `${v === 'success' ? 'Yes, it completed the task' : 'No, it did not'}</option>`).join('')}
+    </select>
+
+    ${problem ? `<p class="edit-problem">⚠ ${adminEsc(problem)}</p>` : ''}
+
+    <div class="admin-row" style="margin-top:12px;">
+      <button type="button" class="q-btn" id="edit-save">Save to Supabase</button>
+      <button type="button" class="admin-chip" id="edit-cancel">✕ Cancel — reload the saved version</button>
+      <button type="button" class="admin-chip" id="edit-reset">↺ Reset to another trajectory…</button>
+    </div>
+
+    <!-- Two different undos, because they undo different things. Cancel throws away what has not
+         been saved; Reset replaces the steps wholesale from a trajectory that is still clean, which
+         is the way back once a bad edit HAS been saved. -->
+    <div class="edit-reset-panel" id="edit-reset-panel" hidden>
+      <label class="welcome-label" for="edit-reset-src">Copy the steps and ground truth from</label>
+      <select class="welcome-input" id="edit-reset-src">
+        ${resetSourceOptions(record).map(t => `<option value="${adminEsc(t.id)}"${t.suggested ? ' selected' : ''}>`
+          + `${t.suggested ? '↳ same goal · ' : ''}${adminEsc(t.id)} — ${adminEsc(String(t.goal || '').slice(0, 50))}`
+          + `</option>`).join('')}
+      </select>
+      <p class="edit-new-note">Replaces every step, the evidence and the ground truth of
+        <b>this</b> trajectory. Its id and its In-study setting are kept. Nothing is written until
+        you press Save.</p>
+      <div class="admin-row">
+        <button type="button" class="q-btn" id="edit-reset-apply">Replace the steps</button>
+        <button type="button" class="admin-chip" id="edit-reset-cancel">Cancel</button>
+      </div>
+    </div>`;
+}
+
+/**
+ * Trajectories this one could be reset from, the likeliest first.
+ *
+ * A duplicate carries its source's goal, so the trajectory sharing this goal is almost always the
+ * clean original it was copied from — worth preselecting, not worth assuming. Everything else stays
+ * in the list because a trajectory can also be reset from something it was never copied from.
+ */
+function resetSourceOptions(record) {
+  const goal = String(record?.goal || '').trim();
+  return editList
+    .filter(t => t.id !== record.id)
+    .map(t => Object.assign({}, t, { suggested: !!goal && String(t.goal || '').trim() === goal }))
+    .sort((a, b) => (b.suggested ? 1 : 0) - (a.suggested ? 1 : 0));
+}
+
+function bindTrajectoryEditorBody() {
+  document.querySelectorAll('.edit-dup').forEach(btn => {
+    btn.onclick = () => {
+      const n = Number(btn.dataset.step);
+      try {
+        // Every step-number reference in the record moves with the insert — see cloneRecordStep.
+        editRecord = window.TrajectoryEdit.cloneRecordStep(editRecord, n, 1);
+      } catch (e) {
+        return setEditStatus(e.message || String(e), true);
+      }
+      setEditStatus(`Duplicated step ${n}. Not saved yet.`);
+      const body = document.getElementById('edit-body');
+      body.innerHTML = trajectoryEditorBodyHtml(editRecord);
+      bindTrajectoryEditorBody();
+    };
+  });
+
+  document.querySelectorAll('.edit-remove').forEach(btn => {
+    btn.onclick = () => {
+      const n = Number(btn.dataset.step);
+      const was = editRecord.arms.grounding.steps.find(s => Number(s.n) === n);
+      try {
+        editRecord = window.TrajectoryEdit.removeRecordStep(editRecord, n);
+      } catch (e) {
+        return setEditStatus(e.message || String(e), true);
+      }
+      setEditStatus(`Removed step ${n} — “${String(was?.instruction || '').slice(0, 40)}”. `
+        + `${editRecord.arms.grounding.steps.length} steps left. Not saved yet; Cancel puts it back.`);
+      const body = document.getElementById('edit-body');
+      body.innerHTML = trajectoryEditorBodyHtml(editRecord);
+      bindTrajectoryEditorBody();
+    };
+  });
+
+  const closeAllSlots = () => document.querySelectorAll('.edit-slot').forEach(s => { s.hidden = true; });
+
+  document.querySelectorAll('.edit-edit').forEach(btn => {
+    btn.onclick = () => {
+      closeAllSlots();
+      const slot = document.querySelector(`.edit-editslot[data-edit="${btn.dataset.step}"]`);
+      if (!slot) return;
+      slot.hidden = false;
+      slot.querySelector('.edit-edit-text')?.focus();
+    };
+  });
+  document.querySelectorAll('.edit-edit-cancel').forEach(btn => {
+    btn.onclick = () => { btn.closest('.edit-slot').hidden = true; };
+  });
+  // SCOPED BY ITS OWN CLASS, not by `.edit-new`. Both forms carry `.edit-new` for its styling, so a
+  // binding on that selector catches the other form too — and because the add binding runs after
+  // this one, it was overwriting this handler. Apply then ran the ADD path with no insert position
+  // and failed on a step number of NaN.
+  document.querySelectorAll('.edit-editform').forEach(form => {
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const n = Number(form.closest('.edit-editslot').dataset.edit);
+      const instruction = form.querySelector('.edit-edit-text').value.trim();
+      if (!instruction) return setEditStatus('A step needs something to say.', true);
+      const file = form.querySelector('.edit-edit-shot').files[0] || null;
+      const clear = form.querySelector('.edit-edit-clear')?.checked;
+      // undefined leaves the picture alone, null takes it away — see updateRecordStep.
+      let screenshot;
+      if (file) {
+        setEditStatus('Reading the screenshot…');
+        try { screenshot = await readImageAsBase64(file); } catch (err) { return setEditStatus(err.message, true); }
+      } else if (clear) {
+        screenshot = null;
+      }
+      try {
+        editRecord = window.TrajectoryEdit.updateRecordStep(editRecord, n, { instruction, screenshot });
+      } catch (err) {
+        return setEditStatus(err.message || String(err), true);
+      }
+      setEditStatus(`Step ${n} updated`
+        + `${file ? ' with a new screenshot' : (clear ? ' — screenshot removed' : '')}. Not saved yet.`);
+      const body = document.getElementById('edit-body');
+      body.innerHTML = trajectoryEditorBodyHtml(editRecord);
+      bindTrajectoryEditorBody();
+    };
+  });
+
+  const slotFor = (after) => document.querySelector(`.edit-slot[data-after="${after}"]`);
+  document.querySelectorAll('.edit-add').forEach(btn => {
+    btn.onclick = () => {
+      // One open at a time: two half-filled forms in one list is an invitation to submit the wrong one.
+      closeAllSlots();
+      const slot = slotFor(btn.dataset.step);
+      if (!slot) return;
+      slot.hidden = false;
+      slot.querySelector('.edit-new-text')?.focus();
+    };
+  });
+  document.querySelectorAll('.edit-new-cancel').forEach(btn => {
+    btn.onclick = () => { btn.closest('.edit-slot').hidden = true; };
+  });
+  document.querySelectorAll('.edit-addform').forEach(form => {
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const slot = form.closest('.edit-slot');
+      const after = Number(slot.dataset.after);
+      const instruction = form.querySelector('.edit-new-text').value.trim();
+      if (!instruction) return setEditStatus('Give the step something to say.', true);
+      const file = form.querySelector('.edit-new-shot').files[0] || null;
+      let screenshot = null;
+      if (file) {
+        setEditStatus('Reading the screenshot…');
+        try { screenshot = await readImageAsBase64(file); } catch (err) { return setEditStatus(err.message, true); }
+      }
+      try {
+        editRecord = window.TrajectoryEdit.addRecordStep(editRecord, after, { instruction, screenshot });
+      } catch (err) {
+        return setEditStatus(err.message || String(err), true);
+      }
+      setEditStatus(`Added a step ${after === 0 ? 'before step 1' : `after step ${after}`}`
+        + `${screenshot ? ' with a screenshot' : ' — no screenshot'}. Not saved yet.`);
+      const body = document.getElementById('edit-body');
+      body.innerHTML = trajectoryEditorBodyHtml(editRecord);
+      bindTrajectoryEditorBody();
+    };
+  });
+
+  const rerender = () => {
+    const body = document.getElementById('edit-body');
+    body.innerHTML = trajectoryEditorBodyHtml(editRecord);
+    bindTrajectoryEditorBody();
+  };
+
+  document.getElementById('edit-answer-apply')?.addEventListener('click', () => {
+    const text = document.getElementById('edit-answer')?.value ?? '';
+    try {
+      editRecord = window.TrajectoryEdit.setAnswer(editRecord, text);
+    } catch (e) {
+      return setEditStatus(e.message || String(e), true);
+    }
+    const r = window.TrajectoryEdit.answerEvidenceReport(editRecord);
+    setEditStatus(`Answer updated — ${r.shown} chip${r.shown === 1 ? '' : 's'} will show. Not saved yet.`);
+    rerender();
+  });
+
+  document.querySelectorAll('.edit-ev-del').forEach(btn => {
+    btn.onclick = () => {
+      editRecord = window.TrajectoryEdit.removeEvidence(editRecord, btn.dataset.key);
+      setEditStatus(`Removed evidence “${btn.dataset.key}” and its marker. Not saved yet.`);
+      rerender();
+    };
+  });
+  document.querySelectorAll('.edit-ev-note').forEach(input => {
+    input.onchange = () => {
+      editRecord = window.TrajectoryEdit.upsertEvidence(editRecord,
+        { key: input.dataset.key, note: input.value });
+      setEditStatus(`Note updated for “${input.dataset.key}”. Not saved yet.`);
+    };
+  });
+  document.querySelectorAll('.edit-ev-shot').forEach(input => {
+    input.onchange = async () => {
+      const file = input.files[0];
+      if (!file) return;
+      setEditStatus('Reading the screenshot…');
+      let screenshot;
+      try { screenshot = await readImageAsBase64(file); } catch (e) { return setEditStatus(e.message, true); }
+      editRecord = window.TrajectoryEdit.upsertEvidence(editRecord,
+        { key: input.dataset.key, screenshot });
+      setEditStatus(`Screenshot replaced for “${input.dataset.key}”. Not saved yet.`);
+      rerender();
+    };
+  });
+  document.querySelector('.edit-evform')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const key = form.querySelector('.edit-ev-newkey').value.trim();
+    const note = form.querySelector('.edit-ev-newnote').value.trim();
+    const file = form.querySelector('.edit-ev-newshot').files[0] || null;
+    let screenshot = null;
+    if (file) {
+      setEditStatus('Reading the screenshot…');
+      try { screenshot = await readImageAsBase64(file); } catch (err) { return setEditStatus(err.message, true); }
+    }
+    try {
+      editRecord = window.TrajectoryEdit.upsertEvidence(editRecord, { key, note, screenshot });
+    } catch (err) {
+      return setEditStatus(err.message || String(err), true);
+    }
+    setEditStatus(`Added evidence “${key}”. Put [ev:${key}] in the answer to cite it. Not saved yet.`);
+    rerender();
+  });
+
+  const inStudy = document.getElementById('edit-in-study');
+  if (inStudy) inStudy.onchange = () => { editRecord.in_study = inStudy.checked; };
+  const correctness = document.getElementById('edit-correctness');
+  if (correctness) correctness.onchange = () => {
+    editRecord.ground_truth = Object.assign({}, editRecord.ground_truth, { correctness: correctness.value });
+  };
+
+  // Cancel goes back to what Supabase holds, which is the definition of "unsaved changes gone".
+  document.getElementById('edit-cancel')?.addEventListener('click', async () => {
+    const id = editRecord?.id;
+    if (!id) return;
+    setEditStatus('Reloading the saved version…');
+    try {
+      editRecord = await window.StudyDB.getStudyTrajectory(id);
+    } catch (e) {
+      return setEditStatus(`Could not reload: ${e.message || e}`, true);
+    }
+    setEditStatus('Reloaded from Supabase — unsaved edits discarded.');
+    const body = document.getElementById('edit-body');
+    body.innerHTML = trajectoryEditorBodyHtml(editRecord);
+    bindTrajectoryEditorBody();
+  });
+
+  const panel = document.getElementById('edit-reset-panel');
+  document.getElementById('edit-reset')?.addEventListener('click', () => { if (panel) panel.hidden = false; });
+  document.getElementById('edit-reset-cancel')?.addEventListener('click', () => { if (panel) panel.hidden = true; });
+  document.getElementById('edit-reset-apply')?.addEventListener('click', async () => {
+    const src = document.getElementById('edit-reset-src')?.value;
+    if (!src) return;
+    setEditStatus('Loading the source trajectory…');
+    let source;
+    try {
+      source = await window.StudyDB.getStudyTrajectory(src);
+    } catch (e) {
+      return setEditStatus(`Could not load ${src}: ${e.message || e}`, true);
+    }
+    if (!source?.arms?.grounding) return setEditStatus(`${src} has no grounded arm to copy.`, true);
+    // The id and the publish flag belong to THIS trajectory, not to the one being copied — resetting
+    // the steps must not quietly republish a draft or rename the row.
+    editRecord = Object.assign({}, editRecord, {
+      arms: JSON.parse(JSON.stringify(source.arms)),
+      ground_truth: JSON.parse(JSON.stringify(source.ground_truth || {})),
+    });
+    if (panel) panel.hidden = true;
+    setEditStatus(`Steps replaced from ${src} `
+      + `(${editRecord.arms.grounding.steps.length} steps). Not saved yet.`);
+    const body = document.getElementById('edit-body');
+    body.innerHTML = trajectoryEditorBodyHtml(editRecord);
+    bindTrajectoryEditorBody();
+  });
+
+  document.getElementById('edit-save')?.addEventListener('click', saveTrajectoryEdit);
+}
+
+/** Read the error rows back off the form. */
+function collectEditorErrors() {
+  return Array.from(document.querySelectorAll('.edit-error-type'))
+    .filter(box => box.checked)
+    .map(box => ({
+      type: box.value,
+      steps: String(document.querySelector(`.edit-error-steps[data-type="${box.value}"]`)?.value || '')
+        .split(/[,\s]+/).map(Number).filter(Number.isFinite),
+    }));
+}
+
+async function saveTrajectoryEdit() {
+  if (!editRecord) return;
+  const gt = window.TrajectoryEdit.setGroundTruthErrors(
+    Object.assign({}, editRecord.ground_truth,
+      { correctness: document.getElementById('edit-correctness')?.value || editRecord.ground_truth?.correctness }),
+    collectEditorErrors()
+  );
+
+  // REFUSE TO PUBLISH WHAT CANNOT BE SCORED. A live trajectory whose ground truth the scorer rejects
+  // returns null for every measure, and the rows come back looking like participants who answered
+  // nothing. A draft may be saved half-finished — that is what a draft is for.
+  const problem = window.TrajectoryEdit.groundTruthProblem(gt);
+  if (problem && editRecord.in_study) {
+    return setEditStatus(`Cannot publish yet — ${problem}`, true);
+  }
+
+  const steps = editRecord.arms?.grounding?.steps || [];
+  const maxStep = steps.length;
+  const outOfRange = gt.errors.flatMap(e => e.steps).filter(n => n < 1 || n > maxStep);
+  if (outOfRange.length) {
+    return setEditStatus(`No such step: ${outOfRange.join(', ')} — this run has steps 1–${maxStep}.`, true);
+  }
+
+  setEditStatus('Saving…');
+  try {
+    await window.StudyDB.updateStudyTrajectory(editRecord.id, {
+      arms: editRecord.arms,
+      ground_truth: gt,
+      in_study: !!editRecord.in_study,
+    });
+  } catch (e) {
+    return setEditStatus(e.message || String(e), true);
+  }
+  editRecord.ground_truth = gt;
+  // The picker is built from a list read once when the tab opened, so without this a trajectory
+  // just published still reads "○ draft" in the dropdown — the save worked and the screen said it
+  // had not, which is the same lie the silent 204 used to tell.
+  const listed = editList.find(t => t.id === editRecord.id);
+  if (listed) {
+    listed.in_study = !!editRecord.in_study;
+    listed.ground_truth = gt;
+  }
+  setEditStatus(`Saved — ${steps.length} steps, `
+    + `${gt.errors.length ? gt.errors.map(e => `${e.type} at ${e.steps.join(',')}`).join('; ') : 'no error'}. `
+    + `${editRecord.in_study ? 'LIVE — participants can draw this task.' : 'Still a draft, not shown to anyone.'}`);
+  renderTrajectoryEditor();
+}
+
 async function showAdminVisualizations() {
   const content = document.getElementById('admin-content');
   content.innerHTML = '<div class="viz-loading">Loading study results…</div>';
   try {
     const rows = await window.StudyDB.listStudyResults();
     adminVizRows = rows;
+    vizLoadedAt = new Date();
+    // Static per task, so it rides along with the results rather than being fetched per card.
+    try { taskImageCounts = await window.StudyDB.listTaskImageCounts(); } catch (e) { taskImageCounts = new Map(); }
     if (!rows.length) {
       content.innerHTML = '<div class="viz-empty">No result rows yet.</div><button class="admin-exit" id="admin-exit">Leave admin mode</button>';
     } else {

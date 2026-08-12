@@ -172,14 +172,25 @@ function chipify(html) {
   (arm.answer_evidence || []).forEach(ev => {
     if (ev?.key) byKey.set(String(ev.key).trim().toLowerCase(), ev);
   });
+  // NUMBERED BY WHAT SURVIVES, not by position in the source. Removing three of five markers must
+  // leave chips 1 and 2, not 2 and 5 — a numbering with holes in it reads as evidence that failed
+  // to load rather than as evidence that was never claimed.
   let shown = 0;
-  return String(html || '').replace(/\[ev:\s*([^\]]+)\]/gi, (match, rawKey) => {
-    const hit = byKey.get(String(rawKey).trim().toLowerCase());
-    // A marker whose evidence did not survive is dropped rather than shown as raw text.
-    if (!hit) return '';
-    shown++;
-    return `<button type="button" class="tv-chip" data-ev-key="${esc(hit.key)}" title="See what this rests on">${shown}</button>`;
-  });
+  return String(html || '')
+    .replace(/\[ev:\s*([^\]]+)\]/gi, (match, rawKey) => {
+      const hit = byKey.get(String(rawKey).trim().toLowerCase());
+      // A marker whose evidence did not survive is dropped rather than shown as raw text.
+      if (!hit) return '';
+      shown++;
+      return `<button type="button" class="tv-chip" data-ev-key="${esc(hit.key)}" title="See what this rests on">${shown}</button>`;
+    })
+    // CLOSE THE GAP THE MARKER LEFT. The marker sat behind a space, so dropping it stranded that
+    // space in front of the punctuation: "the cart now contains 3 items , with the quantity set
+    // to 2 ." Cosmetic, but it is the sentence a participant is being asked to judge, and it reads
+    // as a typo in the agent's answer rather than as evidence we chose not to show.
+    // _stripGuideEvidenceMarkers does the same tidy-up on the non-grounded side.
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+([.,;:!?])/g, '$1');
 }
 
 /**
@@ -232,33 +243,9 @@ function segmentHasTarget(seg) {
   return milestoneHasShot(seg?.step);
 }
 
-/**
- * Markdown, applied ONLY to the prose between tags.
- *
- * richText splices the chips and refs in first, so what arrives here is a mix of text and markup —
- * and the emphasis rules do not know the difference. `_` is legal in an evidence key and common in
- * one ("orange_added", "business_post_1"), the whole answer is a single line, and `[^_\n]+` will
- * happily run from the underscore inside one tag's attribute to the underscore inside the next
- * tag's. The result was `data-ev-key="orange<em>added"`: a chip that still renders its number, but
- * whose key now matches no evidence, so hovering or clicking it found nothing to show. Splitting on
- * tags keeps the markers where they belong and leaves attribute values untouched.
- */
+/** The shared renderer (app/markdown.js) — see there for why it splits on tags. */
 function renderMarkdown(escaped) {
-  return String(escaped || '')
-    .split(/(<[^>]*>)/)
-    .map((part, i) => (i % 2 ? part : inlineMarkdown(part)))
-    .join('');
-}
-
-function inlineMarkdown(escaped) {
-  return String(escaped || '')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/___([^_]+)___/g, '<strong><em>$1</em></strong>')
-    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
-    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
-    .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>');
+  return window.StudyMarkdown.render(escaped);
 }
 
 /** Both passes over one piece of prose: underline the linked phrases, then number the markers. */
@@ -320,7 +307,7 @@ function render() {
       <div class="tv-answer">${richText(arm.answer)}</div>
 
       ${(arm.trail?.summary || milestones.length) ? `
-        ${sectionTitle('Reasoning trail', 'The agent\'s own account of what it did and why, written after the run. It describes the same steps as the journey above, in the agent\'s words rather than as actions.')}
+        ${sectionTitle('Reasoning trail', 'The agent\'s own account of what it did and why, written after the run. It picks out the steps it treated as milestones — some of the journey above, not all of it — in the agent\'s words rather than as actions.')}
         <div class="tv-trail">
           ${arm.trail?.summary ? `<p class="tv-trail-summary">${richText(arm.trail.summary)}</p>` : ''}
           ${milestones.map(m => {

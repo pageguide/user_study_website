@@ -163,6 +163,16 @@ alter table public.study_task_results_v2
   add column if not exists click_count integer,
   add column if not exists mouse_move_px integer;
 
+-- How many pictures each task's material holds, counted once and stored.
+-- A Find page is 3–8 MB of saved HTML and a guide run is a dozen base64 screenshots; counting them
+-- in the browser would mean pulling tens of megabytes to print one average per card. Filled by
+-- `node scripts/publish.mjs --count-images`. Safe to re-run.
+alter table public.study_task_pages
+  add column if not exists image_count integer;
+
+alter table public.study_guide_trajectories
+  add column if not exists image_count integer;
+
 create index if not exists idx_str_v2_session_id on public.study_task_results_v2 (session_id);
 create index if not exists idx_str_v2_participant on public.study_task_results_v2 (participant_id);
 create index if not exists idx_str_v2_condition_task on public.study_task_results_v2 (condition, task_type);
