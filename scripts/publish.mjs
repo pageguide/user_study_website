@@ -423,7 +423,7 @@ const ANALYSIS_SYSTEM = [
   'Rules you must follow:',
   '- Lead each answer with the finding in one sentence, then the numbers that support it.',
   '- Find questions lead on time-to-locate, with accuracy as the guardrail; Guide questions lead on',
-  '  error-type and step recall, with time and accuracy as guardrails. A win on one number while',
+  '  error-type and step F1, with time and accuracy as guardrails. A win on one number while',
   '  another moves against it is not a win — say so.',
   '- n is small. Say "directional" or "too early to call" where it is, and never present a',
   '  difference from a handful of rows as an established effect. Do not compute p-values.',

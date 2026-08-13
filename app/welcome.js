@@ -535,30 +535,69 @@ function totalTime(row) {
 }
 
 /**
+ * F1 over one precision/recall pair — the harmonic mean, not the arithmetic one.
+ *
+ * WHY HARMONIC. An unweighted mean of the two rates scores a lopsided answer the same as an even
+ * one: blaming nine steps to catch the two real ones is recall 1.00 and precision 0.22, which the
+ * arithmetic mean calls 0.61 and F1 calls 0.36. The whole point of the measure is that whichever
+ * rate is worse drags the number down, so it cannot be won by over-claiming.
+ *
+ * A NULL PRECISION IS A ZERO, NOT AN UNKNOWN, and this is the one thing here that must not be got
+ * wrong. _setScore returns `answer.size ? hit / answer.size : null` (vendor/guide_trajectories.js),
+ * so precision is null exactly when the participant PREDICTED NOTHING — which is 70 of 130 guide
+ * rows for types and 86 for steps, not an edge case. Undefined precision therefore always means
+ * zero true positives, and the F1 of zero true positives is 0. Returning null instead would drop
+ * most of the guide data out of its own average without a word.
+ *
+ * Null recall is the opposite case and IS an unknown: it means the ground truth had nothing to
+ * find, so there is no question for this row to have answered. That row leaves the average, and on
+ * the guide side evidenceQuality catches it with the no-error branch below.
+ */
+function f1(precision, recall) {
+  const r = num(recall);
+  if (r == null) return null;
+  const p = num(precision);
+  if (p == null || p + r === 0) return 0;
+  // Clamped because score_step_precision divides an occurrence count by a set size, so a step
+  // listed twice under one type can push it over 1 — nothing in the data does today, but this
+  // number is now a headline and a quality above 100% would be read as a bug in the dashboard.
+  return Math.min(1, Math.max(0, (2 * p * r) / (p + r)));
+}
+
+/**
  * Did the participant place the failure correctly — INCLUDING placing it nowhere?
  *
- * Find is precision and recall over the passages they picked. Guide is error-type and step recall
- * over the steps they blamed — except that recall has no denominator on a run that contains no
- * error, and three of the five Guide × Text runs contain none. Scored on recall alone, those rows
- * drop out, and the facet was deciding a verdict from 2 rows against 7.
+ * Find is F1 over the passages they picked. Guide is the mean of two F1s — over the error types
+ * they named, and over the steps they blamed — because those are two different claims measured
+ * against two different denominators, and pooling them into one ratio would hide which of the two
+ * a facet is actually failing at.
  *
- * So a run with nothing to localize is scored on the judgment it DOES afford: saying "no error"
- * when there was none is a correct placement and counts in full; claiming one that was not there is
- * a wrong placement and counts as zero. That is what `no_error_agreement` already records, and it
- * brings every guide row into the average.
+ * FIND'S F1 IS ITS PRECISION AND ITS RECALL, on every row collected so far. Q1b will not submit
+ * without a pick for both hops, so picks-made equals hops-expected and the two rates are equal by
+ * construction. The formula is written as F1 anyway: it is what the measure IS, and it starts to
+ * differ the moment a hop can be skipped or a hop can take more than one passage.
  *
- * KNOW WHAT THIS POOLS. A binary "correctly saw nothing wrong" and a partial step recall are not
- * the same difficulty, so a facet whose runs are mostly error-free scores high on the easy half.
- * That is only safe while both arms draw the same mix of runs — and on Guide × Text they currently
- * do not. Read that facet with the task pool in view, not as a clean arm comparison.
+ * A run that contains no error has no denominator on either side, and three of the five Guide × Text
+ * runs contain none. Scored on the F1s alone those rows drop out and the facet decides a verdict
+ * from 2 rows against 7 — so a run with nothing to localize is scored on the judgment it DOES
+ * afford: saying "no error" when there was none is a correct placement and counts in full; claiming
+ * one that was not there counts as zero. That is what `no_error_agreement` already records.
+ *
+ * KNOW WHAT THIS POOLS. A binary "correctly saw nothing wrong" and a partial F1 are not the same
+ * difficulty, so a facet whose runs are mostly error-free scores high on the easy half. That is only
+ * safe while both arms draw the same mix of runs — and on Guide × Text they currently do not. Read
+ * that facet with the task pool in view, not as a clean arm comparison.
  */
 function evidenceQuality(row) {
   if (row?.task_type === 'find') {
-    return avgValues([row.score_evidence_precision, row.score_evidence_recall]);
+    return f1(row.score_evidence_precision, row.score_evidence_recall);
   }
   if (row?.task_type === 'guide') {
-    const recall = avgValues([row.score_type_recall, row.score_step_recall]);
-    if (recall != null) return recall;
+    const balanced = avgValues([
+      f1(row.score_type_precision, row.score_type_recall),
+      f1(row.score_step_precision, row.score_step_recall),
+    ]);
+    if (balanced != null) return balanced;
     const agreed = row.score_no_error_agreement;
     return agreed == null ? null : (agreed ? 1 : 0);
   }
@@ -923,7 +962,7 @@ function verdictHtml(rows) {
  * WHICH NUMBER IS THE ANSWER depends on what was asked. A Find question asks whether grounding makes
  * verification FASTER, so time leads and accuracy is the guardrail beside it — faster-but-wronger is
  * not a win. A Guide question asks how evidence supports checking a run STEP BY STEP, which is a
- * localization question, so the error-type-and-step recall leads and time is the guardrail.
+ * localization question, so the error-type-and-step F1 leads and time is the guardrail.
  *
  * A cell under MIN_CELL_N still shows its direction, labelled as too early. Withholding the number
  * entirely invites somebody to go and compute it by hand, without the caveat attached.
@@ -1139,7 +1178,7 @@ function researchAnswerCard(spec, allRows) {
 
   const leadName = spec.kind === 'speed'
     ? 'locate time (find_supporting_answer_ms)'
-    : 'localization (step recall, or a correct “no error” in full)';
+    : 'localization F1 (error type and step, or a correct “no error” in full)';
 
   // WHICH SIDE IS WHICH, on every value. "14.5 → 11.6" is unreadable without knowing the order, and
   // the one sentence explaining it sits several cards above. The two halves are told apart three
@@ -1238,7 +1277,7 @@ function analysisSummary(rows) {
       return {
         facet: spec.label,
         question: spec.question,
-        leads_on: spec.kind === 'speed' ? 'time to locate the evidence' : 'error-type and step recall',
+        leads_on: spec.kind === 'speed' ? 'time to locate the evidence' : 'error-type and step F1',
         rows: facet.length,
         participants: participantCount(facet),
         // Named so the model cannot mistake one stage for the task: judge is deciding the answer,
@@ -1589,8 +1628,10 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
         <h4>Evidence localization quality</h4>
         ${conditionLegend}
         ${svgDumbbell(evidenceCells, { format: pct, deltaFormat: points, max: 1, betterLower: false, deltaWords: ['better', 'worse'], aria: 'Evidence localization quality, non-grounded versus grounded' })}
-        <p class="viz-note">Find: paragraph precision and recall. Guide: error type and step recall —
-          and on a run that contains no error, a correct “no error” scores in full so the row still counts.</p>
+        <p class="viz-note">F1 — the harmonic mean of precision and recall, so over-claiming costs as
+          much as missing. Find: the passages picked. Guide: the error types named and the steps blamed,
+          one F1 each, averaged. On a run that contains no error, a correct “no error” scores in full so
+          the row still counts.</p>
       </div>
       <div class="viz-card">
         <h4>Effort spent verifying</h4>
