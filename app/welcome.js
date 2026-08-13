@@ -325,9 +325,56 @@ let taskImageCounts = new Map();
 const facetTaskFilters = new Map();   // facetKey -> Set(task_id)
 const facetPickerOpen = new Set();
 
+/**
+ * Tasks a facet leaves out unless somebody ticks them back on.
+ *
+ * WHY THESE THREE, AND WHY IT IS SAFE TO SAY SO IN CODE. Guide × Text holds eight trajectories, and
+ * three of them are second recordings of goals the card already counts:
+ *
+ *     gv2-ms9iw0pq-5kj5zr   "three 4-star hotels in Austin"     also gv2-ed05972e-i5fi3b
+ *     gv2-msf02a2n-88li4p   "top 3 attractions for New York"    also gv2-ed05a7b6-kk24zp
+ *     gv2-msf5mo9m-qm5brt   "Business, Movies and Technology"   also gv2-ed35d549-ct71ub
+ *
+ * Counting both copies weights those three goals double against the two that appear once, so the
+ * facet's mean stops being a mean over its questions. The third is worse than redundant: it has
+ * three non-grounded runs and no grounded one, so every row it contributes can only move one arm.
+ *
+ * This is the researcher's call, not a heuristic — nothing in the numbers says a duplicate goal is
+ * wrong to count, and a rule that dropped tasks by matching their text would eventually drop one
+ * that was meant to be there. It is written down here, with its reason, precisely because the
+ * alternative is a filter somebody ticked once and nobody can account for later.
+ *
+ * The card still SAYS it is doing this — the "Counting 5 of 8 tasks" banner and its "Use all tasks"
+ * button are the same ones a hand-made filter raises, so a default exclusion is as visible and as
+ * reversible as a manual one. It is a default, not a lock.
+ */
+const FACET_TASK_EXCLUSIONS = {
+  guide_text: ['gv2-ms9iw0pq-5kj5zr', 'gv2-msf02a2n-88li4p', 'gv2-msf5mo9m-qm5brt'],
+};
+
 function facetKey(spec) {
   return `${spec.taskType}_${spec.style}`;
 }
+
+/**
+ * The task ids a facet counts right now, or null for "all of them".
+ *
+ * THREE STATES, NOT TWO. A facet is either using its default (no entry in facetTaskFilters, so the
+ * exclusions above apply), or carrying an explicit choice somebody made with the tick boxes. That
+ * explicit choice includes "actually, all of them" — which is why "Use all tasks" writes a full set
+ * rather than deleting the entry. Deleting it would hand the card straight back to the defaults, so
+ * the button would appear to do nothing on exactly the facet that has any.
+ */
+function chosenTasksFor(key, facetRows) {
+  if (facetTaskFilters.has(key)) return facetTaskFilters.get(key);
+  const excluded = FACET_TASK_EXCLUSIONS[key];
+  if (!excluded || !excluded.length) return null;
+  const ids = Array.from(new Set(facetRows.map(r => String(r.task_id || '')).filter(Boolean)));
+  const kept = ids.filter(id => !excluded.includes(id));
+  // Nothing to drop — a deployment whose pool no longer holds these ids gets the honest default.
+  return kept.length === ids.length ? null : new Set(kept);
+}
+
 
 /**
  * A number, or null if there isn't one. NULL AND '' ARE NOT ZERO.
@@ -1018,14 +1065,21 @@ function facetTaskPickerHtml(spec, facetRows, chosen) {
   const tasks = Array.from(byTask.values()).sort((a, b) => a.id.localeCompare(b.id));
   if (tasks.length < 2) return '';
 
-  const active = !!chosen;
   const kept = tasks.filter(t => !chosen || chosen.has(t.id)).length;
+  // The banner is about a NARROWING, not about whether an entry exists. "Use all tasks" writes an
+  // explicit full set, and a card announcing "counting 8 of 8" would be shouting about nothing.
+  const active = kept < tasks.length;
+  const byDefault = active && !facetTaskFilters.has(key);
   const open = facetPickerOpen.has(key);
+  // Carried on the button so the reset can write the full set without re-deriving it from the DOM.
+  const allIds = tasks.map(t => t.id).join(' ');
 
   return `
     ${active ? `<p class="viz-answer-filtered">Counting ${kept} of ${tasks.length} tasks — every
-      number below is from those only.
-      <button type="button" class="viz-task-reset" data-facet="${key}">Use all tasks</button></p>` : ''}
+      number below is from those only.${byDefault ? ` ${tasks.length - kept} duplicate re-recordings of `
+        + 'goals this card already counts are left out by default; tick one to put it back.' : ''}
+      <button type="button" class="viz-task-reset" data-facet="${key}"
+        data-tasks="${adminEsc(allIds)}">Use all tasks</button></p>` : ''}
     <details class="viz-task-picker" data-facet="${key}"${open ? ' open' : ''}>
       <summary>Tasks in this card (${kept}/${tasks.length})</summary>
       <div class="viz-task-list">
@@ -1164,7 +1218,7 @@ function researchAnswerCard(spec, allRows) {
   // The picker lists every task the facet HAS, not every task it currently counts — a list that
   // shrank as you unticked things would make a dropped task unreachable to put back.
   const key = facetKey(spec);
-  const chosen = facetTaskFilters.get(key) || null;
+  const chosen = chosenTasksFor(key, facetRows);
   const rows = chosen ? facetRows.filter(r => chosen.has(String(r.task_id || ''))) : facetRows;
   const speed = facetDelta(rows, locateTime);
   const judge = facetDelta(rows, judgeTime);
@@ -1337,7 +1391,12 @@ function analysisNotes(rows) {
 let breakdownFinishedOnly = false;
 
 function breakdownLine(spec, allRows) {
-  const rows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+  const facetRows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+  // The same task selection the card above uses — defaults included, and any box ticked since. This
+  // block is the four cards said in four lines, so a line that counted a task its own card had
+  // dropped would be two different answers to one question, on one screen.
+  const chosen = chosenTasksFor(facetKey(spec), facetRows);
+  const rows = chosen ? facetRows.filter(r => chosen.has(String(r.task_id || ''))) : facetRows;
   const speed = facetDelta(rows, locateTime);
   const accuracy = facetDelta(rows, answerCorrect);
   const localization = facetDelta(rows, evidenceQuality);
@@ -1373,8 +1432,9 @@ function breakdownSummaryHtml(allRows) {
     </div>
     <p class="viz-breakdown-basis">${rows.length} rows · ${sessions} session${sessions === 1 ? '' : 's'}
       · every pair reads non-grounded → grounded · n is the lead measure per side (locate time for
-      Find, localization for Guide). Over <b>all fetched rows</b> — the filters above do not touch
-      this block.</p>
+      Find, localization for Guide). Over <b>all fetched rows</b> — the filter bar above does not
+      touch this block, but each line counts the same tasks its card does, so a task dropped there
+      is dropped here too.</p>
     <ul class="viz-breakdown-list">
       ${RESEARCH_QUESTIONS.map(spec => breakdownLine(spec, rows)).join('')}
     </ul>
@@ -1854,14 +1914,19 @@ function bindVisualizationControls() {
       const all = Array.from(document.querySelectorAll(`.viz-task-check[data-facet="${key}"]`));
       const on = new Set(all.filter(b => b.checked).map(b => b.dataset.task));
       if (!on.size) { box.checked = true; return; }   // a card counting nothing is not a view of it
-      if (on.size === all.length) facetTaskFilters.delete(key);
-      else facetTaskFilters.set(key, on);
+      // Always written, even when it is everything: an unset entry means "use the defaults", and a
+      // facet with default exclusions would snap back to them the moment you ticked the last box on.
+      facetTaskFilters.set(key, on);
       redrawCards();
     });
   });
   document.querySelectorAll('.viz-task-reset').forEach(btn => {
     btn.addEventListener('click', () => {
-      facetTaskFilters.delete(btn.dataset.facet);
+      const key = btn.dataset.facet;
+      const ids = (btn.dataset.tasks || '').split(/\s+/).filter(Boolean);
+      // An explicit "all", not an absence — see chosenTasksFor. Deleting the entry would restore the
+      // default exclusions, which is the opposite of what this button says.
+      facetTaskFilters.set(key, new Set(ids));
       redrawCards();
     });
   });
