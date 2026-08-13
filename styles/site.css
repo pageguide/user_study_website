@@ -331,6 +331,72 @@ body {
 .q-btn:hover { border-color: var(--accent); color: var(--accent-dark); }
 .q-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .q-btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
+/* An <a> that has to sit in a row of <button>s without looking like the odd one out. */
+.q-btn-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+
+/* ── The post-study survey, on the final screen ─────────────────────────────
+   Fills the left pane — the whole viewport height, edge to edge. The form is the last thing the
+   study asks for, and one scrolled through a letterbox is one people abandon halfway. The stage
+   carries no padding of its own: Google's form already draws its own margins, and a second set
+   inside a frame costs width the Likert rows need. */
+.q-survey-stage {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #f5f5f7;
+}
+
+/* The instruction sits above the form, in the pane the participant is already looking at. Fixed
+   height by content, never scrolling away from it: the frame below takes whatever is left. */
+.q-survey-head {
+  flex: none;
+  padding: 18px 24px 14px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+
+.q-survey-title { margin: 0; font-size: 19px; font-weight: 800; }
+
+/* Loud on purpose: the frame under this banner is the live form, and a preview that looks exactly
+   like the real screen is one somebody fills in. */
+.q-survey-preview {
+  flex: none;
+  margin: 0;
+  padding: 9px 24px;
+  background: rgba(211, 47, 47, .10);
+  border-bottom: 1px solid rgba(211, 47, 47, .3);
+  color: var(--bad);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.q-survey-lead {
+  margin: 6px 0 0;
+  max-width: 70ch;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+/* Sized to its text rather than stretched across the pane — .q-btn is flex:1 for a row of two in a
+   420px panel, which out here would be a button a thousand pixels wide. */
+.q-survey-open { flex: none; margin-top: 12px; padding: 10px 18px; }
+
+.q-survey {
+  display: block;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #f5f5f7;
+}
+
+/* Stacked layout: the panes are no longer side by side and 100vh would push the questionnaire a
+   whole screen below the text that introduces it. */
+@media (max-width: 900px) {
+  .q-survey-stage { height: auto; }
+  .q-survey { height: 150vh; flex: none; }
+}
 .admin-task-jump {
   display: grid;
   gap: 6px;
@@ -1844,6 +1910,31 @@ body {
   background: rgba(190, 60, 50, .08); color: var(--bad); font-size: 12.5px; line-height: 1.5;
 }
 
+/* ── Find task editor ───────────────────────────────────────────────────────
+   Shares the trajectory editor's furniture (.edit-head, .edit-live, .edit-problem); these are the
+   three things it has that the Guide half does not. */
+.findtask-style {
+  font: 700 10.5px/1.2 inherit;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+/* The key, laid out as a key: the correct option is marked, not left to be inferred from position. */
+.findtask-options {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.findtask-options .is-correct { color: var(--accent-dark); }
+
+.findtask-warn { color: var(--bad); font-weight: 600; }
+
 /* Provenance for the whole pane: what was read, and when. */
 .viz-freshness {
   display: flex;
@@ -2073,3 +2164,47 @@ body {
    and the data are visibly the same thing rather than two lists to hold in your head. */
 .viz-answer-legend .viz-v-ng,
 .viz-answer-legend .viz-v-g { font-size: 11px; }
+
+/* ── Breakdown summary ──────────────────────────────────────────────────────
+   Four lines meant to be read as prose and pasted into a writeup, so they are set as sentences
+   rather than as a grid: the same numbers as the cards above, in the shape a paragraph wants. */
+.viz-breakdown { margin: 18px 0 0; }
+
+.viz-breakdown-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.viz-breakdown-head h4 { margin: 0; }
+
+.viz-breakdown-modes { display: flex; gap: 6px; }
+
+.viz-breakdown-basis {
+  margin: 6px 0 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.viz-breakdown-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.viz-breakdown-list li {
+  font-size: 13px;
+  line-height: 1.55;
+  /* Digits line up down the block so the four facets can be compared by eye. */
+  font-variant-numeric: tabular-nums;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+}
+
+/* Under MIN_CELL_N the line still shows its direction, dimmed, so nobody quotes it as settled. */
+.viz-breakdown-list li.is-thin { opacity: .6; }
+
+.viz-breakdown-n { color: var(--muted); font-size: 12px; }

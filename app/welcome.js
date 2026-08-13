@@ -201,9 +201,14 @@ function showAdminPanel() {
   const allowed = window.StudyAdmin.adminTabs();
   if (!allowed.length) return showAdminLogin();
   const tab = allowed.includes(o.tab) ? o.tab : allowed[0];
-  const label = { review: 'Review tasks', viz: 'Visualizations', edit: 'Edit trajectory' };
+  const label = {
+    review: 'Review tasks', viz: 'Visualizations',
+    edit: 'Edit trajectory', findtask: 'Edit Find task',
+  };
   const title = allowed.length > 1 ? 'Admin' : label[tab];
-  const warn = tab === 'viz' ? 'read-only — results dashboard' : 'review mode writes nothing';
+  const warn = tab === 'viz' ? 'read-only — results dashboard'
+    : tab === 'findtask' ? 'writes the stimuli — changes what participants are shown'
+      : 'review mode writes nothing';
 
   adminPanel.hidden = false;
   adminPanel.innerHTML = `
@@ -229,6 +234,10 @@ function showAdminPanel() {
     showTrajectoryEditor();
     return;
   }
+  if (tab === 'findtask') {
+    showFindTaskEditor();
+    return;
+  }
   showAdminReviewControls();
 }
 
@@ -247,7 +256,10 @@ function showAdminReviewControls() {
         <button class="admin-chip${o.arm === id ? ' admin-chip-on' : ''}" data-arm="${id}">${label}</button>`).join('')}
     </div>
     <button class="welcome-btn" id="admin-go">Review →</button>
-    <button class="admin-chip" id="admin-tutorial">▶ Preview the walkthrough</button>
+    <div class="admin-row">
+      <button class="admin-chip" id="admin-tutorial">▶ Preview the walkthrough</button>
+      <button class="admin-chip" id="admin-endscreen">🏁 View the end screen</button>
+    </div>
     <button class="admin-exit" id="admin-exit">Leave admin mode</button>`;
 
   content.querySelectorAll('[data-half]').forEach(b => {
@@ -260,6 +272,12 @@ function showAdminReviewControls() {
   // the one thing "Review →" cannot do, since it needs published tasks and this needs none.
   document.getElementById('admin-tutorial').onclick = () => {
     location.href = 'study.html?tutorial=preview';
+  };
+  // The screen a participant reaches after the eighth task — the thank-you and the questionnaire —
+  // without answering eight tasks to get to it. Needs no session for the same reason the walkthrough
+  // preview does not: nothing on it is drawn from the run.
+  document.getElementById('admin-endscreen').onclick = () => {
+    location.href = 'study.html?finish=preview';
   };
   document.getElementById('admin-exit').onclick = () => {
     window.StudyAdmin.revokeAdmin();
@@ -1259,6 +1277,75 @@ function analysisNotes(rows) {
     .map(n => `[${n.facet} · ${n.condition}] ${n.note}`);
 }
 
+/**
+ * The four cards said in four lines, over ALL rows, with its own all-vs-finished switch.
+ *
+ * Deliberately NOT wired to the filter bar. This block is the paste-into-the-writeup summary of the
+ * whole study, and a summary that silently changed because a search box still held "quora" is how a
+ * subset ends up quoted as the result. It reads `adminVizRows` — everything fetched — and the only
+ * thing that narrows it is the switch on the block itself, which is named on the block.
+ *
+ * The two views answer different questions and both belong here. ALL SESSIONS counts every answered
+ * task, including the ones from sittings that walked away partway; it is the most data, and its two
+ * arms can hold different numbers of rows because a drop-off lands mid-sequence. FINISHED ONLY keeps
+ * the sittings that answered all eight, which balances the arms by construction — the same people on
+ * both sides — at the cost of the rows it drops. Where the two disagree, the disagreement is the
+ * finding: it means the effect is carried by who left, not by the condition.
+ *
+ * Each line's n is the LEAD measure's n for that facet — locate time for Find, localization for
+ * Guide — the same number the card above prints, so the two can never quietly differ.
+ */
+let breakdownFinishedOnly = false;
+
+function breakdownLine(spec, allRows) {
+  const rows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+  const speed = facetDelta(rows, locateTime);
+  const accuracy = facetDelta(rows, answerCorrect);
+  const localization = facetDelta(rows, evidenceQuality);
+  const lead = spec.kind === 'speed' ? speed : localization;
+  const pair = (cell, format) => `<span class="viz-v-ng" title="non-grounded">${adminEsc(format(cell.nongrounded.mean))}</span>`
+    + `<span class="viz-v-arrow"> → </span>`
+    + `<span class="viz-v-g" title="grounded">${adminEsc(format(cell.grounded.mean))}</span>`;
+  return `<li${lead.n < MIN_CELL_N ? ' class="is-thin"' : ''}>
+    <b>${adminEsc(spec.label.replace(' · ', ' / '))}</b>
+    <span class="viz-breakdown-n">(${lead.nongrounded.n} vs ${lead.grounded.n})</span>:
+    locate time: ${pair(speed, seconds)},
+    localization quality: ${pair(localization, pct)},
+    accuracy: ${pair(accuracy, pct)}
+  </li>`;
+}
+
+function breakdownSummaryHtml(allRows) {
+  const finished = completeSessionKeys(allRows);
+  const rows = breakdownFinishedOnly
+    ? allRows.filter(r => finished.has(sessionKey(r)))
+    : allRows;
+  const sessions = participantCount(rows);
+  const chip = (on, mode, label) => `<button type="button" data-mode="${mode}"
+    class="admin-chip viz-breakdown-mode${on ? ' admin-chip-on' : ''}" aria-pressed="${on}">${label}</button>`;
+
+  return `<section class="viz-card viz-breakdown">
+    <div class="viz-breakdown-head">
+      <h4>Breakdown summary for each category</h4>
+      <div class="viz-breakdown-modes">
+        ${chip(!breakdownFinishedOnly, 'all', 'All sessions')}
+        ${chip(breakdownFinishedOnly, 'finished', `Completed sessions only (${finished.size})`)}
+      </div>
+    </div>
+    <p class="viz-breakdown-basis">${rows.length} rows · ${sessions} session${sessions === 1 ? '' : 's'}
+      · every pair reads non-grounded → grounded · n is the lead measure per side (locate time for
+      Find, localization for Guide). Over <b>all fetched rows</b> — the filters above do not touch
+      this block.</p>
+    <ul class="viz-breakdown-list">
+      ${RESEARCH_QUESTIONS.map(spec => breakdownLine(spec, rows)).join('')}
+    </ul>
+    ${breakdownFinishedOnly
+      ? `<p class="viz-note">Only sittings with all ${TASKS_PER_SESSION} tasks answered — the arms hold
+         the same people, so a difference here cannot be drop-off.</p>`
+      : '<p class="viz-note">Every answered task, drop-offs included, so the two arms can hold different row counts.</p>'}
+  </section>`;
+}
+
 function researchAnswersHtml(rows) {
   const noteCount = analysisNotes(rows).length;
   const people = participantCount(rows);
@@ -1483,6 +1570,7 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
     ${controlsHtml(allRows, filters)}
     ${verdictHtml(rows)}
     ${researchAnswersHtml(rows)}
+    ${breakdownSummaryHtml(allRows)}
     ${howToReadHtml()}
     <div class="viz-chart-grid">
       <div class="viz-card">
@@ -1744,6 +1832,12 @@ function bindVisualizationControls() {
   }
   document.getElementById('viz-table-details')?.addEventListener('toggle', (e) => {
     vizTableOpen = e.target.open;
+  });
+  document.querySelectorAll('.viz-breakdown-mode').forEach(btn => {
+    btn.addEventListener('click', () => {
+      breakdownFinishedOnly = btn.dataset.mode === 'finished';
+      renderAdminVisualizations(adminVizRows, currentVizFilters());
+    });
   });
   document.getElementById('viz-filter-complete')?.addEventListener('click', () => {
     vizCompleteOnly = !vizCompleteOnly;
@@ -2428,6 +2522,257 @@ async function saveTrajectoryEdit() {
     + `${gt.errors.length ? gt.errors.map(e => `${e.type} at ${e.steps.join(',')}`).join('; ') : 'no error'}. `
     + `${editRecord.in_study ? 'LIVE — participants can draw this task.' : 'Still a draft, not shown to anyone.'}`);
   renderTrajectoryEditor();
+}
+
+// ── The Find task editor ─────────────────────────────────────────────────────────────────────────
+// The Guide half has had an editor since the trajectories needed errors planted in them. The Find
+// half had none: its tasks were whatever the publisher last uploaded, and taking one out of the
+// study meant editing a row in the Supabase console. This is that, with the checks the console
+// cannot make — that a task about to go live still has an answer to score against, and that its
+// wording says which of the four cells it belongs to.
+//
+// WHAT `in_study` DOES. listStudyTasks filters on it, so it is the whole difference between a task
+// participants can draw and one that exists but is never shown. Untick it and the task stops
+// appearing in new sessions immediately; rows already collected under it stay exactly where they
+// are, which is the point — this is how a broken task leaves the rotation without leaving the data.
+
+let findTaskList = [];
+let findTaskRecord = null;
+let findTaskStatus = '';
+
+/** The two wordings studyStyle() can read a cell out of. Anything else lands the task nowhere. */
+const FIND_TASK_TYPES = ['FIND X VISUAL', 'FIND X TEXT'];
+
+function setFindTaskStatus(message, bad = false) {
+  findTaskStatus = message;
+  const el = document.getElementById('findtask-status');
+  if (!el) return;
+  el.textContent = message;
+  el.className = `welcome-status${bad ? ' welcome-status-bad' : ''}`;
+}
+
+/**
+ * Which of the four study cells this task will count towards, decided the way the study decides it.
+ *
+ * Called against the CURRENT form values rather than the saved row, because getting this wrong is
+ * invisible until the dashboard: a task whose wording names neither VISUAL nor TEXT gets `style: ''`
+ * from studyStyle(), lands in no bucket in styleBuckets(), and quietly never reaches a participant
+ * even with in_study ticked. Better to say so under the field.
+ */
+function findTaskStyleOf(draft) {
+  return studyStyle({
+    taskType: 'find', type: draft.type, title: draft.title, question: draft.question,
+  });
+}
+
+/** The form as it stands, read straight off the inputs — the record is only what was last saved. */
+function readFindTaskForm() {
+  const value = (id) => String(document.getElementById(id)?.value ?? '').trim();
+  const lines = value('findtask-distractors').split('\n').map(s => s.trim()).filter(Boolean);
+  return {
+    id: findTaskRecord?.id || '',
+    title: value('findtask-title'),
+    url: value('findtask-url'),
+    type: value('findtask-type'),
+    question: value('findtask-question'),
+    answer: value('findtask-answer'),
+    distractors: lines,
+    task_index: Number(value('findtask-index')),
+    in_study: !!document.getElementById('findtask-in-study')?.checked,
+  };
+}
+
+/**
+ * Why this task cannot go live yet, or ''.
+ *
+ * Only enforced against a task being PUBLISHED. A draft is allowed to be half-written — that is
+ * what a draft is for, and the same rule the trajectory editor applies before it lets one out.
+ */
+function findTaskProblem(draft) {
+  if (!draft.question) return 'it has no question.';
+  if (!draft.answer) return 'it has no correct answer, so nothing can be scored against it.';
+  if (!draft.distractors.length) return 'it has no distractors, so the multiple choice has one option.';
+  if (!draft.url) return 'it has no URL, so there is no page to verify it on.';
+  if (!findTaskStyleOf(draft)) {
+    return 'nothing in its type, title or question says VISUAL or TEXT, so it belongs to no cell '
+      + 'and would never be drawn.';
+  }
+  const clash = draft.distractors.find(d => d.toLowerCase() === draft.answer.toLowerCase());
+  if (clash) return 'one distractor is identical to the correct answer.';
+  return '';
+}
+
+async function showFindTaskEditor() {
+  const content = document.getElementById('admin-content');
+  content.innerHTML = '<div class="viz-loading">Loading Find tasks…</div>';
+  try {
+    findTaskList = await window.StudyDB.listAllStudyTasks();
+  } catch (e) {
+    content.innerHTML = `<div class="welcome-status welcome-status-bad">Could not load Find tasks: ${adminEsc(e.message || e)}</div>`
+      + '<button class="admin-exit" id="admin-exit">Leave admin mode</button>';
+    bindAdminExit();
+    return;
+  }
+  renderFindTaskEditor();
+}
+
+function renderFindTaskEditor() {
+  const content = document.getElementById('admin-content');
+  const picked = findTaskRecord?.id || '';
+  const live = findTaskList.filter(t => t.in_study).length;
+  const options = findTaskList.map(t => `<option value="${adminEsc(t.id)}"${t.id === picked ? ' selected' : ''}>`
+    + `${t.in_study ? '● live' : '○ held out'} · ${adminEsc(t.id)}`
+    + ` — ${adminEsc(String(t.title || t.question || '').slice(0, 60))}</option>`).join('');
+
+  content.innerHTML = `
+    <p class="viz-note">${findTaskList.length} Find task${findTaskList.length === 1 ? '' : 's'},
+      <b>${live} in the study</b>. Only the live ones are drawn into a participant's queue; the rest
+      stay in the table untouched, and so do the results already collected under them.</p>
+    <label class="welcome-label" for="findtask-pick">Find task</label>
+    <select class="welcome-input" id="findtask-pick">
+      <option value="">Choose a task…</option>
+      ${options}
+    </select>
+    <div id="findtask-body">${findTaskRecord ? findTaskEditorBodyHtml(findTaskRecord) : ''}</div>
+    <div class="welcome-status" id="findtask-status">${adminEsc(findTaskStatus)}</div>
+    <button class="admin-exit" id="admin-exit">Leave admin mode</button>`;
+
+  document.getElementById('findtask-pick').onchange = (e) => {
+    findTaskStatus = '';
+    findTaskRecord = findTaskList.find(t => t.id === e.target.value) || null;
+    renderFindTaskEditor();
+  };
+  bindFindTaskControls();
+  bindAdminExit();
+}
+
+function findTaskEditorBodyHtml(record) {
+  const distractors = Array.isArray(record.distractors) ? record.distractors : [];
+  const typeValue = String(record.type || '');
+  const known = FIND_TASK_TYPES.includes(typeValue.toUpperCase());
+  // Rows are counted only when the dashboard has already been opened this session; a number that
+  // appeared for some visits and not others would be worse than a sentence that is always true.
+  const collected = adminVizRows.filter(r => String(r.task_id) === String(record.id)).length;
+
+  return `
+    <div class="edit-head">
+      <div><b>${adminEsc(record.id)}</b> <span class="findtask-style">${adminEsc(findTaskStyleOf(record) || 'no cell')}</span></div>
+      <label class="edit-live">
+        <input type="checkbox" id="findtask-in-study"${record.in_study ? ' checked' : ''}>
+        Use in the study — shown to participants
+      </label>
+    </div>
+
+    <label class="welcome-label" for="findtask-title">Title</label>
+    <input type="text" class="welcome-input" id="findtask-title" value="${adminEsc(record.title || '')}">
+
+    <label class="welcome-label" for="findtask-url">Page URL</label>
+    <input type="text" class="welcome-input" id="findtask-url" value="${adminEsc(record.url || '')}">
+    <p class="viz-note">The frozen snapshot in <code>study_task_pages</code> is keyed by task id and
+      falls back to this URL, so changing it can change which page the task opens. It does not
+      re-capture anything — that is <code>scripts/publish.mjs</code>.</p>
+
+    <label class="welcome-label" for="findtask-type">Cell</label>
+    <select class="welcome-input" id="findtask-type">
+      ${FIND_TASK_TYPES.map(t => `<option value="${t}"${t === typeValue.toUpperCase() ? ' selected' : ''}>${t}</option>`).join('')}
+      ${known ? '' : `<option value="${adminEsc(typeValue)}" selected>${adminEsc(typeValue || '(blank)')} — unrecognised</option>`}
+    </select>
+    <p class="viz-note" id="findtask-style-note"></p>
+
+    <label class="welcome-label" for="findtask-question">Question</label>
+    <textarea class="welcome-input" id="findtask-question" rows="4">${adminEsc(record.question || '')}</textarea>
+
+    <label class="welcome-label" for="findtask-answer">Correct answer</label>
+    <textarea class="welcome-input" id="findtask-answer" rows="2">${adminEsc(record.answer || '')}</textarea>
+
+    <label class="welcome-label" for="findtask-distractors">Distractors — one per line</label>
+    <textarea class="welcome-input" id="findtask-distractors" rows="4">${adminEsc(distractors.join('\n'))}</textarea>
+
+    ${collected ? `<p class="edit-problem">⚠ ${collected} result row${collected === 1 ? ' has' : 's have'}
+      already been collected on this task. Rewriting the answer or the distractors makes those rows
+      and every future row answers to different questions — take the task out of the study instead if
+      what you want is to stop using it.</p>` : ''}
+
+    <label class="welcome-label">Options, as the participant sees them</label>
+    <ol class="findtask-options">
+      ${[record.answer, ...distractors].filter(Boolean).map((opt, i) => `<li${i === 0 ? ' class="is-correct"' : ''}>
+        ${adminEsc(opt)}${i === 0 ? ' <b>← correct</b>' : ''}</li>`).join('')}
+    </ol>
+    <p class="viz-note">Shown in a shuffled order at question time; listed correct-first here so the
+      key is readable.</p>
+
+    <label class="welcome-label" for="findtask-index">Order in the queue</label>
+    <input type="number" class="welcome-input" id="findtask-index" value="${adminEsc(String(record.task_index ?? 0))}">
+
+    <div class="admin-row">
+      <button type="button" class="welcome-btn" id="findtask-save">Save task</button>
+      <button type="button" class="admin-chip" id="findtask-revert">Undo my edits</button>
+    </div>`;
+}
+
+function bindFindTaskControls() {
+  if (!findTaskRecord) return;
+  const restyle = () => {
+    const note = document.getElementById('findtask-style-note');
+    if (!note) return;
+    const style = findTaskStyleOf(readFindTaskForm());
+    note.textContent = style
+      ? `Counts as ${style.replace('_', ' / ')} in the dashboard.`
+      : 'Nothing here says VISUAL or TEXT — this task belongs to no cell and would never be drawn.';
+    note.classList.toggle('findtask-warn', !style);
+  };
+  restyle();
+  ['findtask-type', 'findtask-title', 'findtask-question'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', restyle);
+    document.getElementById(id)?.addEventListener('change', restyle);
+  });
+  document.getElementById('findtask-save').onclick = saveFindTaskEdit;
+  document.getElementById('findtask-revert').onclick = () => {
+    findTaskStatus = '';
+    // findTaskRecord is still the row as it was loaded, so re-rendering IS the undo.
+    renderFindTaskEditor();
+  };
+}
+
+async function saveFindTaskEdit() {
+  if (!findTaskRecord) return;
+  const draft = readFindTaskForm();
+
+  // REFUSE TO PUBLISH WHAT CANNOT BE ANSWERED, exactly as saveTrajectoryEdit refuses to publish what
+  // cannot be scored. A live task missing its answer produces rows that look like participants who
+  // got everything wrong, and nothing in the data says the task was at fault.
+  const problem = draft.in_study ? findTaskProblem(draft) : '';
+  if (problem) return setFindTaskStatus(`Cannot put this in the study — ${problem}`, true);
+  if (!Number.isFinite(draft.task_index)) {
+    return setFindTaskStatus('Order in the queue has to be a number.', true);
+  }
+
+  setFindTaskStatus('Saving…');
+  const patch = {
+    title: draft.title,
+    url: draft.url,
+    type: draft.type,
+    question: draft.question,
+    answer: draft.answer,
+    distractors: draft.distractors,
+    task_index: draft.task_index,
+    in_study: draft.in_study,
+  };
+  try {
+    await window.StudyDB.updateStudyTask(findTaskRecord.id, patch);
+  } catch (e) {
+    return setFindTaskStatus(e.message || String(e), true);
+  }
+  // The picker and the form are both built from the list read when the tab opened, so the saved row
+  // has to land back in it — otherwise a task just published still reads "○ held out" and the screen
+  // contradicts the write that just succeeded.
+  Object.assign(findTaskRecord, patch);
+  const listed = findTaskList.find(t => t.id === findTaskRecord.id);
+  if (listed) Object.assign(listed, patch);
+  renderFindTaskEditor();
+  setFindTaskStatus(`Saved ${findTaskRecord.id} — ${draft.distractors.length + 1} options, `
+    + `${findTaskStyleOf(draft).replace('_', ' / ') || 'no cell'}. `
+    + `${draft.in_study ? 'IN THE STUDY — participants can draw it.' : 'Held out — no new session will show it.'}`);
 }
 
 async function showAdminVisualizations() {

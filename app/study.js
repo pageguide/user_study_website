@@ -253,6 +253,13 @@ async function boot() {
     return window.Tutorial.preview();
   }
 
+  // The final screen on its own, from the admin panel. Same reasoning as the walkthrough preview: it
+  // needs no session and no queue, and the alternative — answering eight tasks to find out whether
+  // the survey renders — is why nobody checks this screen.
+  if (new URLSearchParams(location.search).get('finish') === 'preview') {
+    return finish({ preview: true });
+  }
+
   // In-memory state wins when it is already populated. That is how the demo hands its fixture queue
   // over without going near localStorage — which matters, because the demo and a real run would
   // otherwise share one storage key, and opening the demo would silently discard the progress of a
@@ -3349,21 +3356,88 @@ function askPostQuestions(task, record, timings) {
   };
 }
 
-function finish() {
+/**
+ * The post-study questionnaire, asked once at the very end.
+ *
+ * Committed here rather than in app/config.js, which is gitignored: a deployment cloned fresh would
+ * lose the survey entirely and nobody would notice, because a missing final step looks exactly like
+ * a finished study. A deployment that needs a different form can still override it from config
+ * without touching this file.
+ */
+const POST_SURVEY_URL = window.STUDY_CONFIG?.POST_SURVEY_URL
+  || 'https://docs.google.com/forms/d/e/1FAIpQLSforUWSqdA0imJlvaJnV_5RE0xoAV-CDDntlUpkbjr_5hYtmw/viewform';
+
+/** The same form, told to render without Google's page chrome, for the inline frame. */
+function postSurveyEmbedUrl(url) {
+  return `${url}${url.includes('?') ? '&' : '?'}embedded=true`;
+}
+
+/**
+ * The end of the study — and, with `{ preview: true }`, the same screen opened on its own.
+ *
+ * A PREVIEW MUST NOT TOUCH A RUN. It is reached by URL, which means it can be opened in a tab where
+ * a participant is midway through the real study, so it clears no local state and writes nothing;
+ * the only difference it makes to the page is what is drawn on it.
+ */
+function finish({ preview = false } = {}) {
   detachQuestionPane();
   stopTaskTelemetry();
-  const pending = pendingResultCount();
-  stimulusPane.innerHTML = '<div class="tv-done">Thank you — that was the last task.</div>';
+  const pending = preview ? 0 : pendingResultCount();
+  // In a preview there are no results to count, and "you have finished all 0 tasks" reads as a bug
+  // in the screen being checked. The queue length is what a real run would have shown.
+  const answered = preview
+    ? (Array.isArray(S.state.queue) && S.state.queue.length) || 8
+    : S.state.results.length;
+  // A REVIEW WALK ends here incidentally, and an embedded live form at the end of it is one scroll
+  // from a response that nothing marks as not-a-participant — so the walk gets the link only. A
+  // PREVIEW is the opposite: it was opened to look at this screen, so it shows the real thing, with
+  // a banner saying not to submit it.
+  const review = !preview && !!S.state.adminReview;
+
+  // THE SURVEY GOES IN THE LEFT PANE, where the material was. The right pane is 420px wide because
+  // it stands in for the extension's side panel, and a Likert grid folded into 420px is a column of
+  // wrapped radio labels nobody can compare across. The left pane is the width the study spent on
+  // things that have to be READ, and by this screen there is no material left to put in it.
+  // The heading rides ABOVE the frame rather than only in the right pane. What a participant looks
+  // at on this screen is the left pane — it is where every task put the thing to do — and an
+  // instruction they have to find in the other column is one they read after wondering why the
+  // study is showing them a Google form.
+  const surveyHead = `
+    ${preview ? `<p class="q-survey-preview">Preview of the final screen — the form below is the
+      REAL questionnaire. Read it, do not submit it.</p>` : ''}
+    <header class="q-survey-head">
+      <h1 class="q-survey-title">✅ Last step — a short survey</h1>
+      <p class="q-survey-lead">You have finished all ${answered} tasks. Thank you.
+        Please fill in the questionnaire below to complete the study — it is the last thing we need
+        from you.</p>
+      <a class="q-btn q-btn-primary q-btn-link q-survey-open" href="${esc(POST_SURVEY_URL)}"
+        target="_blank" rel="noopener noreferrer">Open the survey in a new tab ↗</a>
+    </header>`;
+
+  stimulusPane.innerHTML = review
+    ? `<div class="q-survey-stage">${surveyHead}
+        <div class="tv-done">Review mode: the survey is not embedded, so checking this screen
+          cannot leave a real response. Use the button above to read it.</div>
+      </div>`
+    : `<div class="q-survey-stage">${surveyHead}
+        <iframe class="q-survey" title="Post-study questionnaire"
+          src="${esc(postSurveyEmbedUrl(POST_SURVEY_URL))}"></iframe>
+      </div>`;
+
+  // The right pane stops carrying the instruction and keeps only what the left one should not: the
+  // warning about writes that did not land, and the export that answers it. Saying the same thing in
+  // both columns would make the participant read the screen twice to find out it said one thing.
   questionPane.innerHTML = `
     <div class="q-head"><span class="q-title">✅ All done</span></div>
     <div class="q-body">
-      <p class="q-text">You have finished all ${S.state.results.length} tasks. Thank you.</p>
       ${pending ? `<p class="q-error-msg">Some task results did not reach the database yet (${pending}). Use the download button and send the file to the researcher.</p>` : ''}
-      <p class="q-sub">You can close this tab. If the researcher asked for a copy of your responses,
-        use the button below.</p>
+      <p class="q-sub">${review
+        ? 'Participants see the questionnaire in the left pane.'
+        : 'Once you have submitted the form on the left you can close this tab.'}</p>
       <div class="q-actions">
         <button class="q-btn" id="q-download">⬇ Download my responses</button>
       </div>
+      ${preview ? '<div class="q-actions"><a class="q-btn q-btn-link" href="index.html">← Back to admin</a></div>' : ''}
     </div>`;
 
   document.getElementById('q-download').onclick = () => {
@@ -3381,7 +3455,9 @@ function finish() {
     URL.revokeObjectURL(a.href);
   };
 
-  if (!window.STUDY_SOURCE) S.clearLocal();
+  // A preview clears nothing: it can be opened in a tab where somebody is midway through the real
+  // study, and wiping their local run to look at a screen would end their session.
+  if (!window.STUDY_SOURCE && !preview) S.clearLocal();
 }
 
 boot();

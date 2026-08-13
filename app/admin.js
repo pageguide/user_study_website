@@ -33,7 +33,7 @@ const ADMIN_KEY = 'pageguide_web_study_admin';
 const ADMIN_DOORS = [
   // Editing a trajectory rewrites what every future participant is shown, so it lives behind the
   // full password only — a reviewer checking wording has no reason to reach it.
-  { password: 'PageGuide2026', role: 'full', tabs: ['review', 'viz', 'edit'] },
+  { password: 'PageGuide2026', role: 'full', tabs: ['review', 'viz', 'edit', 'findtask'] },
   { password: 'visualization', role: 'viz', tabs: ['viz'] },
   { password: 'review', role: 'review', tabs: ['review'] },
 ];

@@ -295,15 +295,26 @@ async function updateStudyTrajectory(id, patch) {
     }
     throw new Error(await res.text().catch(() => `Supabase update failed (${res.status})`));
   } catch (e) {
-    return updateTrajectoryViaAdminHelper(id, patch, e);
+    return updateViaAdminHelper('/admin/trajectory', { id, patch }, e);
   }
 }
 
-async function updateTrajectoryViaAdminHelper(id, patch, originalError) {
+/**
+ * Send a refused write to the loopback helper that is allowed to make it.
+ *
+ * One function for every stimulus table: the endpoint differs, the dance does not — find the token,
+ * ask for it once and remember it for the session, POST, and forget it again the moment the helper
+ * says it is wrong so the next save can prompt instead of failing forever.
+ *
+ * @param {string} route - the helper path, e.g. '/admin/task'
+ * @param {object} body - the JSON payload that route expects
+ * @param {Error} originalError - what Supabase said, kept as the message when there is no token
+ */
+async function updateViaAdminHelper(route, body, originalError) {
   let token = '';
   try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
   if (!token) {
-    token = (window.prompt('Editing a trajectory needs the local publish helper.\n\n'
+    token = (window.prompt('Editing study material needs the local publish helper.\n\n'
       + 'Run `node scripts/publish.mjs --serve` and paste the admin save token it prints:') || '').trim();
     if (token) {
       try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
@@ -313,10 +324,10 @@ async function updateTrajectoryViaAdminHelper(id, patch, originalError) {
 
   let res;
   try {
-    res = await fetch('http://127.0.0.1:8790/admin/trajectory', {
+    res = await fetch(`http://127.0.0.1:8790${route}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
-      body: JSON.stringify({ id, patch }),
+      body: JSON.stringify(body),
     });
   } catch (e) {
     throw new Error('Could not reach the publish helper on 127.0.0.1:8790. '
@@ -326,8 +337,8 @@ async function updateTrajectoryViaAdminHelper(id, patch, originalError) {
   if (res.status === 401 || res.status === 403) {
     try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
   }
-  const body = await res.text().catch(() => '');
-  throw new Error(body || originalError?.message || `admin helper returned ${res.status}`);
+  const said = await res.text().catch(() => '');
+  throw new Error(said || originalError?.message || `admin helper returned ${res.status}`);
 }
 
 /**
@@ -390,36 +401,9 @@ async function updateCannedResponseGrounding(taskId, condition, patch) {
     }
     throw new Error(await res.text().catch(() => `Supabase update failed (${res.status})`));
   } catch (e) {
-    return updateCannedResponseViaAdminHelper(taskId, condition, clean, e);
+    return updateViaAdminHelper('/admin/canned-response',
+      { task_id: taskId, condition, patch: clean }, e);
   }
-}
-
-async function updateCannedResponseViaAdminHelper(taskId, condition, patch, originalError) {
-  let token = '';
-  try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
-  if (!token) {
-    token = window.prompt('Paste the admin save token printed by `node scripts/publish.mjs --serve`:') || '';
-    token = token.trim();
-    if (token) {
-      try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
-    }
-  }
-  if (!token) throw originalError;
-
-  const res = await fetch('http://127.0.0.1:8790/admin/canned-response', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-PageGuide-Admin-Token': token,
-    },
-    body: JSON.stringify({ task_id: taskId, condition, patch }),
-  });
-  if (res.ok) return true;
-  if (res.status === 401 || res.status === 403) {
-    try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
-  }
-  const body = await res.text().catch(() => '');
-  throw new Error(body || originalError?.message || `admin helper returned ${res.status}`);
 }
 
 /**
@@ -471,6 +455,49 @@ async function listStudyTasks() {
   return Array.isArray(rows) ? rows : [];
 }
 
+/**
+ * Every Find task the editor can open, in the study or not.
+ *
+ * listStudyTasks is filtered to `in_study` because that is the participant queue. This one is not,
+ * for the same reason listAllStudyTrajectories is not: a task held out of the rotation is exactly
+ * the one somebody needs to open, either to finish it or to put it back.
+ *
+ * `select=*` is safe here and would not be on the guide table — a Find task row is a question, a
+ * URL and four short strings. The megabytes live in study_task_pages, which this never touches.
+ */
+async function listAllStudyTasks() {
+  const rows = await get('study_tasks?select=*&task_type=eq.find&order=task_index.asc');
+  return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Write an edited Find task back — same two-step as updateStudyTrajectory, for the same reasons.
+ *
+ * anon has no UPDATE policy on the stimuli, and PostgREST answers a write that matched no rows with
+ * 204, which is byte-for-byte what success looks like. So the write asks for the rows back and
+ * counts them; zero rows means RLS refused, and the edit goes to the loopback helper that holds the
+ * secret key instead of a save button reporting a save that did not happen.
+ */
+async function updateStudyTask(id, patch) {
+  if (!supabaseConfigured()) throw new Error('Supabase is not configured.');
+  try {
+    const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/study_tasks`
+      + `?id=eq.${encodeURIComponent(id)}&select=id`, {
+      method: 'PATCH',
+      headers: headers('return=representation'),
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const rows = await res.json().catch(() => []);
+      if (Array.isArray(rows) && rows.length) return true;
+      throw new Error('Supabase accepted the request but updated no rows — RLS blocked the write.');
+    }
+    throw new Error(await res.text().catch(() => `Supabase update failed (${res.status})`));
+  } catch (e) {
+    return updateViaAdminHelper('/admin/task', { id, patch }, e);
+  }
+}
+
 /** The recorded agent answer for one task in one arm, or null when it was never banked. */
 async function getCannedResponse(taskId, condition) {
   const rows = await get('study_canned_responses?select=*'
@@ -519,6 +546,8 @@ window.StudyDB = {
   getStudyTrajectory,
   updateStudyTrajectory,
   listStudyTasks,
+  listAllStudyTasks,
+  updateStudyTask,
   getCannedResponse,
   getStudyGroundTruth,
   updateCannedResponseGrounding,

@@ -24,4 +24,10 @@ window.STUDY_CONFIG = {
   // older debug/admin paths that still need a single fallback arm.
   ASSIGNMENT_KEY: 'default',
   ARM_ASSIGNMENT: 'url',
+
+  // The questionnaire shown on the final screen, after the eighth task. OPTIONAL — app/study.js
+  // carries the study's own form as its default, so leaving this out is the normal case. Set it
+  // only when a deployment needs a different form; the value must be a Google Forms /viewform URL,
+  // which is what the final screen embeds and links to.
+  // POST_SURVEY_URL: 'https://docs.google.com/forms/d/e/…/viewform',
 };

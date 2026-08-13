@@ -339,6 +339,52 @@ async function updateTrajectory(env, payload) {
   return { status: 200, body: { ok: true, updated: rows[0] } };
 }
 
+/**
+ * Save an edited Find task, with the key that is allowed to.
+ *
+ * `id` is deliberately NOT patchable even though the editor shows it: it is the key every other
+ * table points at — study_canned_responses, study_ground_truth, study_task_pages and every result
+ * row already written — and renaming it here would silently orphan all four.
+ *
+ * `answer` and `distractors` ARE patchable, because fixing a wrong option is the main reason to open
+ * this. The consequence belongs to whoever clicks Save: rows already collected were scored against
+ * the old options, so a change after data collection makes past and future rows answer different
+ * questions. The editor says so on screen next to those fields.
+ */
+const TASK_PATCH_COLUMNS = ['title', 'question', 'answer', 'distractors', 'url', 'type',
+  'in_study', 'task_index'];
+
+async function updateTask(env, payload) {
+  const id = String(payload?.id || '').trim();
+  if (!id) return { status: 400, body: { error: 'No task id given.' } };
+  const patch = {};
+  TASK_PATCH_COLUMNS.forEach(k => {
+    if (Object.prototype.hasOwnProperty.call(payload?.patch || {}, k)) patch[k] = payload.patch[k];
+  });
+  if (!Object.keys(patch).length) {
+    return { status: 400, body: { error: 'Nothing to update.' } };
+  }
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/study_tasks`
+    + `?id=eq.${encodeURIComponent(id)}&select=id,in_study`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: env.SUPABASE_SECRET_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SECRET_KEY}`,
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    return { status: res.status, body: { error: await res.text().catch(() => '') } };
+  }
+  const rows = await res.json().catch(() => []);
+  if (!Array.isArray(rows) || !rows.length) {
+    return { status: 404, body: { error: `No Find task matched ${id}` } };
+  }
+  return { status: 200, body: { ok: true, updated: rows[0] } };
+}
+
 // ── The analysis endpoint ────────────────────────────────────────────────────────────────────────
 // WHY THIS LIVES HERE AND NOT IN THE BROWSER. An LLM key is a spending credential. app/config.js is
 // served to every participant, so anything in it is public — the same reason the Supabase secret key
@@ -600,6 +646,32 @@ if (args[0] === '--serve') {
         const steps = payload?.patch?.arms?.grounding?.steps?.length;
         console.log(`→ trajectory ${payload?.id} (${steps == null ? '?' : steps} steps)`);
         const out = await updateTrajectory(env, payload);
+        if (out.status !== 200) console.error(`  ✗ ${out.body.error}`);
+        res.writeHead(out.status, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(out.body));
+      });
+      return;
+    }
+    if (req.method === 'POST' && req.url.startsWith('/admin/task')) {
+      if (!tokenMatches(req.headers['x-pageguide-admin-token'])) {
+        res.writeHead(403, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Bad or missing admin save token.' }));
+        return;
+      }
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', async () => {
+        let payload;
+        try {
+          payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch (e) {
+          res.writeHead(400, { ...cors, 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'The request was not valid JSON.' }));
+          return;
+        }
+        const keys = Object.keys(payload?.patch || {}).join(', ');
+        console.log(`→ find task ${payload?.id} (${keys || 'nothing'})`);
+        const out = await updateTask(env, payload);
         if (out.status !== 200) console.error(`  ✗ ${out.body.error}`);
         res.writeHead(out.status, { ...cors, 'Content-Type': 'application/json' });
         res.end(JSON.stringify(out.body));
