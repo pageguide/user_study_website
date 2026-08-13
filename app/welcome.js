@@ -549,7 +549,11 @@ function evidenceQuality(row) {
 
 function rowsFor(rows, filters) {
   const q = String(filters.search || '').trim().toLowerCase();
+  // Computed over the WHOLE set that was handed in, before any other filter narrows it: whether a
+  // sitting finished all eight tasks is a fact about the sitting, not about the slice being read.
+  const finished = filters.completeOnly ? completeSessionKeys(rows) : null;
   return rows.filter(row => {
+    if (finished && !finished.has(sessionKey(row))) return false;
     if (filters.taskType !== 'all' && row.task_type !== filters.taskType) return false;
     if (filters.condition !== 'all' && row.condition !== filters.condition) return false;
     if (filters.style !== 'all' && taskStyle(row) !== filters.style) return false;
@@ -567,7 +571,58 @@ function currentVizFilters() {
     style: document.getElementById('viz-filter-style')?.value || 'all',
     participant: document.getElementById('viz-filter-participant')?.value || 'all',
     search: document.getElementById('viz-filter-search')?.value || '',
+    completeOnly: vizCompleteOnly,
   };
+}
+
+/**
+ * Keep only the sittings that got all the way through — the button next to the filters.
+ *
+ * Most of the noise in this table is abandonment: a session row is written the instant Start is
+ * pressed, so someone who answers two tasks and closes the tab leaves two real rows behind. Those
+ * rows are not wrong, but they are a different population from the people who finished, and they
+ * land unevenly across the arms (whoever quits early quits during whichever tasks came first),
+ * which is exactly the shape that moves a mean without meaning anything.
+ *
+ * Held in memory only, like the per-card task filters: a filter that survived a reload would keep
+ * silently excluding people long after the reason was forgotten.
+ */
+let vizCompleteOnly = false;
+
+const TASKS_PER_SESSION = 8;
+
+/**
+ * One study sitting, as a key. Mirrors participantCount: session_id when the assignment RPC
+ * answered, client_run_id for a row written when it did not, and null for neither — a row with no
+ * key cannot be shown to belong to a finished sitting, so completeOnly drops it.
+ */
+function sessionKey(row) {
+  if (row?.session_id != null) return `s${row.session_id}`;
+  if (row?.client_run_id) return `r${row.client_run_id}`;
+  return null;
+}
+
+/**
+ * The sittings with all eight tasks answered.
+ *
+ * Counts DISTINCT task_id per session, not rows: a task retried or written twice would otherwise
+ * push an unfinished sitting over the line.
+ */
+function completeSessionKeys(rows) {
+  const tasks = new Map();
+  (Array.isArray(rows) ? rows : []).forEach(row => {
+    const key = sessionKey(row);
+    const task = String(row?.task_id || '').trim();
+    if (!key || !task) return;
+    if (!tasks.has(key)) tasks.set(key, new Set());
+    tasks.get(key).add(task);
+  });
+  return new Set(Array.from(tasks).filter(([, t]) => t.size >= TASKS_PER_SESSION).map(([key]) => key));
+}
+
+/** All sittings present in a set of rows, finished or not. */
+function allSessionKeys(rows) {
+  return new Set((Array.isArray(rows) ? rows : []).map(sessionKey).filter(Boolean));
 }
 
 /* One question per block, and every block compares the same two things in the same order:
@@ -613,11 +668,7 @@ function conditionRows(rows, condition) {
  * written when the assignment RPC was unreachable and no session row exists.
  */
 function participantCount(rows) {
-  return new Set(
-    (Array.isArray(rows) ? rows : [])
-      .map(r => (r?.session_id != null ? `s${r.session_id}` : (r?.client_run_id ? `r${r.client_run_id}` : null)))
-      .filter(Boolean)
-  ).size;
+  return allSessionKeys(rows).size;
 }
 
 /* Booleans count as 1/0 so accuracy and duration go through the same path. */
@@ -1279,6 +1330,24 @@ function controlsHtml(rows, filters) {
       ${participants.map(p => opt(p, p, filters.participant)).join('')}
     </select></label>
     <label class="viz-search">Search <input id="viz-filter-search" value="${adminEsc(filters.search)}" placeholder="task, participant, note"></label>
+    ${completeToggleHtml(rows, filters)}
+  </div>`;
+}
+
+/**
+ * The drop-off filter, said in whole people rather than rows.
+ *
+ * The count is the point: "9 of 34 finished" is the one number that tells you how much of this
+ * table is abandonment, and it is worth reading whether or not the filter is on.
+ */
+function completeToggleHtml(allRows, filters) {
+  const finished = completeSessionKeys(allRows).size;
+  const total = allSessionKeys(allRows).size;
+  const on = !!filters.completeOnly;
+  return `<div class="viz-complete-toggle">
+    <button type="button" class="admin-chip${on ? ' admin-chip-on' : ''}" id="viz-filter-complete"
+      aria-pressed="${on}">${on ? '✓ ' : ''}Completed sessions only</button>
+    <span>${finished} of ${total} session${total === 1 ? '' : 's'} answered all ${TASKS_PER_SESSION} tasks${on ? ' — showing only those' : ''}</span>
   </div>`;
 }
 
@@ -1359,7 +1428,7 @@ function missingStyleNoticeHtml(allRows) {
   </div>`;
 }
 
-function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all', style: 'all', participant: 'all', search: '' }) {
+function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all', style: 'all', participant: 'all', search: '', completeOnly: vizCompleteOnly }) {
   const rows = rowsFor(allRows, filters);
   const conditionLegend = legendHtml([
     { label: 'Non-grounded', color: VIZ_INK.nongrounded },
@@ -1675,6 +1744,10 @@ function bindVisualizationControls() {
   }
   document.getElementById('viz-table-details')?.addEventListener('toggle', (e) => {
     vizTableOpen = e.target.open;
+  });
+  document.getElementById('viz-filter-complete')?.addEventListener('click', () => {
+    vizCompleteOnly = !vizCompleteOnly;
+    renderAdminVisualizations(adminVizRows, currentVizFilters());
   });
   ['viz-filter-task', 'viz-filter-condition', 'viz-filter-style', 'viz-filter-participant'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', () => renderAdminVisualizations(adminVizRows, currentVizFilters()));
@@ -2369,7 +2442,7 @@ async function showAdminVisualizations() {
     if (!rows.length) {
       content.innerHTML = '<div class="viz-empty">No result rows yet.</div><button class="admin-exit" id="admin-exit">Leave admin mode</button>';
     } else {
-      renderAdminVisualizations(rows, { taskType: 'all', condition: 'all', style: 'all', participant: 'all', search: '' });
+      renderAdminVisualizations(rows, { taskType: 'all', condition: 'all', style: 'all', participant: 'all', search: '', completeOnly: vizCompleteOnly });
       return;
     }
   } catch (e) {

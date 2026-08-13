@@ -869,6 +869,19 @@ body {
   letter-spacing: 0;
 }
 .viz-search { min-width: 0; }
+/* Its own row under the five selects: it excludes whole people rather than narrowing a slice,
+   so it should not read as a sixth dropdown. */
+.viz-complete-toggle {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.viz-complete-toggle span {
+  color: var(--muted);
+  font: 600 12px/1.3 inherit;
+}
 /* The verdict answers the research question in one line, and refuses to answer it at all
    while any cell is too thin to support the claim. */
 .viz-verdict {
