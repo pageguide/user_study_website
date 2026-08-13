@@ -1727,6 +1727,12 @@ function researchAnswersHtml(rows) {
         <button class="admin-chip admin-chip-on" id="viz-analyze">↻ Rerun analysis</button>
         <label class="viz-analysis-opt"><input type="checkbox" id="viz-analyze-notes">
           include the ${noteCount} participant note${noteCount === 1 ? '' : 's'}</label>
+        <!-- Both run on the researcher's machine through the publish helper: a page cannot write
+             files into the repo it was served from, and a write token has no business being in a
+             file participants are served. -->
+        <button class="admin-chip" id="viz-figures">📊 Publish to figures</button>
+        <button class="admin-chip" id="viz-huggingface">🤗 Upload to Hugging Face</button>
+        <div class="viz-job-status" id="viz-job-status" hidden></div>
       </div>
     </div>
     <div class="viz-answer-grid">
@@ -2144,6 +2150,12 @@ function freshnessHtml(allRows) {
 function bindVisualizationControls() {
   bindVizTooltip();
   document.getElementById('viz-analyze')?.addEventListener('click', runVizAnalysis);
+  bindAdminJob('viz-figures', 'figures', 'Publishing figures…',
+    'Figures and dataset written. They are built from the tasks each card counts BY DEFAULT, not '
+    + 'from any boxes ticked here — re-run after changing a default, not after a look.');
+  bindAdminJob('viz-huggingface', 'huggingface', 'Uploading to Hugging Face…',
+    'Pushed. Participants’ free-text notes and session ids are not in it; the export carries a '
+    + 'per-run participant number instead.');
   // Filters re-slice what is already in hand; this is the one control that goes back to the table.
   document.getElementById('viz-refresh')?.addEventListener('click', () => showAdminVisualizations());
 
@@ -2209,6 +2221,43 @@ function bindVisualizationControls() {
     if (search) {
       search.focus();
       search.setSelectionRange(search.value.length, search.value.length);
+    }
+  });
+}
+
+/**
+ * Wire one of the helper-run jobs to a button, and say what it did.
+ *
+ * DISABLED WHILE IT RUNS, because both jobs take seconds and neither is idempotent in a way anyone
+ * would enjoy: a second click during a Hugging Face upload is a second commit to a public repo.
+ *
+ * The status stays on screen after it finishes rather than flashing — the useful part of "figures
+ * published" is the sentence about WHICH tasks they were built from, and a toast that vanished
+ * would take that with it.
+ */
+function bindAdminJob(buttonId, job, runningText, doneText) {
+  const button = document.getElementById(buttonId);
+  if (!button) return;
+  button.addEventListener('click', async () => {
+    const status = document.getElementById('viz-job-status');
+    const say = (text, bad = false) => {
+      if (!status) return;
+      status.hidden = false;
+      status.textContent = text;
+      status.classList.toggle('is-bad', bad);
+    };
+    button.disabled = true;
+    say(runningText);
+    try {
+      const out = await window.StudyDB.runAdminJob(job);
+      // The script's own last line is the honest summary — row counts, the repo it pushed to —
+      // and it is more specific than anything this file could say about work it did not do.
+      const tail = String(out?.output || '').trim().split('\n').filter(Boolean).pop();
+      say(`${doneText}${tail ? `\n${tail}` : ''}`);
+    } catch (e) {
+      say(e.message || String(e), true);
+    } finally {
+      button.disabled = false;
     }
   });
 }

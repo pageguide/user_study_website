@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1224" height="262"
+  viewBox="0 0 1224 262" font-family="Helvetica, Arial, sans-serif">
+  <rect width="1224" height="262" fill="#ffffff"></rect>
+  <g>
+    <text x="56.0" y="22.0" font-size="12" font-weight="700" fill="#16161a">a) Scroll count</text>
+    
+    <line x1="56.0" y1="184.0"
+        x2="206.0" y2="184.0"
+        stroke="#d8d8e0" stroke-width="1" ></line>
+      <text x="50.0" y="187.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">0</text><line x1="56.0" y1="146.5"
+        x2="206.0" y2="146.5"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="50.0" y="150.0" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">5</text><line x1="56.0" y1="109.0"
+        x2="206.0" y2="109.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="50.0" y="112.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">10</text><line x1="56.0" y1="71.5"
+        x2="206.0" y2="71.5"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="50.0" y="75.0" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">15</text><line x1="56.0" y1="34.0"
+        x2="206.0" y2="34.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="50.0" y="37.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">20</text>
+    <path d="M104.0,184.0 L104.0,97.9 Q104.0,93.9 108.0,93.9 L126.0,93.9 Q130.0,93.9 130.0,97.9 L130.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="117.0" y1="102.7" x2="117.0" y2="85.1"></line>
+      <line x1="112.0" y1="85.1" x2="122.0" y2="85.1"></line>
+      <line x1="112.0" y1="102.7" x2="122.0" y2="102.7"></line>
+    </g><path d="M132.0,184.0 L132.0,71.7 Q132.0,67.7 136.0,67.7 L154.0,67.7 Q158.0,67.7 158.0,71.7 L158.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="145.0" y1="79.0" x2="145.0" y2="56.4"></line>
+      <line x1="140.0" y1="56.4" x2="150.0" y2="56.4"></line>
+      <line x1="140.0" y1="79.0" x2="150.0" y2="79.0"></line>
+    </g>
+    <text transform="translate(24.0,109.0) rotate(-90)"
+      text-anchor="middle" font-size="10.5" fill="#5c5c66">Mean per task</text>
+  </g><g>
+    <text x="256.0" y="22.0" font-size="12" font-weight="700" fill="#16161a">b) Ctrl+F</text>
+    
+    <line x1="256.0" y1="184.0"
+        x2="406.0" y2="184.0"
+        stroke="#d8d8e0" stroke-width="1" ></line>
+      <text x="250.0" y="187.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">0.00</text><line x1="256.0" y1="134.0"
+        x2="406.0" y2="134.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="250.0" y="137.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">0.20</text><line x1="256.0" y1="84.0"
+        x2="406.0" y2="84.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="250.0" y="87.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">0.40</text><line x1="256.0" y1="34.0"
+        x2="406.0" y2="34.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="250.0" y="37.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">0.60</text>
+    <path d="M304.0,184.0 L304.0,76.3 Q304.0,72.3 308.0,72.3 L326.0,72.3 Q330.0,72.3 330.0,76.3 L330.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="317.0" y1="93.6" x2="317.0" y2="51.0"></line>
+      <line x1="312.0" y1="51.0" x2="322.0" y2="51.0"></line>
+      <line x1="312.0" y1="93.6" x2="322.0" y2="93.6"></line>
+    </g><path d="M332.0,184.0 L332.0,99.9 Q332.0,95.9 336.0,95.9 L354.0,95.9 Q358.0,95.9 358.0,99.9 L358.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="345.0" y1="115.9" x2="345.0" y2="75.9"></line>
+      <line x1="340.0" y1="75.9" x2="350.0" y2="75.9"></line>
+      <line x1="340.0" y1="115.9" x2="350.0" y2="115.9"></line>
+    </g>
+    
+  </g><g>
+    <text x="456.0" y="22.0" font-size="12" font-weight="700" fill="#16161a">c) Text selections</text>
+    
+    <line x1="456.0" y1="184.0"
+        x2="606.0" y2="184.0"
+        stroke="#d8d8e0" stroke-width="1" ></line>
+      <text x="450.0" y="187.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">0.0</text><line x1="456.0" y1="134.0"
+        x2="606.0" y2="134.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="450.0" y="137.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">1.0</text><line x1="456.0" y1="84.0"
+        x2="606.0" y2="84.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="450.0" y="87.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">2.0</text><line x1="456.0" y1="34.0"
+        x2="606.0" y2="34.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="450.0" y="37.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">3.0</text>
+    <path d="M504.0,184.0 L504.0,98.6 Q504.0,94.6 508.0,94.6 L526.0,94.6 Q530.0,94.6 530.0,98.6 L530.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="517.0" y1="114.2" x2="517.0" y2="75.1"></line>
+      <line x1="512.0" y1="75.1" x2="522.0" y2="75.1"></line>
+      <line x1="512.0" y1="114.2" x2="522.0" y2="114.2"></line>
+    </g><path d="M532.0,184.0 L532.0,143.2 Q532.0,139.2 536.0,139.2 L554.0,139.2 Q558.0,139.2 558.0,143.2 L558.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="545.0" y1="147.4" x2="545.0" y2="131.0"></line>
+      <line x1="540.0" y1="131.0" x2="550.0" y2="131.0"></line>
+      <line x1="540.0" y1="147.4" x2="550.0" y2="147.4"></line>
+    </g>
+    
+  </g><g>
+    <text x="656.0" y="22.0" font-size="12" font-weight="700" fill="#16161a">d) Mouse clicks</text>
+    
+    <line x1="656.0" y1="184.0"
+        x2="806.0" y2="184.0"
+        stroke="#d8d8e0" stroke-width="1" ></line>
+      <text x="650.0" y="187.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">0</text><line x1="656.0" y1="134.0"
+        x2="806.0" y2="134.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="650.0" y="137.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">10</text><line x1="656.0" y1="84.0"
+        x2="806.0" y2="84.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="650.0" y="87.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">20</text><line x1="656.0" y1="34.0"
+        x2="806.0" y2="34.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="650.0" y="37.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">30</text>
+    <path d="M704.0,184.0 L704.0,90.7 Q704.0,86.7 708.0,86.7 L726.0,86.7 Q730.0,86.7 730.0,90.7 L730.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="717.0" y1="93.0" x2="717.0" y2="80.4"></line>
+      <line x1="712.0" y1="80.4" x2="722.0" y2="80.4"></line>
+      <line x1="712.0" y1="93.0" x2="722.0" y2="93.0"></line>
+    </g><path d="M732.0,184.0 L732.0,92.1 Q732.0,88.1 736.0,88.1 L754.0,88.1 Q758.0,88.1 758.0,92.1 L758.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="745.0" y1="94.3" x2="745.0" y2="81.9"></line>
+      <line x1="740.0" y1="81.9" x2="750.0" y2="81.9"></line>
+      <line x1="740.0" y1="94.3" x2="750.0" y2="94.3"></line>
+    </g>
+    
+  </g><g>
+    <text x="856.0" y="22.0" font-size="12" font-weight="700" fill="#16161a">e) Mouse distance (px)</text>
+    
+    <line x1="856.0" y1="184.0"
+        x2="1006.0" y2="184.0"
+        stroke="#d8d8e0" stroke-width="1" ></line>
+      <text x="850.0" y="187.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">0</text><line x1="856.0" y1="134.0"
+        x2="1006.0" y2="134.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="850.0" y="137.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">10k</text><line x1="856.0" y1="84.0"
+        x2="1006.0" y2="84.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="850.0" y="87.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">20k</text><line x1="856.0" y1="34.0"
+        x2="1006.0" y2="34.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="850.0" y="37.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">30k</text>
+    <path d="M904.0,184.0 L904.0,91.3 Q904.0,87.3 908.0,87.3 L926.0,87.3 Q930.0,87.3 930.0,91.3 L930.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="917.0" y1="96.6" x2="917.0" y2="78.0"></line>
+      <line x1="912.0" y1="78.0" x2="922.0" y2="78.0"></line>
+      <line x1="912.0" y1="96.6" x2="922.0" y2="96.6"></line>
+    </g><path d="M932.0,184.0 L932.0,82.6 Q932.0,78.6 936.0,78.6 L954.0,78.6 Q958.0,78.6 958.0,82.6 L958.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="945.0" y1="86.9" x2="945.0" y2="70.3"></line>
+      <line x1="940.0" y1="70.3" x2="950.0" y2="70.3"></line>
+      <line x1="940.0" y1="86.9" x2="950.0" y2="86.9"></line>
+    </g>
+    
+  </g><g>
+    <text x="1056.0" y="22.0" font-size="12" font-weight="700" fill="#16161a">f) Page clicks</text>
+    
+    <line x1="1056.0" y1="184.0"
+        x2="1206.0" y2="184.0"
+        stroke="#d8d8e0" stroke-width="1" ></line>
+      <text x="1050.0" y="187.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">0.0</text><line x1="1056.0" y1="146.5"
+        x2="1206.0" y2="146.5"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="1050.0" y="150.0" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">2.0</text><line x1="1056.0" y1="109.0"
+        x2="1206.0" y2="109.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="1050.0" y="112.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">4.0</text><line x1="1056.0" y1="71.5"
+        x2="1206.0" y2="71.5"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="1050.0" y="75.0" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">6.0</text><line x1="1056.0" y1="34.0"
+        x2="1206.0" y2="34.0"
+        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
+      <text x="1050.0" y="37.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">8.0</text>
+    <path d="M1104.0,184.0 L1104.0,62.5 Q1104.0,58.5 1108.0,58.5 L1126.0,58.5 Q1130.0,58.5 1130.0,62.5 L1130.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="1117.0" y1="76.6" x2="1117.0" y2="40.5"></line>
+      <line x1="1112.0" y1="40.5" x2="1122.0" y2="40.5"></line>
+      <line x1="1112.0" y1="76.6" x2="1122.0" y2="76.6"></line>
+    </g><path d="M1132.0,184.0 L1132.0,67.6 Q1132.0,63.6 1136.0,63.6 L1154.0,63.6 Q1158.0,63.6 1158.0,67.6 L1158.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="1145.0" y1="80.0" x2="1145.0" y2="47.3"></line>
+      <line x1="1140.0" y1="47.3" x2="1150.0" y2="47.3"></line>
+      <line x1="1140.0" y1="80.0" x2="1150.0" y2="80.0"></line>
+    </g>
+    
+  </g><g>
+    <rect x="462" y="237" width="11" height="11" rx="2.5" fill="#bf5a64"></rect>
+    <text x="479" y="246" font-size="11" fill="#16161a">Non-grounded</text>
+    <rect x="612" y="237" width="11" height="11" rx="2.5" fill="#5183c9"></rect>
+    <text x="629" y="246" font-size="11" fill="#16161a">Grounded</text></g>
+</svg>

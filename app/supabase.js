@@ -463,6 +463,47 @@ async function updateCannedResponseGrounding(taskId, condition, patch) {
 }
 
 /**
+ * Run one of the helper's named jobs — publishing figures, or the Hugging Face upload.
+ *
+ * Straight to the loopback helper with no Supabase attempt first, unlike the stimulus writes: there
+ * is no version of "write files into the repo" or "push with a write token" that a browser can do
+ * at all, so trying and failing would only add a confusing error before the real path.
+ *
+ * No timeout on the fetch. The figures job re-reads every result row and the upload sends the whole
+ * dataset; a spinner that gave up at thirty seconds would report a failure for work that was still
+ * running and about to succeed.
+ */
+async function runAdminJob(name) {
+  let token = '';
+  try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
+  if (!token) {
+    token = (window.prompt('This runs a script on your machine, through the local publish helper.\n\n'
+      + 'Run `node scripts/publish.mjs --serve` and paste the admin save token it prints:') || '').trim();
+    if (token) {
+      try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
+    }
+  }
+  if (!token) throw new Error('No admin token, so nothing was run.');
+
+  let res;
+  try {
+    res = await fetch(`http://127.0.0.1:8790/admin/run/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
+    });
+  } catch (e) {
+    throw new Error('Could not reach the publish helper on 127.0.0.1:8790. '
+      + 'Start it with `node scripts/publish.mjs --serve`, then try again.');
+  }
+  if (res.status === 401 || res.status === 403) {
+    try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `The helper returned ${res.status}.`);
+  return body;
+}
+
+/**
  * The dashboard's analysis, run by the local publish helper.
  *
  * The key is an LLM spending credential, so it lives where the Supabase secret does: in .env, read
@@ -596,6 +637,7 @@ async function getTaskPage(taskId, url) {
 window.StudyDB = {
   getTaskPage,
   requestAnalysis,
+  runAdminJob,
   supabaseConfigured,
   listStudyTrajectories,
   listAllStudyTrajectories,

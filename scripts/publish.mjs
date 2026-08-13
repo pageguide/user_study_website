@@ -20,6 +20,7 @@
 //   SUPABASE_SECRET_KEY=sb_secret_...
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
@@ -385,6 +386,40 @@ async function updateTask(env, payload) {
   return { status: 200, body: { ok: true, updated: rows[0] } };
 }
 
+
+/**
+ * Run one of this repo's own scripts and report what it said.
+ *
+ * WHY THE DASHBOARD CANNOT DO EITHER OF THESE ITSELF. Publishing figures writes files, and a page
+ * cannot write to the repo it was served from. Uploading to Hugging Face needs a write token, and a
+ * token in a file served to participants is a published token. Both therefore go the same way every
+ * other privileged action in this project goes: the browser asks this loopback helper, which holds
+ * the credentials and is reachable from nothing but this machine.
+ *
+ * ONLY THE TWO SCRIPTS NAMED BELOW, with a fixed argument list. The endpoint takes a key, not a
+ * command line — an endpoint that ran what it was handed would be a remote shell on a port with one
+ * shared token in front of it.
+ */
+const ADMIN_TASKS = {
+  figures: { script: 'scripts/figures.mjs', args: [], label: 'publish figures' },
+  huggingface: { script: 'scripts/huggingface.mjs', args: [], label: 'upload to Hugging Face' },
+};
+
+function runAdminTask(name) {
+  const task = ADMIN_TASKS[name];
+  if (!task) return Promise.resolve({ status: 400, body: { error: `Unknown task "${name}".` } });
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [join(ROOT, task.script), ...task.args], { cwd: ROOT });
+    let out = '';
+    child.stdout.on('data', d => { out += d; process.stdout.write(d); });
+    child.stderr.on('data', d => { out += d; process.stderr.write(d); });
+    child.on('error', e => resolve({ status: 500, body: { error: e.message } }));
+    child.on('close', code => resolve(code === 0
+      ? { status: 200, body: { ok: true, task: name, output: out.trim() } }
+      : { status: 500, body: { error: out.trim() || `${task.label} exited with code ${code}` } }));
+  });
+}
+
 // ── The analysis endpoint ────────────────────────────────────────────────────────────────────────
 // WHY THIS LIVES HERE AND NOT IN THE BROWSER. An LLM key is a spending credential. app/config.js is
 // served to every participant, so anything in it is public — the same reason the Supabase secret key
@@ -646,6 +681,21 @@ if (args[0] === '--serve') {
         const steps = payload?.patch?.arms?.grounding?.steps?.length;
         console.log(`→ trajectory ${payload?.id} (${steps == null ? '?' : steps} steps)`);
         const out = await updateTrajectory(env, payload);
+        if (out.status !== 200) console.error(`  ✗ ${out.body.error}`);
+        res.writeHead(out.status, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(out.body));
+      });
+      return;
+    }
+    if (req.method === 'POST' && req.url.startsWith('/admin/run/')) {
+      if (!tokenMatches(req.headers['x-pageguide-admin-token'])) {
+        res.writeHead(403, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Bad or missing admin save token.' }));
+        return;
+      }
+      const name = req.url.split('/admin/run/')[1].split('?')[0];
+      console.log(`→ ${ADMIN_TASKS[name]?.label || name}`);
+      runAdminTask(name).then(out => {
         if (out.status !== 200) console.error(`  ✗ ${out.body.error}`);
         res.writeHead(out.status, { ...cors, 'Content-Type': 'application/json' });
         res.end(JSON.stringify(out.body));

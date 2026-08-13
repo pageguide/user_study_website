@@ -2164,6 +2164,24 @@ body {
   border-top-style: dotted;
 }
 
+/* The helper-run jobs report here rather than in an alert: both take seconds, and the sentence
+   about WHICH tasks a figure was built from is the part worth keeping on screen. */
+.viz-job-status {
+  width: 100%;
+  max-width: 340px;
+  margin-top: 6px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(120, 87, 255, .08);
+  color: var(--ink);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.viz-job-status.is-bad { background: rgba(211, 47, 47, .1); color: var(--bad); font-weight: 600; }
+
 /* What the grounded arm was handed. Sits with the question rather than in the stats grid: it is a
    property of the MATERIAL, not a measurement of anybody, and a reader who takes it for an outcome
    would read the card's whole finding backwards. */
