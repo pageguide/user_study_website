@@ -326,30 +326,41 @@ const facetTaskFilters = new Map();   // facetKey -> Set(task_id)
 const facetPickerOpen = new Set();
 
 /**
- * Tasks a facet leaves out unless somebody ticks them back on.
+ * Tasks a facet leaves out unless somebody ticks them back on, and why.
  *
- * WHY THESE THREE, AND WHY IT IS SAFE TO SAY SO IN CODE. Guide × Text holds eight trajectories, and
- * three of them are second recordings of goals the card already counts:
+ * EVERY ENTRY CARRIES ITS REASON, in a `why` short enough to print on the card. That is the whole
+ * design: this is the researcher's call rather than a heuristic — nothing in the numbers says a
+ * duplicate goal or an awkward annotation is wrong to count — so the alternative to writing the
+ * reason down is a filter somebody ticked once and nobody can account for a month later.
  *
- *     gv2-ms9iw0pq-5kj5zr   "three 4-star hotels in Austin"     also gv2-ed05972e-i5fi3b
- *     gv2-msf02a2n-88li4p   "top 3 attractions for New York"    also gv2-ed05a7b6-kk24zp
- *     gv2-msf5mo9m-qm5brt   "Business, Movies and Technology"   also gv2-ed35d549-ct71ub
- *
- * Counting both copies weights those three goals double against the two that appear once, so the
- * facet's mean stops being a mean over its questions. The third is worse than redundant: it has
- * three non-grounded runs and no grounded one, so every row it contributes can only move one arm.
- *
- * This is the researcher's call, not a heuristic — nothing in the numbers says a duplicate goal is
- * wrong to count, and a rule that dropped tasks by matching their text would eventually drop one
- * that was meant to be there. It is written down here, with its reason, precisely because the
- * alternative is a filter somebody ticked once and nobody can account for later.
- *
- * The card still SAYS it is doing this — the "Counting 5 of 8 tasks" banner and its "Use all tasks"
- * button are the same ones a hand-made filter raises, so a default exclusion is as visible and as
- * reversible as a manual one. It is a default, not a lock.
+ * The card still SAYS it is doing this. The "Counting 5 of 8 tasks" banner and its "Use all tasks"
+ * button are the same ones a hand-made filter raises, so a default exclusion is exactly as visible
+ * and as reversible as a manual one. It is a default, not a lock.
  */
 const FACET_TASK_EXCLUSIONS = {
-  guide_text: ['gv2-ms9iw0pq-5kj5zr', 'gv2-msf02a2n-88li4p', 'gv2-msf5mo9m-qm5brt'],
+  // Second recordings of goals the card already counts:
+  //     gv2-ms9iw0pq-5kj5zr   "three 4-star hotels in Austin"     also gv2-ed05972e-i5fi3b
+  //     gv2-msf02a2n-88li4p   "top 3 attractions for New York"    also gv2-ed05a7b6-kk24zp
+  //     gv2-msf5mo9m-qm5brt   "Business, Movies and Technology"   also gv2-ed35d549-ct71ub
+  // Counting both copies weights those three goals double against the two that appear once, so the
+  // facet's mean stops being a mean over its questions. The third is worse than redundant: three
+  // non-grounded runs and no grounded one, so every row it contributes can only move one arm.
+  guide_text: {
+    ids: ['gv2-ms9iw0pq-5kj5zr', 'gv2-msf02a2n-88li4p', 'gv2-msf5mo9m-qm5brt'],
+    why: 'duplicate re-recordings of goals this card already counts',
+  },
+
+  // gv2-msf1pyqv-omt0hz — the Tampa run — is the only trajectory in this facet whose ground truth
+  // blames ONE STEP UNDER TWO ERROR TYPES: loop at 2,3,4,8,9 and mismatch at 4,10, so step 4 is
+  // named twice. Step recall counts `type:step` pairs, which makes (loop,4) and (mismatch,4) two
+  // separate things to find — so a participant who sees that step 4 went wrong and attributes it to
+  // one of the two is scored as having missed the other. Nobody can score full recall on that run
+  // without naming both types for the same step, and no other run in the facet asks that.
+  guide_visual: {
+    ids: ['gv2-msf1pyqv-omt0hz'],
+    why: 'a run whose ground truth blames one step under two error types, so no participant can '
+      + 'score it in full',
+  },
 };
 
 function facetKey(spec) {
@@ -367,7 +378,7 @@ function facetKey(spec) {
  */
 function chosenTasksFor(key, facetRows) {
   if (facetTaskFilters.has(key)) return facetTaskFilters.get(key);
-  const excluded = FACET_TASK_EXCLUSIONS[key];
+  const excluded = FACET_TASK_EXCLUSIONS[key]?.ids;
   if (!excluded || !excluded.length) return null;
   const ids = Array.from(new Set(facetRows.map(r => String(r.task_id || '')).filter(Boolean)));
   const kept = ids.filter(id => !excluded.includes(id));
@@ -1076,8 +1087,9 @@ function facetTaskPickerHtml(spec, facetRows, chosen) {
 
   return `
     ${active ? `<p class="viz-answer-filtered">Counting ${kept} of ${tasks.length} tasks — every
-      number below is from those only.${byDefault ? ` ${tasks.length - kept} duplicate re-recordings of `
-        + 'goals this card already counts are left out by default; tick one to put it back.' : ''}
+      number below is from those only.${byDefault ? ` Left out by default (${tasks.length - kept}):
+        ${adminEsc(FACET_TASK_EXCLUSIONS[key]?.why || 'excluded by the researcher')}. Tick one to
+        put it back.` : ''}
       <button type="button" class="viz-task-reset" data-facet="${key}"
         data-tasks="${adminEsc(allIds)}">Use all tasks</button></p>` : ''}
     <details class="viz-task-picker" data-facet="${key}"${open ? ' open' : ''}>
