@@ -309,6 +309,8 @@ let adminVizRows = [];
 let vizLoadedAt = null;
 /** task_id → how many pictures its material holds. Empty until the image_count columns exist. */
 let taskImageCounts = new Map();
+/** task_id → {citations, evidence} in the grounded agent answer. Empty until the pane loads. */
+let taskReferenceCounts = new Map();
 
 /**
  * Which tasks each card counts, when the answer should not rest on all of them.
@@ -448,7 +450,23 @@ function boolRate(rows, keyOrFn) {
   return vals.filter(Boolean).length / vals.length;
 }
 
+/**
+ * A rate as a percentage, to two decimals.
+ *
+ * TWO DECIMALS BECAUSE THE CELLS ARE SMALL. At n = 20–39 rows, one answer is worth 2.5 to 5 points,
+ * so a rounded "60% → 64%" and the true "60.00% → 64.29%" differ by less than the weight of a
+ * single participant — and rounding invites the reader to treat a four-point gap as a finding when
+ * it is one row. The counts and the interval printed beside it say the same thing; this stops the
+ * headline number from being the one figure on the card that hides its own precision.
+ *
+ * Chart AXES do not use this — see pctAxis. A tick reading "50.00%" is two decimals of nothing.
+ */
 function pct(value) {
+  return value == null ? 'No data' : `${(value * 100).toFixed(2)}%`;
+}
+
+/** The same rate for an axis tick, where the decimals are noise: "0%", "50%", "100%". */
+function pctAxis(value) {
   return value == null ? 'No data' : `${Math.round(value * 100)}%`;
 }
 
@@ -461,7 +479,10 @@ function seconds(value) {
 }
 
 function points(value) {
-  return value == null ? 'No data' : `${Math.round(value * 100)} pts`;
+  // One decimal, not two: this is a GAP between two percentages, and it is quoted in sentences
+  // ("11.1 pts better") where a second decimal is noise. It also sets the chart's flatness test —
+  // a delta that prints as 0.0 pts is called "no change" rather than given a direction.
+  return value == null ? 'No data' : `${(value * 100).toFixed(1)} pts`;
 }
 
 /**
@@ -885,6 +906,8 @@ function tipData(payload) {
    look like a finding. */
 function svgDumbbell(cells, opts = {}) {
   const fmt = opts.format || oneDecimal;
+  /* Values are read one at a time and want precision; the axis is read as a scale and wants none. */
+  const axisFmt = opts.axisFormat || fmt;
   /* A gap between two percentages is percentage points, and saying "25%" for it invites the
      reader to hear "a quarter better" when it means "one trial in four". */
   const deltaFmt = opts.deltaFormat || fmt;
@@ -915,7 +938,7 @@ function svgDumbbell(cells, opts = {}) {
 
   return `<svg class="viz-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${adminEsc(opts.aria || 'Grounded versus non-grounded by task facet')}">
     ${ticks.map(t => `<line x1="${xOf(t).toFixed(1)}" y1="${top}" x2="${xOf(t).toFixed(1)}" y2="${baseline}" stroke="${VIZ_INK.grid}" stroke-width="1"></line>
-      <text x="${xOf(t).toFixed(1)}" y="${baseline + 18}" text-anchor="middle" class="viz-svg-label">${adminEsc(fmt(t))}</text>`).join('')}
+      <text x="${xOf(t).toFixed(1)}" y="${baseline + 18}" text-anchor="middle" class="viz-svg-label">${adminEsc(axisFmt(t))}</text>`).join('')}
     ${cells.map((cell, i) => {
       const y = top + i * rowH + rowH / 2;
       const g = cell.grounded;
@@ -1163,9 +1186,114 @@ function wrongTally(cell) {
     const values = s?.values || [];
     return values.length ? `${values.filter(v => v === 0).length}/${values.length}` : null;
   };
-  const n = side(cell?.nongrounded);
-  const g = side(cell?.grounded);
-  return n && g ? `${n} → ${g} wrong` : null;
+  return pairFoot('wrong', side(cell?.nongrounded), side(cell?.grounded));
+}
+
+/**
+ * How wide the interval around a proportion really is — Wilson, not textbook mean ± 1.96·SE.
+ *
+ * The textbook interval runs past 100% on exactly the cells anyone cares about: Guide × Visual's
+ * grounded arm is 26 of 27 correct, and Wald puts its upper bound at 107%. Wilson is bounded by
+ * construction and is the standard choice for a proportion at these n, which are 20–39 rows.
+ *
+ * WHY AN INTERVAL AND NOT A STANDARD DEVIATION. Accuracy is one 0/1 per participant — every cell
+ * holds exactly one row per session — so its sd is sqrt(p(1-p)), a restatement of the percentage
+ * with nothing added, and its min and max are 0% and 100% in every cell by construction. The only
+ * dispersion figure that says something the mean does not is how precisely the mean is pinned, and
+ * on this study that is the number people most need to see: every arm pair below overlaps.
+ */
+function wilsonInterval(hits, n) {
+  if (!n) return null;
+  const z = 1.96;
+  const p = hits / n;
+  const d = 1 + (z * z) / n;
+  const centre = (p + (z * z) / (2 * n)) / d;
+  const half = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d;
+  return [Math.max(0, centre - half), Math.min(1, centre + half)];
+}
+
+/**
+ * A footnote built as a labelled pair, so it reads the way the value above it does.
+ *
+ * WHY THIS EXISTS RATHER THAN A STRING. "95% CI 81.86%–98.46% → 79.68%–97.35%" is five numbers,
+ * four percent signs, two dashes and an arrow in one run, and the dash inside each range competes
+ * with the arrow between them: the eye has to parse the punctuation before it can find the two
+ * halves. Colour already tells the arms apart everywhere else on this card, so it does the
+ * separating here too and the punctuation can go: one percent sign per range, the label said once,
+ * and each range in its own arm's ink.
+ *
+ * Returns {html}, which stat() renders unescaped — everything interpolated is a number this file
+ * computed, never a string that came off the wire.
+ */
+function pairFoot(label, left, right) {
+  if (!left || !right) return null;
+  return {
+    html: `<span class="viz-foot-label">${adminEsc(label)}</span>`
+      + `<span class="viz-v-ng">${adminEsc(left)}</span>`
+      + `<span class="viz-v-arrow">→</span>`
+      + `<span class="viz-v-g">${adminEsc(right)}</span>`,
+  };
+}
+
+/** The Wilson interval for each arm: "95% CI  81.86–98.46%  →  79.68–97.35%". */
+function proportionInterval(cell) {
+  const side = (s) => {
+    const values = s?.values || [];
+    if (!values.length) return null;
+    const ci = wilsonInterval(values.filter(v => v === 1).length, values.length);
+    // The unit goes on the range, not on each bound: "81.86–98.46%" is one quantity, and a percent
+    // sign on both ends of a range reads as two separate numbers that happen to be adjacent.
+    return ci ? `${(ci[0] * 100).toFixed(2)}–${pct(ci[1])}` : null;
+  };
+  return pairFoot('95% CI', side(cell?.nongrounded), side(cell?.grounded));
+}
+
+/**
+ * The spread of a measure, which is where a standard deviation earns its place.
+ *
+ * Localization and the two F1s behind it are scores in [0,1] rather than coin flips, so their sd
+ * carries something the mean does not: whether a facet improved for everybody or for a few. Find ×
+ * Text is the one cell where grounding both raises the mean and TIGHTENS it, and that is a
+ * different claim from the other three — visible here and nowhere else on the card.
+ */
+function sampleSd(values) {
+  if (!values || values.length < 2) return null;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  return Math.sqrt(values.reduce((a, b) => a + (b - mean) ** 2, 0) / (values.length - 1));
+}
+
+/** Is this measure a coin flip? Then its sd restates its mean and its min is 0 by construction. */
+function isBinaryCell(cell) {
+  const all = (cell?.nongrounded?.values || []).concat(cell?.grounded?.values || []);
+  return all.length > 0 && all.every(v => v === 0 || v === 1);
+}
+
+/**
+ * sd and min for one stat, in the measure's own units.
+ *
+ * ON EVERY METRIC, so the two F1s behind localization are described the same way localization is —
+ * a spread quoted for the parent and withheld from its halves would be the one place a reader could
+ * not check whether a facet moved for everybody or for a few.
+ *
+ * MIN IS WITHHELD FROM BINARY MEASURES, and that is a statement rather than an omission. Accuracy,
+ * "named any error" and the two Find hops are one 0/1 per participant, so their minimum is 0 in
+ * every cell that contains a single wrong answer — which is all of them. Printing "min 0% → 0%" on
+ * four rows would fill the card with a fact about the scale rather than about the study. Their sd
+ * is kept: it is sqrt(p(1-p)) and adds nothing to the mean, but it is the number people expect to
+ * see beside one, and the interval above it is the honest measure of precision.
+ */
+function dispersionFoots(cell, format) {
+  const sd = (s) => {
+    const v = sampleSd(s?.values);
+    return v == null ? null : format(v);
+  };
+  const min = (s) => {
+    const values = s?.values || [];
+    return values.length ? format(Math.min(...values)) : null;
+  };
+  const out = [pairFoot('sd', sd(cell?.nongrounded), sd(cell?.grounded))];
+  if (!isBinaryCell(cell)) out.push(pairFoot('min', min(cell?.nongrounded), min(cell?.grounded)));
+  return out.filter(Boolean);
 }
 
 /** "44s faster" / "16s slower" / null when there is nothing to say. Negative delta = quicker. */
@@ -1323,12 +1451,16 @@ function researchAnswerCard(spec, allRows) {
   // the one sentence explaining it sits several cards above. The two halves are told apart three
   // ways over — position, weight and colour — plus a legend at the head of the block, because a
   // reader who guesses wrong here inverts every finding on the card.
+  // `foot` takes one note or several: accuracy carries both its raw counts and its interval, and
+  // they are separate claims — how much the percentage rests on, and how far it could actually sit
+  // from where it is printed. Run together on one line they read as a single garbled number.
   const stat = (name, cell, format, foot) => `<div class="viz-answer-stat">
       <span>${adminEsc(name)}</span>
       <b><span class="viz-v-ng" title="non-grounded">${adminEsc(format(cell.nongrounded.mean))}</span>
         <span class="viz-v-arrow">→</span>
         <span class="viz-v-g" title="grounded">${adminEsc(format(cell.grounded.mean))}</span></b>
-      ${foot ? `<small>${adminEsc(foot)}</small>` : ''}
+      ${[].concat(foot || []).concat(dispersionFoots(cell, format)).filter(Boolean)
+        .map(line => `<small>${line.html || adminEsc(line)}</small>`).join('')}
     </div>`;
 
   const readingLegend = `<p class="viz-answer-legend">
@@ -1344,6 +1476,16 @@ function researchAnswerCard(spec, allRows) {
   const facetTasks = Array.from(new Set(rows.map(r => String(r.task_id || '')).filter(Boolean)));
   const counted = facetTasks.map(id => taskImageCounts.get(id)).filter(v => Number.isFinite(v));
   const imageAvg = counted.length ? counted.reduce((a, b) => a + b, 0) / counted.length : null;
+  // HOW HEAVILY GROUNDED THE MATERIAL IS, averaged the same way and for the same reason: a task
+  // drawn six times is one answer, not six. This describes what the grounded arm was GIVEN, which
+  // is the other half of every finding on the card — a facet that gained nothing from grounding
+  // reads differently when its answers carried one reference than when they carried nine.
+  const refs = facetTasks.map(id => taskReferenceCounts.get(id)).filter(Boolean);
+  const refAvg = refs.length ? {
+    citations: refs.reduce((a, r) => a + r.citations, 0) / refs.length,
+    evidence: refs.reduce((a, r) => a + r.evidence, 0) / refs.length,
+    n: refs.length,
+  } : null;
   return `<article class="viz-answer viz-answer-${tone}${thin ? ' is-thin' : ''}">
     <header>
       <span class="viz-answer-facet">${adminEsc(spec.label)}</span>
@@ -1352,6 +1494,11 @@ function researchAnswerCard(spec, allRows) {
           : ` · ${imageAvg.toFixed(1)} images/${spec.taskType === 'find' ? 'page' : 'run'}`}</span>
     </header>
     <p class="viz-answer-q">${adminEsc(spec.question)}</p>
+    ${refAvg ? `<p class="viz-answer-refs">Grounded answer carries
+      <b>${refAvg.citations.toFixed(1)}</b> text citation${refAvg.citations === 1 ? '' : 's'} and
+      <b>${refAvg.evidence.toFixed(1)}</b> image crop${refAvg.evidence === 1 ? '' : 's'},
+      mean over the ${refAvg.n} task${refAvg.n === 1 ? '' : 's'} counted. The non-grounded arm shows
+      the same claims with every reference stripped.</p>` : ''}
     ${facetTaskPickerHtml(spec, facetRows, chosen)}
     <strong class="viz-answer-headline">${adminEsc(headline)}</strong>
     <p class="viz-answer-guard">${adminEsc(guard)}</p>
@@ -1365,7 +1512,7 @@ function researchAnswerCard(spec, allRows) {
       ${stat('Judge time', judge, seconds)}
       ${stat('Locate time', speed, seconds)}
       ${stat('Total time', total, seconds)}
-      ${stat('Accuracy', accuracy, pct, wrongTally(accuracy))}
+      ${stat('Accuracy', accuracy, pct, [wrongTally(accuracy), proportionInterval(accuracy)])}
       ${stat('Localization', localization, pct)}
     </div>
 
@@ -1784,13 +1931,13 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
       <div class="viz-card">
         <h4>Answer accuracy</h4>
         ${conditionLegend}
-        ${svgDumbbell(accuracyCells, { format: pct, deltaFormat: points, max: 1, betterLower: false, deltaWords: ['more accurate', 'less accurate'], aria: 'Answer accuracy, non-grounded versus grounded' })}
+        ${svgDumbbell(accuracyCells, { format: pct, axisFormat: pctAxis, deltaFormat: points, max: 1, betterLower: false, deltaWords: ['more accurate', 'less accurate'], aria: 'Answer accuracy, non-grounded versus grounded' })}
         <p class="viz-note">Find uses the Q1a claim judgment; Guide uses the verdict.</p>
       </div>
       <div class="viz-card">
         <h4>Evidence localization quality</h4>
         ${conditionLegend}
-        ${svgDumbbell(evidenceCells, { format: pct, deltaFormat: points, max: 1, betterLower: false, deltaWords: ['better', 'worse'], aria: 'Evidence localization quality, non-grounded versus grounded' })}
+        ${svgDumbbell(evidenceCells, { format: pct, axisFormat: pctAxis, deltaFormat: points, max: 1, betterLower: false, deltaWords: ['better', 'worse'], aria: 'Evidence localization quality, non-grounded versus grounded' })}
         <p class="viz-note">F1 — the harmonic mean of precision and recall, so over-claiming costs as
           much as missing. Find: the passages picked. Guide: the error types named and the steps blamed,
           one F1 each, averaged. On a run that contains no error, a correct “no error” scores in full so
@@ -3285,6 +3432,7 @@ async function showAdminVisualizations() {
     vizLoadedAt = new Date();
     // Static per task, so it rides along with the results rather than being fetched per card.
     try { taskImageCounts = await window.StudyDB.listTaskImageCounts(); } catch (e) { taskImageCounts = new Map(); }
+    try { taskReferenceCounts = await window.StudyDB.listAnswerReferenceCounts(); } catch (e) { taskReferenceCounts = new Map(); }
     if (!rows.length) {
       content.innerHTML = '<div class="viz-empty">No result rows yet.</div><button class="admin-exit" id="admin-exit">Leave admin mode</button>';
     } else {

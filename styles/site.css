@@ -2003,7 +2003,41 @@ body {
   line-height: 1.3;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  /* Baseline-aligned row rather than a run of text: the label, the two values and the arrow between
+     them are four separate things, and flow layout let the range dashes and the arrow blur into one
+     another. */
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
 }
+
+/* A fixed label column so the numbers on the two or three footnotes of one stat line up under each
+   other — "wrong" and "95% CI" are different lengths, and ragged starts made the pairs look like
+   different kinds of quantity. */
+.viz-foot-label {
+  flex: none;
+  min-width: 42px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The arms keep their ink down here, which is what lets the punctuation go: the reader tells the
+   two ranges apart by colour, exactly as they do for the values above, instead of by counting
+   dashes. Specificity has to beat `.viz-answer-stat span`, which would otherwise grey both. */
+.viz-answer-stat small .viz-v-ng,
+.viz-answer-stat small .viz-v-g {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.viz-answer-stat small .viz-v-ng { color: var(--muted); }
+.viz-answer-stat small .viz-v-g { color: var(--accent-dark); }
+.viz-answer-stat small .viz-v-arrow { font-size: 10px; }
 
 .viz-answer-thin {
   margin: 10px 0 0;
@@ -2129,6 +2163,18 @@ body {
   margin-top: 8px;
   border-top-style: dotted;
 }
+
+/* What the grounded arm was handed. Sits with the question rather than in the stats grid: it is a
+   property of the MATERIAL, not a measurement of anybody, and a reader who takes it for an outcome
+   would read the card's whole finding backwards. */
+.viz-answer-refs {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.viz-answer-refs b { color: var(--ink); font-variant-numeric: tabular-nums; }
 
 /* ── Per-card task selection ───────────────────────────────────────────────── */
 .viz-answer-filtered {

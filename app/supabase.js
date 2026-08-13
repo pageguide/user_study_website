@@ -370,6 +370,62 @@ async function listTaskImageCounts() {
   return out;
 }
 
+/**
+ * How many references the agent's grounded answer carries, per task.
+ *
+ * Two kinds, and they are not the same thing to a participant. A CITATION `[368:"the exact quoted
+ * phrase"]` points into the page's prose and is checked by reading; an EVIDENCE chip `[ev:key]`
+ * opens a picture the agent saved at record time and is checked by looking. A card that reported
+ * one total would hide the difference the Text/Visual split exists to study.
+ *
+ * COUNTED FROM THE ANSWER TEXT, WHICH IS WHY THIS IS CHEAP. The markers are in `answer_display` for
+ * a Find task and in the grounded arm's `answer` for a trajectory — both are a few hundred bytes.
+ * The alternative, counting the `evidence` array, drags a base64 screenshot per item across the
+ * wire: this whole function is under 20 KB, and the same query over the arrays is tens of megabytes.
+ * `arms->grounding->>answer` is a PostgREST sub-field select, so the trajectory's screenshots stay
+ * in the database.
+ *
+ * WHAT IT COUNTS IS WHAT THE ANSWER CLAIMS, not what renders. A marker whose key has no evidence
+ * behind it renders as nothing, and this still counts it — deliberately, because the figure is
+ * about how heavily the material was annotated, and a silently-dropped chip is a fault to find in
+ * the editor rather than a number to quietly shrink here.
+ *
+ * Missing tables or columns are not an error. This is a descriptive extra on a dashboard that must
+ * still draw without it.
+ */
+const CITATION_MARKER = /\[\d+:"[^"]*"\]/g;
+const EVIDENCE_MARKER = /\[ev:[^\]]+\]/g;
+
+function countAnswerMarkers(answer) {
+  const text = String(answer || '');
+  return {
+    citations: (text.match(CITATION_MARKER) || []).length,
+    evidence: (text.match(EVIDENCE_MARKER) || []).length,
+  };
+}
+
+async function listAnswerReferenceCounts() {
+  const out = new Map();
+  try {
+    const rows = await get('study_canned_responses?select=task_id,answer_display,answer_raw'
+      + '&condition=eq.grounding');
+    (Array.isArray(rows) ? rows : []).forEach(r => {
+      if (r?.task_id) out.set(String(r.task_id), countAnswerMarkers(r.answer_display || r.answer_raw));
+    });
+  } catch (e) {
+    console.info('[study] could not read canned answers for reference counts:', e.message);
+  }
+  try {
+    const rows = await get('study_guide_trajectories?select=id,answer:arms->grounding->>answer');
+    (Array.isArray(rows) ? rows : []).forEach(r => {
+      if (r?.id) out.set(String(r.id), countAnswerMarkers(r.answer));
+    });
+  } catch (e) {
+    console.info('[study] could not read trajectory answers for reference counts:', e.message);
+  }
+  return out;
+}
+
 async function listStudyResults() {
   const rows = await get(`study_task_results_v2?select=*&order=created_at.desc&limit=${STUDY_RESULT_LIMIT}`);
   const list = Array.isArray(rows) ? rows : [];
@@ -556,4 +612,5 @@ window.StudyDB = {
   insertStudyResult,
   listStudyResults,
   listTaskImageCounts,
+  listAnswerReferenceCounts,
 };
