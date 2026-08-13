@@ -338,16 +338,40 @@ const facetPickerOpen = new Set();
  * and as reversible as a manual one. It is a default, not a lock.
  */
 const FACET_TASK_EXCLUSIONS = {
-  // Second recordings of goals the card already counts:
+  // MARS-v1 is the study's clearest disputed key. Four of its sixteen answers are wrong and all four
+  // are the SAME wrong answer — "18" where the key says "20". Four people arriving independently at
+  // one number is not four mistakes; it is a question the page supports two readings of, and until
+  // the key is settled the task measures the disagreement rather than the condition.
+  //
+  // MUFC-V1-TEXT is the same Wikipedia article as MUFC-V1 in Find × Visual — one snapshot, asked
+  // twice (see getTaskPage in app/supabase.js, which serves them from a single captured page). A
+  // participant who drew both read that article twice, and the second reading is not a cold one, so
+  // counting it here mixes a re-read into a facet whose whole measure is time to locate.
+  find_text: {
+    ids: ['MARS-v1', 'MUFC-V1-TEXT'],
+    why: 'a disputed answer key, and the page already read in Find × Visual',
+  },
+
+  // WHAT IS LEFT IS FOUR GOALS, RECORDED ONCE EACH: Austin hotels (gv2-ed05972e-i5fi3b), the
+  // Business/Movies/Technology search (gv2-ed35d549-ct71ub), the shopping cart (gv2-ms9hwloh-15fuvy)
+  // and the Marry Me Chicken recipe (gv2-ms9j3200-u0i9nm). Three of the four dropped runs are second
+  // recordings of goals still counted:
+  //
   //     gv2-ms9iw0pq-5kj5zr   "three 4-star hotels in Austin"     also gv2-ed05972e-i5fi3b
-  //     gv2-msf02a2n-88li4p   "top 3 attractions for New York"    also gv2-ed05a7b6-kk24zp
   //     gv2-msf5mo9m-qm5brt   "Business, Movies and Technology"   also gv2-ed35d549-ct71ub
-  // Counting both copies weights those three goals double against the two that appear once, so the
-  // facet's mean stops being a mean over its questions. The third is worse than redundant: three
+  //     gv2-msf02a2n-88li4p   "top 3 attractions for New York"    also gv2-ed05a7b6-kk24zp
+  //
+  // Counting both copies of a goal weights it double against the goals recorded once, so the mean
+  // stops being a mean over the card's questions. gv2-msf5mo9m-qm5brt is worse than redundant: three
   // non-grounded runs and no grounded one, so every row it contributes can only move one arm.
+  //
+  // THE FOURTH IS THE WHOLE NEW YORK GOAL. Both of its recordings are dropped, so unlike the others
+  // this removes a question from the card rather than a duplicate of one. That is the researcher's
+  // call and nothing in the data forces it — if you are reading this wanting to know why, the answer
+  // is not here, and it should be: put it in this comment when you know it.
   guide_text: {
-    ids: ['gv2-ms9iw0pq-5kj5zr', 'gv2-msf02a2n-88li4p', 'gv2-msf5mo9m-qm5brt'],
-    why: 'duplicate re-recordings of goals this card already counts',
+    ids: ['gv2-ed05a7b6-kk24zp', 'gv2-ms9iw0pq-5kj5zr', 'gv2-msf02a2n-88li4p', 'gv2-msf5mo9m-qm5brt'],
+    why: 'three duplicate re-recordings, plus both recordings of the New York goal',
   },
 
   // gv2-msf1pyqv-omt0hz — the Tampa run — is the only trajectory in this facet whose ground truth
