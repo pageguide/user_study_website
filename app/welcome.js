@@ -2539,6 +2539,61 @@ async function saveTrajectoryEdit() {
 let findTaskList = [];
 let findTaskRecord = null;
 let findTaskStatus = '';
+/** The two banked agent answers for the open task: { grounding, nongrounding }, either may be null. */
+let findTaskCanned = { grounding: null, nongrounding: null };
+let findCannedStatus = '';
+
+const FIND_CONDITIONS = [
+  { id: 'grounding', label: 'Grounded', note: 'carries the citations and saved evidence' },
+  { id: 'nongrounding', label: 'Non-grounded', note: 'the same claims with nothing to check them against' },
+];
+
+/**
+ * The citation markers inside an answer, in the order they are read.
+ *
+ * `[368:"Harry assumes in the first book…"]` — an element index and the exact phrase. Mirrors
+ * parseFindCitations in app/study.js; the two must agree, because that one decides what a
+ * participant actually sees and this one only describes it.
+ */
+function parseAnswerCitations(answer) {
+  const out = [];
+  String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (marker, index, text) => {
+    out.push({ marker, index: Number(index), text });
+    return marker;
+  });
+  return out;
+}
+
+/** The [ev:key] markers in an answer — the saved image crops, as opposed to quoted passages. */
+function parseAnswerEvidenceKeys(answer) {
+  const keys = [];
+  String(answer || '').replace(/\[ev:([^\]]+)\]/g, (m, key) => {
+    const clean = String(key || '').trim();
+    if (clean && !keys.includes(clean)) keys.push(clean);
+    return m;
+  });
+  return keys;
+}
+
+/** Same normalisation study.js keys anchors by, so "has an anchor" here means what it means there. */
+function normAnchorText(v) {
+  return String(v == null ? '' : v)
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/ /g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function anchorKeyOf(index, quote) {
+  return `${Number(index)}:${normAnchorText(quote)}`;
+}
+
+/** Does this citation have a recorded locator, or will it fall back to searching the page for it? */
+function citationHasAnchor(row, cite) {
+  const anchors = Array.isArray(row?.citation_anchors) ? row.citation_anchors : [];
+  return anchors.some(a => a && a.index != null && anchorKeyOf(a.index, a.quote) === anchorKeyOf(cite.index, cite.text));
+}
 
 /** The two wordings studyStyle() can read a cell out of. Anything else lands the task nowhere. */
 const FIND_TASK_TYPES = ['FIND X VISUAL', 'FIND X TEXT'];
@@ -2637,10 +2692,15 @@ function renderFindTaskEditor() {
     <div class="welcome-status" id="findtask-status">${adminEsc(findTaskStatus)}</div>
     <button class="admin-exit" id="admin-exit">Leave admin mode</button>`;
 
-  document.getElementById('findtask-pick').onchange = (e) => {
+  document.getElementById('findtask-pick').onchange = async (e) => {
     findTaskStatus = '';
     findTaskRecord = findTaskList.find(t => t.id === e.target.value) || null;
+    findTaskCanned = { grounding: null, nongrounding: null };
+    // Set before the render, not after: an unset status would draw "nothing banked for this arm"
+    // for the length of the fetch, which is the one thing this pane must never say by accident.
+    findCannedStatus = findTaskRecord ? 'Loading the agent answers…' : '';
     renderFindTaskEditor();
+    if (findTaskRecord) await loadFindTaskCanned(findTaskRecord.id);
   };
   bindFindTaskControls();
   bindAdminExit();
@@ -2707,7 +2767,238 @@ function findTaskEditorBodyHtml(record) {
     <div class="admin-row">
       <button type="button" class="welcome-btn" id="findtask-save">Save task</button>
       <button type="button" class="admin-chip" id="findtask-revert">Undo my edits</button>
+    </div>
+
+    <div id="findtask-canned">${findTaskCannedHtml(record)}</div>`;
+}
+
+/**
+ * Fetch the two banked agent answers for a task.
+ *
+ * One request per condition rather than one for both: the grounded row on a visual task carries a
+ * base64 screenshot crop per evidence item, so "both rows for every task" is megabytes, and the
+ * editor only ever shows one task at a time.
+ */
+async function loadFindTaskCanned(taskId) {
+  findCannedStatus = 'Loading the agent answers…';
+  const pane = document.getElementById('findtask-canned');
+  if (pane) pane.innerHTML = '<div class="viz-loading">Loading the agent answers…</div>';
+  try {
+    const [grounding, nongrounding] = await Promise.all([
+      window.StudyDB.getCannedResponse(taskId, 'grounding'),
+      window.StudyDB.getCannedResponse(taskId, 'nongrounding'),
+    ]);
+    // A late reply for a task the researcher has already navigated away from must not overwrite the
+    // one now on screen — the two requests race with the picker.
+    if (findTaskRecord?.id !== taskId) return;
+    findTaskCanned = { grounding, nongrounding };
+    findCannedStatus = '';
+  } catch (e) {
+    findCannedStatus = `Could not load the agent answers: ${e.message || e}`;
+  }
+  const target = document.getElementById('findtask-canned');
+  if (target && findTaskRecord) {
+    target.innerHTML = findTaskCannedHtml(findTaskRecord);
+    bindFindTaskCannedControls();
+  }
+}
+
+/**
+ * The agent's recorded answer for one arm, and what it rests on.
+ *
+ * WHAT CAN BE EDITED HERE AND WHAT CANNOT. The answer TEXT can: it is prose, and a typo in it is
+ * the commonest thing found while reading a task. The citation ANCHORS cannot — an anchor is a
+ * locator resolved against the frozen page (tag, element index, character offsets), and there is no
+ * page on this screen to resolve a new one against. What this screen can do is tell you which
+ * citations still have one, and let you delete a citation whose quote no longer exists. Repairing an
+ * anchor is a different gesture, done on the task screen where the page is loaded and "Pick exact
+ * text" can point at it; the link below goes there.
+ *
+ * EDITING A QUOTE BREAKS ITS ANCHOR, silently, because anchors are keyed by index + quote text. The
+ * citation then falls back to searching the page for the phrase, which usually works and sometimes
+ * lands on the wrong copy of it. The list says which state each citation is in, before and after.
+ */
+function findTaskCannedHtml(record) {
+  if (findCannedStatus) {
+    return `<div class="welcome-status${findCannedStatus.startsWith('Could not') ? ' welcome-status-bad' : ''}">${adminEsc(findCannedStatus)}</div>`;
+  }
+
+  return `
+    <h4 class="findtask-section">The agent's answers</h4>
+    <p class="viz-note">What the participant is shown as the agent's report, one per arm. Both are
+      read from <code>study_canned_responses</code>. The two arms must make the <b>same claims</b> —
+      the study compares grounding, not two different answers — so edit them together.</p>
+    ${FIND_CONDITIONS.map(c => findTaskArmHtml(record, c)).join('')}
+    <p class="viz-note">To re-point a citation at a different passage, or to attach a new image crop,
+      use <b>Review tasks → 🔍 Find only → Grounded</b> and open this task: the repair tools there
+      work on the frozen page, which is the only place a new anchor can be resolved.</p>
+    <div class="welcome-status" id="findtask-canned-status"></div>`;
+}
+
+function findTaskArmHtml(record, condition) {
+  const row = findTaskCanned[condition.id];
+  if (!row) {
+    return `<div class="findtask-arm">
+      <div class="findtask-arm-head"><b>${condition.label}</b>
+        <span class="findtask-arm-note">${condition.note}</span></div>
+      <p class="edit-problem">Nothing banked for this arm. A task with no ${condition.label.toLowerCase()}
+        answer cannot be shown in that condition — publish it with <code>scripts/publish.mjs</code>.</p>
     </div>`;
+  }
+
+  const answer = row.answer_display || row.answer_raw || '';
+  const cites = parseAnswerCitations(answer);
+  const evidence = Array.isArray(row.evidence) ? row.evidence : [];
+  const linked = parseAnswerEvidenceKeys(answer);
+  const anchors = Array.isArray(row.citation_anchors) ? row.citation_anchors : [];
+
+  return `
+    <div class="findtask-arm" data-arm="${condition.id}">
+      <div class="findtask-arm-head">
+        <b>${condition.label}</b>
+        <span class="findtask-arm-note">${condition.note}</span>
+        <span class="findtask-arm-n">${cites.length} citation${cites.length === 1 ? '' : 's'} ·
+          ${evidence.length} evidence · ${anchors.length} anchor${anchors.length === 1 ? '' : 's'}</span>
+      </div>
+
+      <label class="welcome-label" for="findtask-answer-${condition.id}">Answer text</label>
+      <textarea class="welcome-input findtask-answer" id="findtask-answer-${condition.id}"
+        data-arm="${condition.id}" rows="8">${adminEsc(answer)}</textarea>
+      <p class="viz-note">Markers stay in the text: <code>[368:"the exact quoted phrase"]</code> is a
+        citation into the page, <code>[ev:key]</code> opens a saved image crop. The non-grounded arm
+        renders with every marker stripped, so a marker left in it costs nothing and shows nothing.</p>
+
+      ${cites.length ? `
+        <label class="welcome-label">Citations in this answer</label>
+        <ol class="findtask-cites">
+          ${cites.map((c, i) => {
+            const anchored = citationHasAnchor(row, c);
+            return `<li>
+              <div class="findtask-cite-head">
+                <code>[${adminEsc(String(c.index))}]</code>
+                <span class="findtask-cite-flag${anchored ? '' : ' is-loose'}">${anchored
+                  ? 'anchored' : 'no anchor — found by searching the page'}</span>
+                <button type="button" class="admin-chip findtask-cite-del"
+                  data-arm="${condition.id}" data-i="${i}">✕ Remove</button>
+              </div>
+              <div class="findtask-cite-q">${adminEsc(c.text)}</div>
+            </li>`;
+          }).join('')}
+        </ol>` : ''}
+
+      ${evidence.length ? `
+        <label class="welcome-label">Saved evidence</label>
+        <div class="findtask-ev-list">
+          ${evidence.map(e => {
+            const key = String(e?.key || '');
+            const used = linked.includes(key);
+            return `<div class="findtask-ev">
+              <div class="findtask-cite-head">
+                <code>${adminEsc(key)}</code>
+                <span class="findtask-cite-flag${used ? '' : ' is-loose'}">${used
+                  ? 'linked' : 'no [ev:] marker points at it'}</span>
+              </div>
+              <div class="findtask-cite-q">${adminEsc(e?.note || '')}</div>
+              ${e?.shot ? `<img class="edit-thumb" src="data:image/jpeg;base64,${e.shot}" alt="${adminEsc(key)}">` : ''}
+            </div>`;
+          }).join('')}
+        </div>` : ''}
+
+      <div class="admin-row">
+        <button type="button" class="welcome-btn findtask-canned-save" data-arm="${condition.id}">
+          Save the ${condition.label.toLowerCase()} answer</button>
+      </div>
+    </div>`;
+}
+
+function bindFindTaskCannedControls() {
+  document.querySelectorAll('.findtask-canned-save').forEach(btn => {
+    btn.onclick = () => saveFindTaskCanned(btn.dataset.arm);
+  });
+  document.querySelectorAll('.findtask-cite-del').forEach(btn => {
+    btn.onclick = () => removeFindTaskCitation(btn.dataset.arm, Number(btn.dataset.i));
+  });
+}
+
+function setCannedStatus(message, bad = false) {
+  const el = document.getElementById('findtask-canned-status');
+  if (!el) return;
+  el.textContent = message;
+  el.className = `welcome-status${bad ? ' welcome-status-bad' : ''}`;
+}
+
+/**
+ * Take one citation out of an answer, and its anchor with it.
+ *
+ * BY POSITION, not by text. The same phrase can be cited twice — that is what two markers with the
+ * same index and quote are — and removing "the one that matches" would delete both, or the wrong
+ * one. The anchor goes only if no OTHER surviving citation still keys to it, for the same reason.
+ */
+function removeFindTaskCitation(arm, position) {
+  const row = findTaskCanned[arm];
+  const field = document.getElementById(`findtask-answer-${arm}`);
+  if (!row || !field) return;
+  const text = field.value;
+  const cites = parseAnswerCitations(text);
+  const target = cites[position];
+  if (!target) return;
+
+  let seen = -1;
+  const next = text.replace(/\[(\d+):"([^"]*)"\]/g, (marker) => {
+    seen++;
+    return seen === position ? '' : marker;
+  }).replace(/[ \t]+([.,;:!?])/g, '$1').replace(/[ \t]{2,}/g, ' ');
+  field.value = next;
+
+  const stillUsed = parseAnswerCitations(next)
+    .some(c => anchorKeyOf(c.index, c.text) === anchorKeyOf(target.index, target.text));
+  if (!stillUsed && Array.isArray(row.citation_anchors)) {
+    row.citation_anchors = row.citation_anchors
+      .filter(a => !a || a.index == null || anchorKeyOf(a.index, a.quote) !== anchorKeyOf(target.index, target.text));
+  }
+  // Not saved yet — the button below the list is still the thing that writes.
+  row.answer_display = next;
+  row.answer_raw = next;
+  const pane = document.getElementById('findtask-canned');
+  if (pane && findTaskRecord) {
+    pane.innerHTML = findTaskCannedHtml(findTaskRecord);
+    bindFindTaskCannedControls();
+    setCannedStatus('Citation removed from the text — not saved yet.');
+  }
+}
+
+async function saveFindTaskCanned(arm) {
+  const row = findTaskCanned[arm];
+  const field = document.getElementById(`findtask-answer-${arm}`);
+  if (!row || !field || !findTaskRecord) return;
+  const answer = field.value;
+
+  // answer_raw and answer_display are written together and kept identical, which is what the
+  // in-task editor does (app/study.js) and what every banked row already looks like. Two fields
+  // that could disagree would mean the answer scored against and the answer read were not the same.
+  const patch = {
+    answer_raw: answer,
+    answer_display: answer,
+    citation_anchors: Array.isArray(row.citation_anchors) ? row.citation_anchors : [],
+    evidence: Array.isArray(row.evidence) ? row.evidence : [],
+  };
+  setCannedStatus('Saving…');
+  try {
+    await window.StudyDB.updateCannedResponseGrounding(findTaskRecord.id, arm, patch);
+  } catch (e) {
+    return setCannedStatus(e.message || String(e), true);
+  }
+  Object.assign(row, patch);
+  const cites = parseAnswerCitations(answer);
+  const loose = cites.filter(c => !citationHasAnchor(row, c)).length;
+  const pane = document.getElementById('findtask-canned');
+  if (pane) {
+    pane.innerHTML = findTaskCannedHtml(findTaskRecord);
+    bindFindTaskCannedControls();
+  }
+  setCannedStatus(`Saved the ${arm === 'grounding' ? 'grounded' : 'non-grounded'} answer — `
+    + `${cites.length} citation${cites.length === 1 ? '' : 's'}`
+    + `${loose ? `, ${loose} of them without an anchor (found by searching the page)` : ''}.`);
 }
 
 function bindFindTaskControls() {
@@ -2726,6 +3017,7 @@ function bindFindTaskControls() {
     document.getElementById(id)?.addEventListener('input', restyle);
     document.getElementById(id)?.addEventListener('change', restyle);
   });
+  bindFindTaskCannedControls();
   document.getElementById('findtask-save').onclick = saveFindTaskEdit;
   document.getElementById('findtask-revert').onclick = () => {
     findTaskStatus = '';

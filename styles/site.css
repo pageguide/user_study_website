@@ -1935,6 +1935,51 @@ body {
 
 .findtask-warn { color: var(--bad); font-weight: 600; }
 
+.findtask-section { margin: 26px 0 0; padding-top: 16px; border-top: 2px solid var(--line); }
+
+/* One box per arm, because the two answers are read against each other: the study compares
+   grounding, and a difference in the claims themselves would be the confound it cannot detect. */
+.findtask-arm {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.findtask-arm-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px;
+  margin-bottom: 4px;
+}
+
+.findtask-arm-note, .findtask-arm-n { font-size: 12px; color: var(--muted); }
+.findtask-arm-n { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+.findtask-cites { margin: 6px 0 0; padding-left: 20px; }
+.findtask-cites li { margin-bottom: 8px; }
+
+.findtask-cite-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* "Anchored" and "found by searching the page" are not the same reliability, and the difference is
+   invisible in the answer text — so it is said on every citation rather than explained once. */
+.findtask-cite-flag {
+  font: 700 10.5px/1.2 inherit;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--accent-dark);
+}
+
+.findtask-cite-flag.is-loose { color: var(--bad); }
+
+.findtask-cite-q {
+  margin-top: 2px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.findtask-ev { margin-bottom: 10px; }
+
 /* Provenance for the whole pane: what was read, and when. */
 .viz-freshness {
   display: flex;
