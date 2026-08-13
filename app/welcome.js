@@ -1213,6 +1213,55 @@ function researchVerdict(spec, { lead, speed, accuracy, localization }) {
   return { tone, headline, guard: sentence + caveat };
 }
 
+/**
+ * The halves that make up one localization number, and what to call them on the card.
+ *
+ * THE COMBINED FIGURE HIDES WHICH HALF MOVED, and on both task types the two halves behave
+ * differently enough that the average is the least informative view of them: Find × Text gains
+ * twice as much on its first hop as its second, and every Guide facet localizes a step far worse
+ * than it names an error type. A card that only prints the mean invites "localization went up" as
+ * the finding when the honest one is "the first half went up".
+ *
+ * FIND'S HALVES ARE HIT RATES AND THAT IS NOT A SHORTCUT. Q1b asks one question per hop and will
+ * not submit without both, so a hop has exactly one pick against one accepted set: precision and
+ * recall are the same number, and the F1 of a single hop IS whether that hop was right. The column
+ * is already there — `score_evidence_hop_exact` is `{"1": true, "2": false}`, written at submit
+ * time — so this reads it rather than deriving something subtly different.
+ *
+ * The visual arm's second hop is answered by clicking an IMAGE, not by picking a passage
+ * (EVIDENCE_PROMPTS_BY_ARM, app/find_task.js), so the labels say which is which. Reading "part 2"
+ * as another sentence is how the picture half of that facet gets attributed to prose.
+ */
+/**
+ * Did the participant blame anything at all?
+ *
+ * The gate in front of both Guide halves, and the reason their F1s read so low: a run on which
+ * nobody names an error scores 0 on error type and 0 on step, so a facet where two thirds of the
+ * runs are never flagged is mostly averaging zeros from people who never reached the localizing.
+ * Without this figure beside them, those two numbers look like bad localization when they are
+ * mostly absent localization, and the two call for completely different follow-ups.
+ */
+function namedAnyError(row) {
+  if (row?.task_type !== 'guide') return null;
+  return Array.isArray(row.guide_errors) ? row.guide_errors.length > 0 : null;
+}
+
+function localizationParts(spec) {
+  if (spec.taskType === 'find') {
+    return [
+      { label: 'Part 1 · passage', metric: row => row?.score_evidence_hop_exact?.['1'] },
+      {
+        label: spec.style === 'visual' ? 'Part 2 · image' : 'Part 2 · passage',
+        metric: row => row?.score_evidence_hop_exact?.['2'],
+      },
+    ];
+  }
+  return [
+    { label: 'Error type F1', metric: row => f1(row?.score_type_precision, row?.score_type_recall) },
+    { label: 'Step F1', metric: row => f1(row?.score_step_precision, row?.score_step_recall) },
+  ];
+}
+
 function researchAnswerCard(spec, allRows) {
   const facetRows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
   // The picker lists every task the facet HAS, not every task it currently counts — a list that
@@ -1282,6 +1331,24 @@ function researchAnswerCard(spec, allRows) {
       ${stat('Total time', total, seconds)}
       ${stat('Accuracy', accuracy, pct, wrongTally(accuracy))}
       ${stat('Localization', localization, pct)}
+    </div>
+
+    <!-- The lead measure taken apart. Same rows, same arms; only the question each half answers is
+         different, which is why they can and do move in different directions. -->
+    <div class="viz-answer-stats viz-answer-split">
+      ${localizationParts(spec).map(part => {
+        const cell = facetDelta(rows, part.metric);
+        if (cell.nongrounded.mean == null && cell.grounded.mean == null) return '';
+        // Its own n, said out loud: on Guide these halves drop every run that had no error to
+        // localize, so a split can rest on fewer rows than the card's header claims.
+        const foot = cell.nongrounded.n === lead.nongrounded.n && cell.grounded.n === lead.grounded.n
+          ? '' : `n ${cell.nongrounded.n} vs ${cell.grounded.n}`;
+        return stat(part.label, cell, pct, foot);
+      }).join('')}
+      ${spec.taskType === 'guide'
+        ? stat('Named any error', facetDelta(rows, namedAnyError), pct,
+          'the gate before both halves above')
+        : ''}
     </div>
 
     <!-- HOW the task was worked, not just how long it took. Scrolling and Ctrl-F are hunting: a

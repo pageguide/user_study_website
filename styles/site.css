@@ -2104,6 +2104,19 @@ body {
 .edit-preview p { margin: 0 0 8px; }
 .edit-preview p:last-child { margin-bottom: 0; }
 
+/* The localization split. Indented under the number it takes apart rather than ruled off from it:
+   these are not a further measure, they are the same one seen in halves, and a dashed rule would
+   read as "and now something else". */
+.viz-answer-split {
+  margin-top: 2px;
+  border-top: 0;
+  padding-top: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+
+.viz-answer-split .viz-answer-stat span { font-size: 10px; }
+
 /* The behavioural row, separated from the outcome measures above it — these describe HOW the task
    was worked, not how well, and reading them as a second kind of score would be a mistake. */
 .viz-answer-behaviour {
