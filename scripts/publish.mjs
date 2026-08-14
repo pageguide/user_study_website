@@ -21,6 +21,8 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { readFileSync, existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
@@ -403,19 +405,85 @@ async function updateTask(env, payload) {
 const ADMIN_TASKS = {
   figures: { script: 'scripts/figures.mjs', args: [], label: 'publish figures' },
   huggingface: { script: 'scripts/huggingface.mjs', args: [], label: 'upload to Hugging Face' },
+  'publish-rows': { script: 'scripts/publish_rows.mjs', args: [], label: 'publish rows to Hugging Face',
+    takesSelection: true },
 };
 
-function runAdminTask(name) {
+/**
+ * A repo id, or nothing. `owner/name`, and nothing else.
+ *
+ * The value arrives from a page, so it is checked rather than trusted: it ends up in a URL path,
+ * and a string with a `..` or a slash too many in it would address something other than the dataset
+ * it claims to.
+ */
+function cleanRepo(value) {
+  const repo = String(value || '').trim();
+  return /^[\w.-]+\/[\w.-]+$/.test(repo) ? repo : null;
+}
+
+/**
+ * The dashboard's live task selection, reduced to what it is allowed to be.
+ *
+ * `{ facet: [task id, …] }` and nothing else — keys must be known facets, values arrays of plain
+ * ids. This is the one place a page's own state reaches a process running with credentials, so it
+ * is rebuilt here from scratch rather than passed through: whatever shape arrives, what leaves is
+ * this shape or an error.
+ */
+const FACET_KEYS = ['find_text', 'find_visual', 'guide_text', 'guide_visual'];
+
+function cleanSelection(value) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return { error: 'selection must be an object' };
+  const out = {};
+  for (const [key, ids] of Object.entries(value)) {
+    if (!FACET_KEYS.includes(key)) return { error: `unknown facet "${key}"` };
+    if (!Array.isArray(ids)) return { error: `selection.${key} must be an array` };
+    if (ids.length > 500) return { error: `selection.${key} is too long` };
+    const clean = ids.map(id => String(id)).filter(id => /^[\w.-]{1,64}$/.test(id));
+    if (clean.length !== ids.length) return { error: `selection.${key} holds an unusable task id` };
+    out[key] = clean;
+  }
+  return { selection: out };
+}
+
+async function runAdminTask(name, payload = {}) {
   const task = ADMIN_TASKS[name];
-  if (!task) return Promise.resolve({ status: 400, body: { error: `Unknown task "${name}".` } });
+  if (!task) return { status: 400, body: { error: `Unknown task "${name}".` } };
+
+  const args = [...task.args];
+  let selectionFile = null;
+  if (task.takesSelection) {
+    const repo = payload.repo === undefined ? null : cleanRepo(payload.repo);
+    if (payload.repo !== undefined && !repo) {
+      return { status: 400, body: { error: 'repo must look like "owner/name".' } };
+    }
+    if (repo) args.push(`--repo=${repo}`);
+
+    const cleaned = cleanSelection(payload.selection);
+    if (cleaned?.error) return { status: 400, body: { error: cleaned.error } };
+    if (cleaned?.selection) {
+      // Handed over as a file rather than on the command line: a task list is long enough to hit
+      // argument limits, and a file cannot be misread as another flag.
+      selectionFile = join(tmpdir(), `pageguide-selection-${randomBytes(6).toString('hex')}.json`);
+      await writeFile(selectionFile, JSON.stringify(cleaned.selection));
+      args.push(`--selection=${selectionFile}`);
+    }
+  }
+
+  return runScript(task, args).finally(() => {
+    if (selectionFile) rm(selectionFile, { force: true }).catch(() => {});
+  });
+}
+
+function runScript(task, args) {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, [join(ROOT, task.script), ...task.args], { cwd: ROOT });
+    const child = spawn(process.execPath, [join(ROOT, task.script), ...args], { cwd: ROOT });
     let out = '';
     child.stdout.on('data', d => { out += d; process.stdout.write(d); });
     child.stderr.on('data', d => { out += d; process.stderr.write(d); });
     child.on('error', e => resolve({ status: 500, body: { error: e.message } }));
     child.on('close', code => resolve(code === 0
-      ? { status: 200, body: { ok: true, task: name, output: out.trim() } }
+      ? { status: 200, body: { ok: true, task: task.label, output: out.trim() } }
       : { status: 500, body: { error: out.trim() || `${task.label} exited with code ${code}` } }));
   });
 }
@@ -694,8 +762,22 @@ if (args[0] === '--serve') {
         return;
       }
       const name = req.url.split('/admin/run/')[1].split('?')[0];
-      console.log(`→ ${ADMIN_TASKS[name]?.label || name}`);
-      runAdminTask(name).then(out => {
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', async () => {
+        let payload = {};
+        const raw = Buffer.concat(chunks).toString('utf8').trim();
+        if (raw) {
+          try {
+            payload = JSON.parse(raw);
+          } catch (e) {
+            res.writeHead(400, { ...cors, 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'The request was not valid JSON.' }));
+            return;
+          }
+        }
+        console.log(`→ ${ADMIN_TASKS[name]?.label || name}`);
+        const out = await runAdminTask(name, payload);
         if (out.status !== 200) console.error(`  ✗ ${out.body.error}`);
         res.writeHead(out.status, { ...cors, 'Content-Type': 'application/json' });
         res.end(JSON.stringify(out.body));

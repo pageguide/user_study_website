@@ -1756,7 +1756,8 @@ function researchAnswersHtml(rows) {
              files into the repo it was served from, and a write token has no business being in a
              file participants are served. -->
         <button class="admin-chip" id="viz-figures">📊 Publish to figures</button>
-        <button class="admin-chip" id="viz-huggingface">🤗 Upload to Hugging Face</button>
+        <button class="admin-chip" id="viz-huggingface">🤗 Upload figures dataset</button>
+        <button class="admin-chip" id="viz-publish-rows">🤗 Publish these rows</button>
         <div class="viz-job-status" id="viz-job-status" hidden></div>
       </div>
     </div>
@@ -2178,6 +2179,12 @@ function bindVisualizationControls() {
   bindAdminJob('viz-figures', 'figures', 'Publishing figures…',
     'Figures and dataset written. They are built from the tasks each card counts BY DEFAULT, not '
     + 'from any boxes ticked here — re-run after changing a default, not after a look.');
+  // The one job that sends state: what it publishes is what the cards are counting AS THEY STAND,
+  // ticked boxes included, so the export follows the screen rather than the committed defaults.
+  bindAdminJob('viz-publish-rows', 'publish-rows', 'Publishing the counted rows…',
+    'Published. These are the rows the four cards are counting right now — including any task you '
+    + 'have ticked or unticked here, which is not what the committed defaults say.',
+    () => ({ selection: currentFacetSelection(adminVizRows) }));
   bindAdminJob('viz-huggingface', 'huggingface', 'Uploading to Hugging Face…',
     'Pushed. Participants’ free-text notes and session ids are not in it; the export carries a '
     + 'per-run participant number instead.');
@@ -2260,7 +2267,26 @@ function bindVisualizationControls() {
  * published" is the sentence about WHICH tasks they were built from, and a toast that vanished
  * would take that with it.
  */
-function bindAdminJob(buttonId, job, runningText, doneText) {
+/**
+ * The task ids each card is counting at this moment, as the publisher expects them.
+ *
+ * EVERY FACET IS SENT EXPLICITLY, even the ones counting everything. "Absent means all" would be a
+ * rule the browser and the script had to agree on forever, and the first time they disagreed the
+ * export would silently publish a different study than the screen shows.
+ */
+function currentFacetSelection(allRows) {
+  const out = {};
+  RESEARCH_QUESTIONS.forEach(spec => {
+    const facetRows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+    const key = facetKey(spec);
+    const chosen = chosenTasksFor(key, facetRows);
+    const ids = Array.from(new Set(facetRows.map(r => String(r.task_id || '')).filter(Boolean)));
+    out[key] = chosen ? ids.filter(id => chosen.has(id)) : ids;
+  });
+  return out;
+}
+
+function bindAdminJob(buttonId, job, runningText, doneText, payloadOf) {
   const button = document.getElementById(buttonId);
   if (!button) return;
   button.addEventListener('click', async () => {
@@ -2274,7 +2300,7 @@ function bindAdminJob(buttonId, job, runningText, doneText) {
     button.disabled = true;
     say(runningText);
     try {
-      const out = await window.StudyDB.runAdminJob(job);
+      const out = await window.StudyDB.runAdminJob(job, payloadOf ? payloadOf() : null);
       // The script's own last line is the honest summary — row counts, the repo it pushed to —
       // and it is more specific than anything this file could say about work it did not do.
       const tail = String(out?.output || '').trim().split('\n').filter(Boolean).pop();

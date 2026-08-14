@@ -473,7 +473,7 @@ async function updateCannedResponseGrounding(taskId, condition, patch) {
  * dataset; a spinner that gave up at thirty seconds would report a failure for work that was still
  * running and about to succeed.
  */
-async function runAdminJob(name) {
+async function runAdminJob(name, payload = null) {
   let token = '';
   try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
   if (!token) {
@@ -490,6 +490,7 @@ async function runAdminJob(name) {
     res = await fetch(`http://127.0.0.1:8790/admin/run/${encodeURIComponent(name)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
+      body: payload ? JSON.stringify(payload) : undefined,
     });
   } catch (e) {
     throw new Error('Could not reach the publish helper on 127.0.0.1:8790. '

@@ -7,3 +7,6 @@ app/config.js
 
 # Publish-helper credentials — the secret key lives here and is never committed.
 .env
+
+# Rebuilt on every publish from the dashboard, and pushed to Hugging Face rather than here.
+dataset_rows/

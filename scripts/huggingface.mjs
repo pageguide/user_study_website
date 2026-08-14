@@ -46,7 +46,7 @@ const DRY_RUN = args.includes('--dry-run');
 const BRANCH = argOf('branch', 'main');
 
 /** The token, from the first place that has one. Returned, never logged. */
-async function findToken() {
+export async function findToken() {
   if (process.env.HF_TOKEN) return { token: process.env.HF_TOKEN.trim(), from: 'HF_TOKEN in the environment' };
   try {
     const env = await readFile(join(ROOT, '.env'), 'utf8');
@@ -79,7 +79,7 @@ async function walk(dir, base = dir) {
  * state where the figures and the rows they were made from disagree — which is the version of this
  * that would quietly mislead somebody who cloned it mid-push.
  */
-async function commit({ token, files }) {
+async function commit({ token, files, repo, branch }) {
   const header = {
     key: 'header',
     value: {
@@ -97,7 +97,7 @@ async function commit({ token, files }) {
   }
 
   const res = await fetch(
-    `https://huggingface.co/api/datasets/${REPO}/commit/${encodeURIComponent(BRANCH)}`,
+    `https://huggingface.co/api/datasets/${repo}/commit/${encodeURIComponent(branch)}`,
     {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/x-ndjson' },
@@ -112,34 +112,47 @@ async function commit({ token, files }) {
   return body;
 }
 
-async function main() {
+/**
+ * Push one directory to one dataset repo, as a single commit.
+ *
+ * Exported so the row publisher can reuse it: two copies of an authenticated upload is two places
+ * for a token to end up somewhere it should not.
+ */
+export async function uploadDirectory({ repo, dir, branch = 'main', dryRun = false, log = console.log }) {
   let files;
   try {
-    await stat(DIR);
-    files = await walk(DIR);
+    await stat(dir);
+    files = await walk(dir);
   } catch (e) {
-    throw new Error(`Nothing to upload: ${DIR} does not exist. Run \`node scripts/figures.mjs\` first.`);
+    throw new Error(`Nothing to upload: ${dir} does not exist.`);
   }
-  if (!files.length) throw new Error(`Nothing to upload: ${DIR} is empty.`);
+  if (!files.length) throw new Error(`Nothing to upload: ${dir} is empty.`);
 
   const total = (await Promise.all(files.map(async f => (await stat(f.full)).size)))
     .reduce((a, b) => a + b, 0);
+  log(`\n  ${repo}  ←  ${relative(ROOT, dir)}/  (${files.length} files, ${(total / 1024).toFixed(1)} KB)`);
+  files.forEach(f => log(`    ${f.path}`));
 
-  console.log(`\n  ${REPO}  ←  ${relative(ROOT, DIR)}/  (${files.length} files, ${(total / 1024).toFixed(1)} KB)`);
-  files.forEach(f => console.log(`    ${f.path}`));
-
-  if (DRY_RUN) {
-    console.log('\n  --dry-run: nothing was sent.\n');
-    return;
+  if (dryRun) {
+    log('\n  --dry-run: nothing was sent.\n');
+    return { repo, files: files.length, sent: false };
   }
 
   const { token, from } = await findToken();
-  console.log(`\n  token read from ${from}`);
-  await commit({ token, files });
-  console.log(`  ✓ pushed → https://huggingface.co/datasets/${REPO}\n`);
+  log(`\n  token read from ${from}`);
+  await commit({ token, files, repo, branch });
+  log(`  ✓ pushed → https://huggingface.co/datasets/${repo}\n`);
+  return { repo, files: files.length, sent: true };
 }
 
-main().catch(e => {
-  console.error(`\n  [huggingface] ${e.message}\n`);
-  process.exit(1);
-});
+async function main() {
+  await uploadDirectory({ repo: REPO, dir: DIR, branch: BRANCH, dryRun: DRY_RUN });
+}
+
+// Only when run directly: importing this file must not push anything.
+if (process.argv[1] && process.argv[1].endsWith('huggingface.mjs')) {
+  main().catch(e => {
+    console.error(`\n  [huggingface] ${e.message}\n`);
+    process.exit(1);
+  });
+}
