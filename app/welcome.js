@@ -920,6 +920,821 @@ function legendHtml(items) {
   return `<div class="viz-legend">${items.map(i => `<span><i style="background:${i.color}"></i>${adminEsc(i.label)}</span>`).join('')}</div>`;
 }
 
+const LIKERT_COLORS = {
+  1: '#c2185b',
+  2: '#e7548a',
+  3: '#f4b5cf',
+  4: '#e7e7e7',
+  5: '#bddd9c',
+  6: '#63b765',
+  7: '#2e7d32',
+};
+
+let postStudyLikert = null;
+let currentWhiskerPlot = null;
+let postStudyDefaultAttempted = false;
+const POST_STUDY_DEFAULT_PATHS = ['post_study.csv', 'post_study/post_study.csv', 'post_study/likert.csv'];
+
+function parseCsvText(text) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+  const src = String(text || '').replace(/^\ufeff/, '');
+  const firstLine = src.split(/\r?\n/, 1)[0] || '';
+  const delimiter = (firstLine.match(/\t/g) || []).length > (firstLine.match(/,/g) || []).length ? '\t' : ',';
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (quoted) {
+      if (ch === '"' && next === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') {
+      quoted = true;
+    } else if (ch === delimiter) {
+      row.push(cell);
+      cell = '';
+    } else if (ch === '\n') {
+      row.push(cell);
+      if (row.some(v => String(v).trim())) rows.push(row);
+      row = [];
+      cell = '';
+    } else if (ch !== '\r') {
+      cell += ch;
+    }
+  }
+  row.push(cell);
+  if (row.some(v => String(v).trim())) rows.push(row);
+  return rows;
+}
+
+function likertCodeFor(question, indexByGroup) {
+  const q = String(question || '');
+  const upper = q.toUpperCase();
+  let group = 'OTHER';
+  if (upper.includes('FIND')) group = 'FIND';
+  else if (upper.includes('GUIDE')) group = 'GUIDE';
+  else if (upper.includes('HIDE')) group = 'HIDE';
+  const prefix = group === 'FIND' ? 'F' : group === 'GUIDE' ? 'G' : group === 'HIDE' ? 'H' : 'Q';
+  indexByGroup[group] = (indexByGroup[group] || 0) + 1;
+  return { group, code: `${prefix}${indexByGroup[group]}` };
+}
+
+function postStudyLikertFromCsv(text, source = 'CSV') {
+  const parsed = parseCsvText(text);
+  if (parsed.length < 2) throw new Error('The CSV needs a header row and at least one response row.');
+  const headers = parsed[0].map(h => String(h || '').trim());
+  const body = parsed.slice(1);
+  const columns = [];
+  const indexByGroup = {};
+
+  headers.forEach((header, i) => {
+    const values = body
+      .map(row => Number(String(row[i] ?? '').trim()))
+      .filter(v => Number.isInteger(v) && v >= 1 && v <= 7);
+    if (!values.length) return;
+    const nonEmpty = body.filter(row => String(row[i] ?? '').trim()).length;
+    if (values.length < nonEmpty) return;
+    const counts = Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map(v => [v, 0]));
+    values.forEach(v => { counts[v]++; });
+    columns.push({ question: header, values, counts, ...likertCodeFor(header, indexByGroup) });
+  });
+
+  if (!columns.length) throw new Error('No 1-7 Likert question columns were found.');
+  return { source, rows: body.length, columns, generatedAt: new Date() };
+}
+
+function wrapSvgText(text, maxChars = 82) {
+  const words = String(text || '').trim().split(/\s+/);
+  const lines = [];
+  let line = '';
+  words.forEach(word => {
+    const next = line ? `${line} ${word}` : word;
+    if (next.length > maxChars && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  });
+  if (line) lines.push(line);
+  return lines.slice(0, 3);
+}
+
+function svgLikertPanels(data) {
+  if (!data?.columns?.length) return emptySvg(1040, 160, 'Upload or load a CSV to draw the Likert chart');
+  const groupOrder = ['FIND', 'GUIDE', 'HIDE', 'OTHER'];
+  const groupLabel = { FIND: 'a) FIND', GUIDE: 'b) GUIDE', HIDE: 'c) HIDE', OTHER: 'QUESTIONS' };
+  const groupColor = { FIND: '#1e97ea', GUIDE: '#3fb34f', HIDE: '#f29900', OTHER: '#5f6673' };
+  const groups = groupOrder
+    .map(key => ({ key, items: data.columns.filter(c => c.group === key) }))
+    .filter(g => g.items.length);
+
+  const width = 1040;
+  const panelGap = 28;
+  const slots = Math.max(3, groups.length);
+  const panelW = (width - panelGap * (slots - 1)) / slots;
+  const rowH = 46;
+  const top = 98;
+  const labelW = 38;
+  const rightW = 60;
+  const axisH = 38;
+  const maxRows = Math.max(...groups.map(g => g.items.length), 1);
+  const height = top + maxRows * rowH + axisH + 150;
+  const barW = panelW - labelW - rightW;
+  const halfW = barW / 2;
+  const legendX = width / 2 - 230;
+
+  const segment = (x, y, w, h, color) => w <= 0.2 ? '' : `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h}" fill="${color}"></rect>`;
+  const barFor = (item, x0, y) => {
+    const n = item.values.length || 1;
+    const leftTotal = item.counts[1] + item.counts[2] + item.counts[3];
+    const rightTotal = item.counts[5] + item.counts[6] + item.counts[7];
+    let leftX = x0 + halfW - (leftTotal / n) * halfW;
+    const left = [1, 2, 3].map(v => {
+      const w = (item.counts[v] / n) * halfW;
+      const out = segment(leftX, y, w, 18, LIKERT_COLORS[v]);
+      leftX += w;
+      return out;
+    }).join('');
+    const neutralW = (item.counts[4] / n) * halfW;
+    const neutral = segment(x0 + halfW - neutralW / 2, y, neutralW, 18, LIKERT_COLORS[4]);
+    let rightX = x0 + halfW;
+    const right = [5, 6, 7].map(v => {
+      const w = (item.counts[v] / n) * halfW;
+      const out = segment(rightX, y, w, 18, LIKERT_COLORS[v]);
+      rightX += w;
+      return out;
+    }).join('');
+    const agree = Math.round((rightTotal / n) * 100);
+    const tip = {
+      title: `${item.code}: ${item.question}`,
+      rows: [1, 2, 3, 4, 5, 6, 7].map(v => ({
+        color: LIKERT_COLORS[v],
+        value: String(item.counts[v]),
+        label: `Rating ${v}`,
+      })),
+      foot: `${agree}% agree · n ${n}`,
+    };
+    return `<g>
+      <rect class="viz-hit" x="${(x0 - labelW).toFixed(1)}" y="${(y - 10).toFixed(1)}" width="${panelW.toFixed(1)}" height="38" ${tipData(tip)} aria-label="${adminEsc(`${item.code}: ${agree}% agree`)}"></rect>
+      <line x1="${(x0 + halfW).toFixed(1)}" y1="${(y - 8).toFixed(1)}" x2="${(x0 + halfW).toFixed(1)}" y2="${(y + 25).toFixed(1)}" stroke="#9d9d9d"></line>
+      ${left}${neutral}${right}
+      <text x="${(x0 - 8).toFixed(1)}" y="${(y + 14).toFixed(1)}" text-anchor="end" class="likert-code">${adminEsc(item.code)}</text>
+      <text x="${(x0 + barW + 8).toFixed(1)}" y="${(y + 14).toFixed(1)}" class="likert-agree">${agree}%</text>
+    </g>`;
+  };
+
+  const panels = groups.map((group, gi) => {
+    const x = gi * (panelW + panelGap);
+    const barX = x + labelW;
+    const axisY = top + group.items.length * rowH + 4;
+    return `<g>
+      <text x="${(x + panelW / 2).toFixed(1)}" y="78" text-anchor="middle" class="likert-panel-title" fill="${groupColor[group.key]}">${groupLabel[group.key]}</text>
+      <line x1="${barX.toFixed(1)}" y1="${axisY}" x2="${(barX + barW).toFixed(1)}" y2="${axisY}" stroke="#cfcfcf"></line>
+      <line x1="${(barX + halfW).toFixed(1)}" y1="${top - 8}" x2="${(barX + halfW).toFixed(1)}" y2="${axisY}" stroke="#b7b7b7"></line>
+      <text x="${barX.toFixed(1)}" y="${axisY + 20}" text-anchor="middle" class="likert-axis">50%</text>
+      <text x="${(barX + halfW).toFixed(1)}" y="${axisY + 20}" text-anchor="middle" class="likert-axis">0%</text>
+      <text x="${(barX + barW).toFixed(1)}" y="${axisY + 20}" text-anchor="middle" class="likert-axis">100%</text>
+      <text x="${(barX + halfW).toFixed(1)}" y="${axisY + 42}" text-anchor="middle" class="likert-axis-label">← Disagree / Agree →</text>
+      ${group.items.map((item, i) => barFor(item, barX, top + i * rowH)).join('')}
+    </g>`;
+  }).join('');
+
+  const wrappedQuestions = data.columns.map(item => ({ item, lines: wrapSvgText(`${item.code}: ${item.question}`) }));
+  const questionBlockH = wrappedQuestions.reduce((sum, q) => sum + q.lines.length * 15 + 7, 16);
+  const questionsY = top + maxRows * rowH + axisH + 34;
+  const questionLines = [];
+  let qY = questionsY;
+  wrappedQuestions.forEach(q => {
+    q.lines.forEach((line, j) => {
+      questionLines.push(`<text x="24" y="${qY + j * 15}" class="likert-question">${adminEsc(line)}</text>`);
+    });
+    qY += q.lines.length * 15 + 7;
+  });
+  const finalHeight = Math.max(height, questionsY + questionBlockH + 10);
+
+  return `<svg class="viz-svg likert-svg" viewBox="0 0 ${width} ${finalHeight}" role="img" aria-label="Post-study Likert ratings by question">
+    <rect x="${legendX}" y="6" width="460" height="42" rx="6" fill="#fff" stroke="#d5d5d5"></rect>
+    <text x="${width / 2}" y="22" text-anchor="middle" class="likert-legend-title">Rating: (1=Strongly Disagree, 7=Strongly Agree)</text>
+    ${[1, 2, 3, 4, 5, 6, 7].map((v, i) => `<rect x="${legendX + 12 + i * 62}" y="30" width="26" height="9" fill="${LIKERT_COLORS[v]}"></rect>
+      <text x="${legendX + 50 + i * 62}" y="39" class="likert-legend-num">${v}</text>`).join('')}
+    ${panels}
+    <rect x="10" y="${questionsY - 16}" width="${width - 20}" height="${questionBlockH}" fill="#c9c9c9" stroke="#123040" stroke-width="2"></rect>
+    ${questionLines.join('')}
+  </svg>`;
+}
+
+function postStudyLikertHtml() {
+  const meta = postStudyLikert
+    ? `${adminEsc(postStudyLikert.source)} · ${postStudyLikert.rows} responses · ${postStudyLikert.columns.length} questions`
+    : 'No CSV loaded yet';
+  return `<section class="viz-card viz-card-wide poststudy-card">
+    <div class="poststudy-head">
+      <div>
+        <h4>Post-study Likert ratings</h4>
+        <p class="viz-note">The dashboard first tries <code>post_study.csv</code>, then
+          <code>post_study/post_study.csv</code>. Upload another Google Forms CSV here whenever you
+          want to replace it. Columns whose non-empty values are all 1-7 are plotted as questions.</p>
+      </div>
+      <span class="poststudy-meta" id="poststudy-meta">${meta}</span>
+    </div>
+    <div class="poststudy-controls">
+      <input id="poststudy-file" type="file" accept=".csv,text/csv">
+      <input id="poststudy-path" type="text" value="post_study/post_study.csv" aria-label="CSV path">
+      <button class="admin-chip admin-chip-on" id="poststudy-load-path" type="button">Generate graph</button>
+      <button class="admin-chip" data-svg-export="#poststudy-chart svg" data-name="post-study-likert" data-format="svg" type="button"${postStudyLikert ? '' : ' disabled'}>SVG</button>
+      <button class="admin-chip" data-svg-export="#poststudy-chart svg" data-name="post-study-likert" data-format="jpeg" type="button"${postStudyLikert ? '' : ' disabled'}>JPEG</button>
+      <button class="admin-chip" data-svg-export="#poststudy-chart svg" data-name="post-study-likert" data-format="pdf" type="button"${postStudyLikert ? '' : ' disabled'}>PDF</button>
+    </div>
+    <div class="viz-job-status" id="poststudy-status" hidden></div>
+    <div id="poststudy-chart" class="poststudy-chart">${postStudyLikert ? svgLikertPanels(postStudyLikert) : '<div class="viz-empty">Loading the default post-study CSV…</div>'}</div>
+  </section>`;
+}
+
+const FIGURE_PREVIEWS = [
+  {
+    file: 'figures/time_completion.svg',
+    name: 'time_completion',
+    title: 'Task completion time',
+    note: 'Box plot with Tukey whiskers and individual rows.',
+  },
+  {
+    file: 'figures/behavior_pooled.svg',
+    name: 'behavior_pooled',
+    title: 'Behavioral measures, pooled',
+    note: 'Mean bars with standard-error whiskers.',
+  },
+  {
+    file: 'figures/behavior_by_facet.svg',
+    name: 'behavior_by_facet',
+    title: 'Behavioral measures by facet',
+    note: 'Mean bars with standard-error whiskers, split by task facet.',
+  },
+];
+
+function vizQuantile(sorted, p) {
+  if (!sorted.length) return null;
+  const i = (sorted.length - 1) * p;
+  const lo = Math.floor(i);
+  const hi = Math.ceil(i);
+  return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+}
+
+function vizHashJitter(key, i) {
+  let h = 2166136261;
+  const s = `${key}:${i}`;
+  for (let k = 0; k < s.length; k++) {
+    h ^= s.charCodeAt(k);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 1000) / 1000 - 0.5;
+}
+
+function vizBoxUpperFence(values) {
+  const v = values.filter(Number.isFinite).slice().sort((a, b) => a - b);
+  if (!v.length) return 0;
+  const q1 = vizQuantile(v, 0.25);
+  const q3 = vizQuantile(v, 0.75);
+  const hi = q3 + 1.5 * (q3 - q1);
+  return [...v].reverse().find(x => x <= hi) ?? v[v.length - 1];
+}
+
+function selectedRowsForFacet(allRows, spec) {
+  const facetRows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+  const chosen = chosenTasksFor(facetKey(spec), facetRows);
+  return chosen ? facetRows.filter(r => chosen.has(String(r.task_id || ''))) : facetRows;
+}
+
+function selectedRowsForCurrentFigures(rows) {
+  return RESEARCH_QUESTIONS.flatMap(spec => selectedRowsForFacet(rows, spec));
+}
+
+function svgBoxGrid(panelsSpec, opts = {}) {
+  const width = opts.width || 1040;
+  const panelW = opts.panelW || 250;
+  const panelH = opts.panelH || 270;
+  const left0 = opts.left0 || 20;
+  const top0 = opts.top0 || 18;
+  const cols = opts.cols || Math.min(4, panelsSpec.length || 1);
+  const rows = Math.ceil((panelsSpec.length || 1) / cols);
+  const legendH = opts.legend === false ? 0 : 44;
+  const height = top0 + rows * panelH + legendH + 10;
+  const colors = { nongrounding: '#bf5a64', grounding: '#5183c9' };
+  const arms = [
+    { id: 'nongrounding', label: 'Non-grounded' },
+    { id: 'grounding', label: 'Grounded' },
+  ];
+  const allValues = panelsSpec.flatMap(panel => arms.flatMap(arm => panel.values[arm.id] || []));
+  const globalMax = opts.max ?? niceMax(Math.max(10, vizBoxUpperFence(allValues) * 1.12));
+  const globalTicks = opts.ticks || [0, globalMax / 2, globalMax];
+  const globalTickFormat = opts.tickFormat || ((v) => String(Math.round(v)));
+
+  const box = (values, x, yOf, w, key, color) => {
+    const sorted = values.filter(Number.isFinite).slice().sort((a, b) => a - b);
+    if (!sorted.length) return '';
+    const q1 = vizQuantile(sorted, 0.25);
+    const med = vizQuantile(sorted, 0.5);
+    const q3 = vizQuantile(sorted, 0.75);
+    const mean = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+    const iqr = q3 - q1;
+    const loFence = q1 - 1.5 * iqr;
+    const hiFence = q3 + 1.5 * iqr;
+    const lo = sorted.find(v => v >= loFence) ?? sorted[0];
+    const hi = [...sorted].reverse().find(v => v <= hiFence) ?? sorted[sorted.length - 1];
+    const cx = x + w / 2;
+    const dots = sorted.map((v, i) => `<circle cx="${(cx + vizHashJitter(key, i) * w * 0.72).toFixed(1)}" cy="${yOf(v).toFixed(1)}" r="2" fill="#111" opacity="0.34"></circle>`).join('');
+    return `<g>
+      <line x1="${cx.toFixed(1)}" y1="${yOf(hi).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${yOf(q3).toFixed(1)}" stroke="#16161a" stroke-width="1"></line>
+      <line x1="${cx.toFixed(1)}" y1="${yOf(q1).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${yOf(lo).toFixed(1)}" stroke="#16161a" stroke-width="1"></line>
+      <line x1="${(cx - w / 4).toFixed(1)}" y1="${yOf(hi).toFixed(1)}" x2="${(cx + w / 4).toFixed(1)}" y2="${yOf(hi).toFixed(1)}" stroke="#16161a" stroke-width="1"></line>
+      <line x1="${(cx - w / 4).toFixed(1)}" y1="${yOf(lo).toFixed(1)}" x2="${(cx + w / 4).toFixed(1)}" y2="${yOf(lo).toFixed(1)}" stroke="#16161a" stroke-width="1"></line>
+      <rect x="${x.toFixed(1)}" y="${yOf(q3).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, yOf(q1) - yOf(q3)).toFixed(1)}" rx="2" fill="${color}" fill-opacity="0.82" stroke="#16161a"></rect>
+      <line x1="${x.toFixed(1)}" y1="${yOf(med).toFixed(1)}" x2="${(x + w).toFixed(1)}" y2="${yOf(med).toFixed(1)}" stroke="#16161a" stroke-width="1.8"></line>
+      <path d="M${cx.toFixed(1)},${(yOf(mean) - 5).toFixed(1)} L${(cx + 5).toFixed(1)},${yOf(mean).toFixed(1)} L${cx.toFixed(1)},${(yOf(mean) + 5).toFixed(1)} L${(cx - 5).toFixed(1)},${yOf(mean).toFixed(1)} Z" fill="#fff" stroke="#16161a" stroke-width="1.2"></path>
+      ${dots}
+    </g>`;
+  };
+
+  const panels = panelsSpec.map((panel, i) => {
+    const x = left0 + (i % cols) * panelW;
+    const y = top0 + Math.floor(i / cols) * panelH;
+    const padL = 38;
+    const padT = 34;
+    const padB = 46;
+    const plotW = panelW - padL - 12;
+    const plotH = panelH - padT - padB;
+    const panelValues = arms.flatMap(arm => panel.values[arm.id] || []);
+    const panelMax = opts.perPanelScale
+      ? (panel.max ?? niceMax(Math.max(1, vizBoxUpperFence(panelValues) * 1.12)))
+      : globalMax;
+    const panelTicks = panel.ticks || (opts.perPanelScale ? [0, panelMax / 2, panelMax] : globalTicks);
+    const tickFormat = panel.tickFormat || globalTickFormat;
+    const yOf = (v) => y + padT + plotH - (Math.min(v, panelMax) / panelMax) * plotH;
+    const start = x + padL + plotW / 2 - 34;
+    const barW = 32;
+    const n = arms.map(arm => (panel.values[arm.id] || []).length);
+    return `<g>
+      <text x="${x + padL}" y="${y + 13}" class="viz-svg-value">${adminEsc(panel.title)}  (n ${n[0]} vs ${n[1]})</text>
+      <text x="${x + padL}" y="${y + 27}" class="viz-svg-label">${adminEsc(panel.subtitle || '')}</text>
+      ${panelTicks.map(t => `<line x1="${x + padL}" y1="${yOf(t).toFixed(1)}" x2="${x + padL + plotW}" y2="${yOf(t).toFixed(1)}" stroke="${VIZ_INK.grid}" stroke-width="1"></line>
+        <text x="${x + padL - 6}" y="${(yOf(t) + 4).toFixed(1)}" text-anchor="end" class="viz-svg-label">${adminEsc(tickFormat(t))}</text>`).join('')}
+      ${box(panel.values.nongrounding || [], start, yOf, barW, `${panel.title}|ng`, colors.nongrounding)}
+      ${box(panel.values.grounding || [], start + 38, yOf, barW, `${panel.title}|g`, colors.grounding)}
+      <text x="${start + barW / 2}" y="${y + padT + plotH + 18}" text-anchor="middle" class="viz-svg-label">NG</text>
+      <text x="${start + 38 + barW / 2}" y="${y + padT + plotH + 18}" text-anchor="middle" class="viz-svg-label">G</text>
+    </g>`;
+  }).join('');
+
+  const legendY = height - 26;
+  return `<svg class="viz-svg current-box-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${adminEsc(opts.aria || 'Current box plot')}">
+    <rect width="${width}" height="${height}" fill="#fff"></rect>
+    ${panels}
+    ${opts.legend === false ? '' : `<g>
+      <rect x="${width / 2 - 118}" y="${legendY}" width="12" height="12" rx="2" fill="${colors.nongrounding}"></rect>
+      <text x="${width / 2 - 100}" y="${legendY + 10}" class="viz-svg-label">Non-grounded</text>
+      <rect x="${width / 2 + 20}" y="${legendY}" width="12" height="12" rx="2" fill="${colors.grounding}"></rect>
+      <text x="${width / 2 + 38}" y="${legendY + 10}" class="viz-svg-label">Grounded</text>
+    </g>`}
+  </svg>`;
+}
+
+function svgCurrentTimeBoxPlot(allRows) {
+  return svgBoxGrid(RESEARCH_QUESTIONS.map(spec => {
+    const rows = selectedRowsForFacet(allRows, spec);
+    return {
+      title: spec.label.replace(' · ', ' x '),
+      subtitle: 'all timed rows in selected tasks',
+      values: {
+        nongrounding: rows.filter(r => r.condition === 'nongrounding').map(r => totalTime(r)).filter(v => v != null).map(v => v / 1000),
+        grounding: rows.filter(r => r.condition === 'grounding').map(r => totalTime(r)).filter(v => v != null).map(v => v / 1000),
+      },
+    };
+  }), { tickFormat: v => `${Math.round(v)}s`, aria: 'Current task completion time box plot' });
+}
+
+function svgCurrentAccuracyBoxPlot(rows) {
+  return svgBoxGrid(RESEARCH_QUESTIONS.map(spec => {
+    const facetRows = selectedRowsForFacet(rows, spec);
+    const vals = (condition) => {
+      const byTask = new Map();
+      facetRows.filter(r => r.condition === condition).forEach(r => {
+        const v = answerCorrect(r);
+        if (v !== true && v !== false) return;
+        const id = String(r.task_id || 'unknown');
+        if (!byTask.has(id)) byTask.set(id, []);
+        byTask.get(id).push(v ? 1 : 0);
+      });
+      return Array.from(byTask.values()).map(v => v.reduce((a, b) => a + b, 0) / v.length);
+    };
+    const rowN = (condition) => facetRows
+      .filter(r => r.condition === condition)
+      .map(answerCorrect)
+      .filter(v => v === true || v === false)
+      .length;
+    return {
+      title: spec.label.replace(' · ', ' x '),
+      subtitle: `task-level rates; rows ${rowN('nongrounding')} vs ${rowN('grounding')}`,
+      values: { nongrounding: vals('nongrounding'), grounding: vals('grounding') },
+    };
+  }), { max: 1, ticks: [0, 0.25, 0.5, 0.75, 1], tickFormat: pctAxis, aria: 'Current task accuracy box plot' });
+}
+
+function svgCurrentBehaviorBoxPlot(rows) {
+  const metrics = BEHAVIOR_METRICS.concat([
+    { key: 'website_click_count', label: 'Page clicks' },
+    { key: 'panel_click_count', label: 'Panel clicks' },
+  ]);
+  const countAxis = (values, key) => {
+    if (key === 'mouse_move_px') return { tickFormat: pixels };
+    const max = Math.max(...values.filter(Number.isFinite), 0);
+    const top = Math.max(1, Math.ceil(max));
+    if (top <= 6) return { max: top, ticks: Array.from({ length: top + 1 }, (_, i) => i), tickFormat: v => String(Math.round(v)) };
+    const step = Math.ceil(top / 3);
+    return { max: step * 3, ticks: [0, step, step * 2, step * 3], tickFormat: v => String(Math.round(v)) };
+  };
+  return svgBoxGrid(metrics.map(({ key, column, label }) => {
+    const vals = (condition) => conditionRows(rows, condition)
+      .map(r => behaviorValue(r, key, column))
+      .filter(v => v != null);
+    const values = { nongrounding: vals('nongrounding'), grounding: vals('grounding') };
+    const axis = countAxis(values.nongrounding.concat(values.grounding), key);
+    return {
+      title: label,
+      subtitle: 'per selected row',
+      ...axis,
+      values,
+    };
+  }).filter(p => p.values.nongrounding.length || p.values.grounding.length), {
+    cols: 3,
+    panelW: 330,
+    perPanelScale: true,
+    tickFormat: oneDecimal,
+    aria: 'Current behavior measure box plots',
+  });
+}
+
+function svgCurrentBehaviorByFacetBoxPlot(rows) {
+  const metrics = BEHAVIOR_METRICS.concat([
+    { key: 'website_click_count', label: 'Page clicks' },
+    { key: 'panel_click_count', label: 'Panel clicks' },
+  ]);
+  const countAxis = (values, key) => {
+    if (key === 'mouse_move_px') return { tickFormat: pixels };
+    const max = Math.max(...values.filter(Number.isFinite), 0);
+    const top = Math.max(1, Math.ceil(max));
+    if (top <= 6) return { max: top, ticks: Array.from({ length: top + 1 }, (_, i) => i), tickFormat: v => String(Math.round(v)) };
+    const step = Math.ceil(top / 3);
+    return { max: step * 3, ticks: [0, step, step * 2, step * 3], tickFormat: v => String(Math.round(v)) };
+  };
+  const panels = [];
+  metrics.forEach(({ key, column, label }) => {
+    RESEARCH_QUESTIONS.forEach(spec => {
+      const facetRows = selectedRowsForFacet(rows, spec);
+      const vals = (condition) => facetRows
+        .filter(r => r.condition === condition)
+        .map(r => behaviorValue(r, key, column))
+        .filter(v => v != null);
+      const values = { nongrounding: vals('nongrounding'), grounding: vals('grounding') };
+      if (!values.nongrounding.length && !values.grounding.length) return;
+      const axis = countAxis(values.nongrounding.concat(values.grounding), key);
+      panels.push({
+        title: `${label} · ${spec.label.replace(' · ', ' x ')}`,
+        subtitle: 'per selected facet row',
+        ...axis,
+        values,
+      });
+    });
+  });
+  return panels.length
+    ? svgBoxGrid(panels, {
+      cols: 4,
+      panelW: 250,
+      perPanelScale: true,
+      tickFormat: oneDecimal,
+      aria: 'Current behavior measure box plots by facet',
+    })
+    : emptySvg(1040, 160, 'No telemetry recorded for these selected facet rows');
+}
+
+function figurePreviewHtml(rows) {
+  const current = currentWhiskerPlot;
+  const generated = (key, title, note, empty) => `<article class="figure-preview figure-preview-live">
+    <div class="figure-preview-head">
+      <div>
+        <b>${adminEsc(title)}</b>
+        <span>${adminEsc(note)}</span>
+      </div>
+      <div class="figure-preview-actions">
+        <button class="admin-chip" data-current-whisker-export data-svg-export="#current-${key}-plot svg" data-name="current_${key}" data-format="svg" type="button"${current ? '' : ' disabled'}>SVG</button>
+        <button class="admin-chip" data-current-whisker-export data-svg-export="#current-${key}-plot svg" data-name="current_${key}" data-format="jpeg" type="button"${current ? '' : ' disabled'}>JPEG</button>
+        <button class="admin-chip" data-current-whisker-export data-svg-export="#current-${key}-plot svg" data-name="current_${key}" data-format="pdf" type="button"${current ? '' : ' disabled'}>PDF</button>
+      </div>
+    </div>
+    <div class="figure-preview-img" id="current-${key}-plot">${current ? current[`${key}Svg`] : `<div class="viz-empty">${adminEsc(empty)}</div>`}</div>
+  </article>`;
+  return `<section class="viz-card viz-card-wide figure-preview-card">
+    <div class="poststudy-head">
+      <div>
+        <h4>Current generated plots</h4>
+        <p class="viz-note">Press the button to rebuild these from the current filters and selected
+          tasks. Saved total-row plots from <code>figures/</code> are collapsed below.</p>
+      </div>
+      <div class="figure-preview-actions">
+        <button class="admin-chip admin-chip-on" id="current-whisker-generate" type="button">Generate current plots</button>
+      </div>
+    </div>
+    <div class="viz-job-status" id="current-whisker-status" hidden></div>
+    <div id="current-plot-counts" class="figure-counts"${current ? '' : ' hidden'}>${current ? current.countsHtml : ''}</div>
+    <div class="figure-preview-grid">
+      ${generated('time', 'Task completion time', 'Box plot with Tukey whiskers. n counts all rows with both timed stages in selected tasks.', 'Press Generate current plots to build task completion time.')}
+      ${generated('accuracy', 'Task accuracy', 'Box plot over scored 0/1 task accuracy by facet.', 'Press Generate current plots to build task accuracy.')}
+      ${generated('behavior', 'Behavior measures pooled', 'Box plots pooled over the selected subset tasks.', 'Press Generate current plots to build pooled behavior measures.')}
+      ${generated('behaviorFacet', 'Behavior measures by facet', 'Box plots split by behavior metric and task facet for the selected subset tasks.', 'Press Generate current plots to build behavior measures by facet.')}
+    </div>
+    <details class="figure-saved-details">
+      <summary>Saved plots from figures folder (total-row files)</summary>
+      <div class="figure-preview-grid">
+        ${FIGURE_PREVIEWS.map(fig => `<article class="figure-preview">
+          <div class="figure-preview-head">
+            <div>
+              <b>${adminEsc(fig.title)}</b>
+              <span>${adminEsc(fig.note)}</span>
+            </div>
+            <div class="figure-preview-actions">
+              <button class="admin-chip" data-svg-src="${adminEsc(fig.file)}" data-name="${adminEsc(fig.name)}" data-format="svg" type="button">SVG</button>
+              <button class="admin-chip" data-svg-src="${adminEsc(fig.file)}" data-name="${adminEsc(fig.name)}" data-format="jpeg" type="button">JPEG</button>
+              <button class="admin-chip" data-svg-src="${adminEsc(fig.file)}" data-name="${adminEsc(fig.name)}" data-format="pdf" type="button">PDF</button>
+            </div>
+          </div>
+          <div class="figure-preview-img"><img src="${adminEsc(fig.file)}" alt="${adminEsc(fig.title)}"></div>
+        </article>`).join('')}
+      </div>
+    </details>
+  </section>`;
+}
+
+function setCurrentWhiskerStatus(text, bad = false) {
+  const status = document.getElementById('current-whisker-status');
+  if (!status) return;
+  status.hidden = !text;
+  status.textContent = text || '';
+  status.classList.toggle('is-bad', bad);
+}
+
+function generateCurrentWhiskerPlot() {
+  const filters = currentVizFilters();
+  const visibleRows = rowsFor(adminVizRows, filters);
+  const rows = selectedRowsForCurrentFigures(visibleRows);
+  const byFacet = RESEARCH_QUESTIONS.map(spec => {
+    const facetRows = selectedRowsForFacet(visibleRows, spec);
+    return `${spec.label}: ${conditionRows(facetRows, 'nongrounding').length} vs ${conditionRows(facetRows, 'grounding').length}`;
+  }).join(' · ');
+  const behaviorN = `${conditionRows(rows, 'nongrounding').length} vs ${conditionRows(rows, 'grounding').length}`;
+  const countsHtml = `<span><b>Selected rows</b> ${rows.length}</span><span><b>By facet</b> ${adminEsc(byFacet)}</span><span><b>Behavior pool</b> ${adminEsc(behaviorN)}</span>`;
+  currentWhiskerPlot = {
+    timeSvg: svgCurrentTimeBoxPlot(visibleRows),
+    accuracySvg: svgCurrentAccuracyBoxPlot(visibleRows),
+    behaviorSvg: svgCurrentBehaviorBoxPlot(rows),
+    behaviorFacetSvg: svgCurrentBehaviorByFacetBoxPlot(visibleRows),
+    countsHtml,
+    rows: rows.length,
+    generatedAt: new Date(),
+  };
+  const put = (id, svg) => {
+    const chart = document.getElementById(id);
+    if (chart) chart.innerHTML = svg;
+  };
+  put('current-time-plot', currentWhiskerPlot.timeSvg);
+  put('current-accuracy-plot', currentWhiskerPlot.accuracySvg);
+  put('current-behavior-plot', currentWhiskerPlot.behaviorSvg);
+  put('current-behaviorFacet-plot', currentWhiskerPlot.behaviorFacetSvg);
+  const counts = document.getElementById('current-plot-counts');
+  if (counts) {
+    counts.hidden = false;
+    counts.innerHTML = countsHtml;
+  }
+  document.querySelectorAll('[data-current-whisker-export]').forEach(btn => { btn.disabled = false; });
+  setCurrentWhiskerStatus(`Generated from ${rows.length} selected row${rows.length === 1 ? '' : 's'} after current filters and task selections.`);
+}
+
+function bindCurrentWhiskerControls() {
+  document.getElementById('current-whisker-generate')?.addEventListener('click', generateCurrentWhiskerPlot);
+}
+
+function setPostStudyStatus(text, bad = false) {
+  const status = document.getElementById('poststudy-status');
+  if (!status) return;
+  status.hidden = !text;
+  status.textContent = text || '';
+  status.classList.toggle('is-bad', bad);
+}
+
+function renderPostStudyLikert(data) {
+  postStudyLikert = data;
+  const chart = document.getElementById('poststudy-chart');
+  const meta = document.getElementById('poststudy-meta');
+  if (chart) chart.innerHTML = svgLikertPanels(data);
+  if (meta) meta.textContent = `${data.source} · ${data.rows} responses · ${data.columns.length} questions`;
+  document.querySelectorAll('[data-svg-export="#poststudy-chart svg"]').forEach(btn => { btn.disabled = false; });
+  setPostStudyStatus(`Generated ${data.columns.length} question chart from ${data.rows} responses.`);
+}
+
+async function loadPostStudyFile(file) {
+  if (!file) return;
+  try {
+    renderPostStudyLikert(postStudyLikertFromCsv(await file.text(), file.name));
+  } catch (e) {
+    setPostStudyStatus(e.message || String(e), true);
+  }
+}
+
+async function loadPostStudyPath() {
+  const input = document.getElementById('poststudy-path');
+  const path = String(input?.value || '').trim();
+  if (!path) return setPostStudyStatus('Enter a CSV path first.', true);
+  try {
+    const res = await fetch(path, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`Could not read ${path} (${res.status}). If you are opening the HTML file directly, serve the folder with python3 -m http.server 8000 first.`);
+    renderPostStudyLikert(postStudyLikertFromCsv(await res.text(), path));
+  } catch (e) {
+    setPostStudyStatus(e.message || String(e), true);
+  }
+}
+
+async function autoLoadPostStudyDefault() {
+  if (postStudyLikert || postStudyDefaultAttempted) return;
+  postStudyDefaultAttempted = true;
+  for (const path of POST_STUDY_DEFAULT_PATHS) {
+    try {
+      const res = await fetch(path, { cache: 'no-store' });
+      if (!res.ok) continue;
+      renderPostStudyLikert(postStudyLikertFromCsv(await res.text(), path));
+      return;
+    } catch (e) {
+      // Try the next conventional path before surfacing an error.
+    }
+  }
+  const chart = document.getElementById('poststudy-chart');
+  if (chart) chart.innerHTML = '<div class="viz-empty">No default post-study CSV found. Upload a CSV or enter a path and generate the graph.</div>';
+  setPostStudyStatus(`No default CSV found at ${POST_STUDY_DEFAULT_PATHS.join(', ')}.`, true);
+}
+
+function svgElementText(svg) {
+  const copy = svg.cloneNode(true);
+  if (!copy.getAttribute('xmlns')) copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  if (!copy.getAttribute('xmlns:xlink')) copy.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+  style.textContent = `
+    .viz-hit{fill:transparent}
+    .viz-svg-label{font:700 11px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:#6b6a66}
+    .viz-svg-value{font:800 12px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:rgba(0,0,0,.82)}
+    .likert-panel-title{font:900 16px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+    .likert-code{font:900 13px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:rgba(0,0,0,.82)}
+    .likert-agree{font:900 13px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:#2e7d32}
+    .likert-axis,.likert-axis-label{font:800 12px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:rgba(0,0,0,.78)}
+    .likert-axis-label{font-size:13px}
+    .likert-legend-title{font:900 12px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:rgba(0,0,0,.82)}
+    .likert-legend-num{font:900 12px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:rgba(0,0,0,.82)}
+    .likert-question{font:800 13px/1.25 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:#050505}
+  `;
+  copy.insertBefore(style, copy.firstChild);
+  return new XMLSerializer().serializeToString(copy);
+}
+
+function svgSize(svgText, fallbackW = 1040, fallbackH = 600) {
+  const box = svgText.match(/viewBox=["']\s*[-.\d]+\s+[-.\d]+\s+([.\d]+)\s+([.\d]+)\s*["']/i);
+  if (box) return { width: Number(box[1]) || fallbackW, height: Number(box[2]) || fallbackH };
+  const width = Number(svgText.match(/\bwidth=["']([.\d]+)/i)?.[1]) || fallbackW;
+  const height = Number(svgText.match(/\bheight=["']([.\d]+)/i)?.[1]) || fallbackH;
+  return { width, height };
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function svgToJpegBlob(svgText, quality = 0.94) {
+  const { width, height } = svgSize(svgText);
+  const scale = Math.max(1, Math.min(3, 2200 / Math.max(width, height)));
+  const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(svgBlob);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(blob => blob ? resolve({ blob, width, height }) : reject(new Error('Could not render JPEG.')), 'image/jpeg', quality);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not render the SVG image.'));
+    };
+    img.src = url;
+  });
+}
+
+async function jpegBlobToPdfBlob(jpegBlob, width, height) {
+  const bytes = new Uint8Array(await jpegBlob.arrayBuffer());
+  const pageW = width * 0.75;
+  const pageH = height * 0.75;
+  const objects = [];
+  const enc = (s) => new TextEncoder().encode(s);
+  const stream = enc(`q\n${pageW.toFixed(2)} 0 0 ${pageH.toFixed(2)} 0 0 cm\n/Im1 Do\nQ\n`);
+  objects.push(enc('<< /Type /Catalog /Pages 2 0 R >>'));
+  objects.push(enc('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'));
+  objects.push(enc(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW.toFixed(2)} ${pageH.toFixed(2)}] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>`));
+  objects.push(new Blob([
+    enc(`<< /Type /XObject /Subtype /Image /Width ${bytes.length ? Math.round(width * Math.max(1, Math.min(3, 2200 / Math.max(width, height)))) : width} /Height ${bytes.length ? Math.round(height * Math.max(1, Math.min(3, 2200 / Math.max(width, height)))) : height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${bytes.length} >>\nstream\n`),
+    bytes,
+    enc('\nendstream'),
+  ]));
+  objects.push(new Blob([enc(`<< /Length ${stream.length} >>\nstream\n`), stream, enc('endstream')]));
+
+  const chunks = [enc('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n')];
+  const offsets = [0];
+  let offset = chunks[0].length;
+  objects.forEach((obj, i) => {
+    offsets.push(offset);
+    const head = enc(`${i + 1} 0 obj\n`);
+    const foot = enc('\nendobj\n');
+    chunks.push(head, obj, foot);
+    offset += head.length + (obj.size ?? obj.length) + foot.length;
+  });
+  const xrefAt = offset;
+  const xref = ['xref', `0 ${objects.length + 1}`, '0000000000 65535 f ']
+    .concat(offsets.slice(1).map(o => `${String(o).padStart(10, '0')} 00000 n `))
+    .join('\n');
+  chunks.push(enc(`${xref}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`));
+  return new Blob(chunks, { type: 'application/pdf' });
+}
+
+async function exportSvgText(svgText, name, format) {
+  if (format === 'svg') {
+    downloadBlob(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }), `${name}.svg`);
+    return;
+  }
+  const rendered = await svgToJpegBlob(svgText);
+  if (format === 'jpeg') {
+    downloadBlob(rendered.blob, `${name}.jpg`);
+    return;
+  }
+  if (format === 'pdf') {
+    downloadBlob(await jpegBlobToPdfBlob(rendered.blob, rendered.width, rendered.height), `${name}.pdf`);
+  }
+}
+
+async function exportSvgButton(btn) {
+  const format = btn.dataset.format || 'svg';
+  const name = btn.dataset.name || 'figure';
+  let svgText = '';
+  if (btn.dataset.svgSrc) {
+    const res = await fetch(btn.dataset.svgSrc, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`Could not read ${btn.dataset.svgSrc} (${res.status}).`);
+    svgText = await res.text();
+  } else {
+    const svg = document.querySelector(btn.dataset.svgExport || '');
+    if (!svg) throw new Error('No generated SVG is available yet.');
+    svgText = svgElementText(svg);
+  }
+  await exportSvgText(svgText, name, format);
+}
+
+function bindSvgExportButtons(root = document) {
+  root.querySelectorAll('[data-svg-export], [data-svg-src]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await exportSvgButton(btn);
+      } catch (e) {
+        setPostStudyStatus(e.message || String(e), true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+function bindPostStudyLikertControls() {
+  document.getElementById('poststudy-file')?.addEventListener('change', (e) => loadPostStudyFile(e.target.files?.[0]));
+  document.getElementById('poststudy-load-path')?.addEventListener('click', loadPostStudyPath);
+  autoLoadPostStudyDefault();
+}
+
 /* The hover payload travels as JSON on the mark's hit target and is turned into DOM with
    textContent at read time — task ids and titles are participant-facing data, never markup. */
 function tipData(payload) {
@@ -1951,6 +2766,8 @@ function visualizationHtml(allRows, filters = { taskType: 'all', condition: 'all
     ${controlsHtml(allRows, filters)}
     ${verdictHtml(rows)}
     ${researchAnswersHtml(rows)}
+    ${postStudyLikertHtml()}
+    ${figurePreviewHtml(rows)}
     ${breakdownSummaryHtml(allRows)}
     ${howToReadHtml()}
     <div class="viz-chart-grid">
@@ -2175,6 +2992,9 @@ function freshnessHtml(allRows) {
 
 function bindVisualizationControls() {
   bindVizTooltip();
+  bindPostStudyLikertControls();
+  bindCurrentWhiskerControls();
+  bindSvgExportButtons();
   document.getElementById('viz-analyze')?.addEventListener('click', runVizAnalysis);
   // ALL THREE SEND THE SAME SELECTION. Whatever the four cards are counting when the button is
   // pressed is what gets built and what gets published — figures, aggregates and rows alike.
@@ -2316,6 +3136,7 @@ function bindAdminJob(buttonId, job, runningText, doneText, payloadOf) {
 }
 
 function renderAdminVisualizations(rows, filters) {
+  currentWhiskerPlot = null;
   const content = document.getElementById('admin-content');
   content.innerHTML = visualizationHtml(rows, filters) + '<button class="admin-exit" id="admin-exit">Leave admin mode</button>';
   bindVisualizationControls();

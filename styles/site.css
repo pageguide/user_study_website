@@ -1093,6 +1093,203 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* ── Post-study Likert CSV figure ─────────────────────────────────────────── */
+.poststudy-card { overflow: hidden; }
+
+.poststudy-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 10px;
+}
+
+.poststudy-head h4 { margin-bottom: 4px; }
+
+.poststudy-meta {
+  flex: none;
+  color: var(--muted);
+  font: 800 11px/1.4 inherit;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.poststudy-controls {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) minmax(220px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 860px) {
+  .poststudy-controls { grid-template-columns: 1fr; }
+}
+
+.poststudy-controls input[type="file"],
+.poststudy-controls input[type="text"] {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 9px;
+  font: 600 12px/1.3 inherit;
+}
+
+.poststudy-controls .admin-chip {
+  min-height: 34px;
+  white-space: nowrap;
+}
+
+.poststudy-controls .admin-chip:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.poststudy-chart {
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.likert-svg {
+  min-width: 860px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.likert-panel-title {
+  font: 900 16px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.likert-code {
+  font: 900 13px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  fill: rgba(0, 0, 0, .82);
+}
+
+.likert-agree {
+  font: 900 13px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  fill: #2e7d32;
+}
+
+.likert-axis,
+.likert-axis-label {
+  font: 800 12px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  fill: rgba(0, 0, 0, .78);
+}
+
+.likert-axis-label { font-size: 13px; }
+
+.likert-legend-title {
+  font: 900 12px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  fill: rgba(0, 0, 0, .82);
+}
+
+.likert-legend-num {
+  font: 900 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  fill: rgba(0, 0, 0, .82);
+}
+
+.likert-question {
+  font: 800 13px/1.25 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  fill: #050505;
+}
+
+/* Existing exported paper figures, shown in the dashboard for quick inspection and export. */
+.figure-preview-card { margin-top: 2px; }
+
+.figure-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.figure-preview {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, .018);
+  padding: 10px;
+  min-width: 0;
+}
+
+.figure-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.figure-preview-head b {
+  display: block;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.figure-preview-head span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.figure-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.figure-preview-img {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 8px;
+}
+
+.figure-preview-img img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.figure-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+
+.figure-counts span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  padding: 4px 9px;
+  color: var(--muted);
+  font: 700 11.5px/1.35 inherit;
+}
+
+.figure-counts b { color: var(--ink); }
+
+.figure-saved-details {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.figure-saved-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font: 800 12px/1.4 inherit;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.figure-saved-details[open] > summary { margin-bottom: 10px; }
 .viz-svg {
   display: block;
   width: 100%;
