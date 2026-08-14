@@ -1370,10 +1370,30 @@ body {
   z-index: 2147483000;
   pointer-events: none;
   opacity: 0;
-  transition: opacity .18s ease;
+  /* VISIBILITY, NOT JUST OPACITY, and this one is a bug fix rather than a flourish. stopTour() ends
+     the walkthrough by removing `is-on`, which faded the layer to nothing but left it lying over the
+     whole viewport with the tip card inside it still `pointer-events: auto`. An invisible 330px card
+     then sat wherever it had last been dragged or anchored — very often over the follow-up panel,
+     because that is what the closing steps point at — and swallowed every click that landed on it.
+     The symptom was a participant unable to select "how confident are you", with the cursor turning
+     into a grab hand over the radio: that is the tip card, still there, still draggable, invisible.
+     The layer keeps its layout when hidden, so measuring the tip while the walkthrough is off still
+     returns real dimensions — which `display: none` would not. */
+  visibility: hidden;
+  /* The visibility flip is delayed by exactly the fade, rather than interpolated: transitioning a
+     discrete property is left to the browser's discretion, and this needs to be certain. */
+  transition: opacity .18s ease, visibility 0s linear .18s;
 }
 
-.tut-layer.is-on { opacity: 1; }
+.tut-layer.is-on {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity .18s ease, visibility 0s linear 0s;
+}
+
+/* Said again on the card itself, because the card is the only thing in here that takes clicks and
+   this is the failure worth being unable to reintroduce. */
+.tut-layer:not(.is-on) .tut-tip { pointer-events: none; }
 
 /* The dimmed backdrop, as an SVG mask so a step can cut more than one hole in it. A box-shadow can
    only cut one: a second element casting its own shadow re-dims the first hole, which is how the
