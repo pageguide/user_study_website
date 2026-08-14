@@ -376,6 +376,27 @@ const FACET_TASK_EXCLUSIONS = {
     why: 'three duplicate re-recordings, plus both recordings of the New York goal',
   },
 
+  // TWO TASKS WHERE THE GROUNDED ARM'S CLOCK EXPLODES AND NOTHING ELSE MOVES. Across this facet's
+  // five tasks, locate time with grounding runs 34s, 26s and 45s — and then 274s on MUFC-V1 and
+  // 309s on PEDANT-V1, against 22s each without it. A fourteen-fold jump in time while accuracy and
+  // localization stay flat (100%→100% and 50%→50% on MUFC-V1; 75%→90% and 88%→85% on PEDANT-V1) is
+  // not grounding being slower to read: it is something wrong with those two runs — a citation that
+  // never resolved on the snapshot, a highlight participants sat waiting for — and it is exactly
+  // the "broken in a way the numbers cannot see" case this map exists for.
+  //
+  // MUFC-V1 has a second reason of its own: it is the same captured Wikipedia page as MUFC-V1-TEXT,
+  // which Find × Text already leaves out for it. Dropping both copies takes that shared snapshot,
+  // and the re-read it allows, out of the study altogether.
+  //
+  // READ WHAT THIS DOES TO THE HEADLINE BEFORE QUOTING IT. Those two tasks were the whole of this
+  // card's "grounding is slower" finding; without them the facet reverses direction. That is a
+  // strong claim resting on a judgement about two runs, so it belongs in the paper's method section
+  // rather than in a footnote — and if the runs turn out to be sound, this entry has to go.
+  find_visual: {
+    ids: ['MUFC-V1', 'PEDANT-V1'],
+    why: 'two runs whose grounded locate time is ~14× the others while accuracy and localization stay flat',
+  },
+
   // gv2-msf1pyqv-omt0hz — the Tampa run — is the only trajectory in this facet whose ground truth
   // blames ONE STEP UNDER TWO ERROR TYPES: loop at 2,3,4,8,9 and mismatch at 4,10, so step 4 is
   // named twice. Step recall counts `type:step` pairs, which makes (loop,4) and (mismatch,4) two

@@ -1,13 +1,13 @@
 facet,metric,condition,n,mean,sd,se
-All tasks,Scroll count,Non-grounded,94,12.0106,11.3512,1.1708
-All tasks,Scroll count,Grounded,105,15.5048,15.4759,1.5103
-All tasks,Ctrl+F,Non-grounded,94,0.4468,0.8246,0.0850
-All tasks,Ctrl+F,Grounded,105,0.3524,0.8202,0.0800
-All tasks,Text selections,Non-grounded,94,1.7872,3.7927,0.3912
-All tasks,Text selections,Grounded,105,0.8952,1.6809,0.1640
-All tasks,Mouse clicks,Non-grounded,94,19.4574,12.2480,1.2633
-All tasks,Mouse clicks,Grounded,105,19.1810,12.6360,1.2331
-All tasks,Mouse distance (px),Non-grounded,94,19344.6383,18055.0887,1862.2402
-All tasks,Mouse distance (px),Grounded,105,21083.1429,16978.1514,1656.8979
-All tasks,Page clicks,Non-grounded,94,6.6915,9.3280,0.9621
-All tasks,Page clicks,Grounded,105,6.4190,8.9322,0.8717
+All tasks,Scroll count,Non-grounded,84,11.7738,10.4055,1.1353
+All tasks,Scroll count,Grounded,93,14.0645,10.3879,1.0772
+All tasks,Ctrl+F,Non-grounded,84,0.4048,0.7933,0.0866
+All tasks,Ctrl+F,Grounded,93,0.3763,0.8459,0.0877
+All tasks,Text selections,Non-grounded,84,1.7143,3.6949,0.4031
+All tasks,Text selections,Grounded,93,1.0108,1.7414,0.1806
+All tasks,Mouse clicks,Non-grounded,84,19.7500,12.2247,1.3338
+All tasks,Mouse clicks,Grounded,93,20.0645,13.4324,1.3929
+All tasks,Mouse distance (px),Non-grounded,84,19254.0476,18867.8198,2058.6479
+All tasks,Mouse distance (px),Grounded,93,20482.4731,14582.0323,1512.0863
+All tasks,Page clicks,Non-grounded,84,6.3690,8.9574,0.9773
+All tasks,Page clicks,Grounded,93,6.6344,9.4326,0.9781

@@ -1,49 +1,49 @@
 facet,metric,condition,n,mean,sd,se
 Find × Text,Scroll count,Non-grounded,22,8.0909,7.9875,1.7030
-Find × Text,Scroll count,Grounded,20,10.3500,6.7922,1.5188
-Find × Visual,Scroll count,Non-grounded,32,17.5000,15.0354,2.6579
-Find × Visual,Scroll count,Grounded,33,23.6061,23.2311,4.0440
-Guide × Text,Scroll count,Non-grounded,16,10.2500,7.2618,1.8154
-Guide × Text,Scroll count,Grounded,25,12.8000,8.4261,1.6852
+Find × Text,Scroll count,Grounded,21,10.4762,6.6454,1.4502
+Find × Visual,Scroll count,Non-grounded,21,19.3333,13.8756,3.0279
+Find × Visual,Scroll count,Grounded,18,21.8889,14.3235,3.3761
+Guide × Text,Scroll count,Non-grounded,17,10.4706,7.0898,1.7195
+Guide × Text,Scroll count,Grounded,26,13.6923,9.4266,1.8487
 Guide × Visual,Scroll count,Non-grounded,24,9.4583,7.6214,1.5557
-Guide × Visual,Scroll count,Grounded,27,11.9259,8.3938,1.6154
+Guide × Visual,Scroll count,Grounded,28,12.0714,8.2728,1.5634
 Find × Text,Ctrl+F,Non-grounded,22,1.1364,1.1668,0.2488
-Find × Text,Ctrl+F,Grounded,20,1.4000,1.3139,0.2938
-Find × Visual,Ctrl+F,Non-grounded,32,0.5313,0.7177,0.1269
-Find × Visual,Ctrl+F,Grounded,33,0.2424,0.5019,0.0874
-Guide × Text,Ctrl+F,Non-grounded,16,0.0000,0.0000,0.0000
-Guide × Text,Ctrl+F,Grounded,25,0.0400,0.2000,0.0400
+Find × Text,Ctrl+F,Grounded,21,1.3810,1.2836,0.2801
+Find × Visual,Ctrl+F,Non-grounded,21,0.4286,0.5071,0.1107
+Find × Visual,Ctrl+F,Grounded,18,0.2778,0.4609,0.1086
+Guide × Text,Ctrl+F,Non-grounded,17,0.0000,0.0000,0.0000
+Guide × Text,Ctrl+F,Grounded,26,0.0385,0.1961,0.0385
 Guide × Visual,Ctrl+F,Non-grounded,24,0.0000,0.0000,0.0000
-Guide × Visual,Ctrl+F,Grounded,27,0.0000,0.0000,0.0000
+Guide × Visual,Ctrl+F,Grounded,28,0.0000,0.0000,0.0000
 Find × Text,Text selections,Non-grounded,22,1.8636,2.5690,0.5477
-Find × Text,Text selections,Grounded,20,1.2000,1.3992,0.3129
-Find × Visual,Text selections,Non-grounded,32,1.8125,3.2072,0.5670
-Find × Visual,Text selections,Grounded,33,0.5455,1.5226,0.2650
-Guide × Text,Text selections,Non-grounded,16,2.6250,6.9366,1.7342
-Guide × Text,Text selections,Grounded,25,1.0800,1.8690,0.3738
+Find × Text,Text selections,Grounded,21,1.2381,1.3749,0.3000
+Find × Visual,Text selections,Non-grounded,21,1.5714,2.3785,0.5190
+Find × Visual,Text selections,Grounded,18,0.8333,1.9174,0.4519
+Guide × Text,Text selections,Non-grounded,17,2.5294,6.7279,1.6318
+Guide × Text,Text selections,Grounded,26,1.0769,1.8314,0.3592
 Guide × Visual,Text selections,Non-grounded,24,1.1250,2.4373,0.4975
-Guide × Visual,Text selections,Grounded,27,0.9259,1.8796,0.3617
+Guide × Visual,Text selections,Grounded,28,0.8929,1.8527,0.3501
 Find × Text,Mouse clicks,Non-grounded,22,16.0909,9.6900,2.0659
-Find × Text,Mouse clicks,Grounded,20,13.2000,4.3722,0.9776
-Find × Visual,Mouse clicks,Non-grounded,32,15.5000,8.3008,1.4674
-Find × Visual,Mouse clicks,Grounded,33,14.1212,7.4948,1.3047
-Guide × Text,Mouse clicks,Non-grounded,16,26.5625,15.3448,3.8362
-Guide × Text,Mouse clicks,Grounded,25,23.5200,14.9753,2.9951
+Find × Text,Mouse clicks,Grounded,21,13.1905,4.2617,0.9300
+Find × Visual,Mouse clicks,Non-grounded,21,14.6667,5.5347,1.2078
+Find × Visual,Mouse clicks,Grounded,18,13.5556,9.1537,2.1576
+Guide × Text,Mouse clicks,Non-grounded,17,26.0588,15.0020,3.6385
+Guide × Text,Mouse clicks,Grounded,26,24.3462,15.2655,2.9938
 Guide × Visual,Mouse clicks,Non-grounded,24,23.0833,13.8906,2.8354
-Guide × Visual,Mouse clicks,Grounded,27,25.7778,15.0085,2.8884
+Guide × Visual,Mouse clicks,Grounded,28,25.4286,14.8435,2.8051
 Find × Text,Mouse distance (px),Non-grounded,22,29983.4091,26879.6781,5730.7666
-Find × Text,Mouse distance (px),Grounded,20,21654.5000,16369.2342,3660.2721
-Find × Visual,Mouse distance (px),Non-grounded,32,20699.0938,15477.0318,2735.9785
-Find × Visual,Mouse distance (px),Grounded,33,20240.4545,19759.6468,3439.7130
-Guide × Text,Mouse distance (px),Non-grounded,16,13302.3125,10304.7959,2576.1990
-Guide × Text,Mouse distance (px),Grounded,25,24099.5600,17858.7613,3571.7523
+Find × Text,Mouse distance (px),Grounded,21,21675.4762,15955.0455,3481.6764
+Find × Visual,Mouse distance (px),Non-grounded,21,21620.0952,17974.9125,3922.4475
+Find × Visual,Mouse distance (px),Grounded,18,16819.7778,9976.3175,2351.4406
+Guide × Text,Mouse distance (px),Non-grounded,17,12948.8235,10083.4638,2445.5992
+Guide × Text,Mouse distance (px),Grounded,26,24078.8462,17498.2598,3431.6911
 Guide × Visual,Mouse distance (px),Non-grounded,24,11814.7083,8422.6436,1719.2649
-Guide × Visual,Mouse distance (px),Grounded,27,18896.8889,12938.5811,2490.0311
+Guide × Visual,Mouse distance (px),Grounded,28,18602.8214,12791.7139,2417.4067
 Find × Text,Page clicks,Non-grounded,22,5.7273,4.9587,1.0572
-Find × Text,Page clicks,Grounded,20,5.0500,3.5165,0.7863
-Find × Visual,Page clicks,Non-grounded,32,6.1875,7.6514,1.3526
-Find × Visual,Page clicks,Grounded,33,4.7273,6.3653,1.1081
-Guide × Text,Page clicks,Non-grounded,16,10.0000,16.4560,4.1140
-Guide × Text,Page clicks,Grounded,25,9.2000,12.8679,2.5736
+Find × Text,Page clicks,Grounded,21,4.9524,3.4565,0.7543
+Find × Visual,Page clicks,Non-grounded,21,4.7143,3.9641,0.8650
+Find × Visual,Page clicks,Grounded,18,5.0556,8.3840,1.9761
+Guide × Text,Page clicks,Non-grounded,17,9.7059,15.9795,3.8756
+Guide × Text,Page clicks,Grounded,26,9.0385,12.6348,2.4779
 Guide × Visual,Page clicks,Non-grounded,24,6.0417,8.0351,1.6402
-Guide × Visual,Page clicks,Grounded,27,6.9259,9.7268,1.8719
+Guide × Visual,Page clicks,Grounded,28,6.6786,9.6343,1.8207
