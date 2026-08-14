@@ -403,10 +403,28 @@ async function updateTask(env, payload) {
  * shared token in front of it.
  */
 const ADMIN_TASKS = {
-  figures: { script: 'scripts/figures.mjs', args: [], label: 'publish figures' },
-  huggingface: { script: 'scripts/huggingface.mjs', args: [], label: 'upload to Hugging Face' },
-  'publish-rows': { script: 'scripts/publish_rows.mjs', args: [], label: 'publish rows to Hugging Face',
-    takesSelection: true },
+  // EVERY JOB TAKES THE SELECTION, none of them assume the committed defaults. A button that
+  // published what the code says while the researcher was looking at something they had just tuned
+  // is the one failure this whole path exists to avoid, and it would be invisible: the export would
+  // be internally consistent and quietly about a different study.
+  figures: {
+    scripts: ['scripts/figures.mjs'],
+    label: 'publish figures',
+    takesSelection: true,
+  },
+  huggingface: {
+    // Rebuilt before it is sent. Uploading whatever happened to be on disk would publish the last
+    // person's selection the moment anyone tuned a card without pressing the other button first.
+    scripts: ['scripts/figures.mjs', 'scripts/huggingface.mjs'],
+    label: 'rebuild and upload the figures dataset',
+    takesSelection: true,
+    selectionFor: 'scripts/figures.mjs',
+  },
+  'publish-rows': {
+    scripts: ['scripts/publish_rows.mjs'],
+    label: 'publish rows to Hugging Face',
+    takesSelection: true,
+  },
 };
 
 /**
@@ -450,14 +468,14 @@ async function runAdminTask(name, payload = {}) {
   const task = ADMIN_TASKS[name];
   if (!task) return { status: 400, body: { error: `Unknown task "${name}".` } };
 
-  const args = [...task.args];
   let selectionFile = null;
+  const extra = [];
   if (task.takesSelection) {
     const repo = payload.repo === undefined ? null : cleanRepo(payload.repo);
     if (payload.repo !== undefined && !repo) {
       return { status: 400, body: { error: 'repo must look like "owner/name".' } };
     }
-    if (repo) args.push(`--repo=${repo}`);
+    if (repo) extra.push({ flag: `--repo=${repo}`, only: null });
 
     const cleaned = cleanSelection(payload.selection);
     if (cleaned?.error) return { status: 400, body: { error: cleaned.error } };
@@ -466,25 +484,37 @@ async function runAdminTask(name, payload = {}) {
       // argument limits, and a file cannot be misread as another flag.
       selectionFile = join(tmpdir(), `pageguide-selection-${randomBytes(6).toString('hex')}.json`);
       await writeFile(selectionFile, JSON.stringify(cleaned.selection));
-      args.push(`--selection=${selectionFile}`);
+      extra.push({ flag: `--selection=${selectionFile}`, only: task.selectionFor || null });
     }
   }
 
-  return runScript(task, args).finally(() => {
+  // The scripts run in order and the chain stops at the first failure: a dataset that failed to
+  // build must not then be uploaded, which would push the previous run's files under a summary
+  // claiming they are this one's.
+  return (async () => {
+    let output = '';
+    for (const script of task.scripts) {
+      const args = extra.filter(e => !e.only || e.only === script).map(e => e.flag);
+      const out = await runScript(script, args);
+      output += out.output;
+      if (out.code !== 0) {
+        return { status: 500, body: { error: output.trim() || `${task.label} failed in ${script}.` } };
+      }
+    }
+    return { status: 200, body: { ok: true, task: task.label, output: output.trim() } };
+  })().finally(() => {
     if (selectionFile) rm(selectionFile, { force: true }).catch(() => {});
   });
 }
 
-function runScript(task, args) {
+function runScript(script, args) {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, [join(ROOT, task.script), ...args], { cwd: ROOT });
+    const child = spawn(process.execPath, [join(ROOT, script), ...args], { cwd: ROOT });
     let out = '';
     child.stdout.on('data', d => { out += d; process.stdout.write(d); });
     child.stderr.on('data', d => { out += d; process.stderr.write(d); });
-    child.on('error', e => resolve({ status: 500, body: { error: e.message } }));
-    child.on('close', code => resolve(code === 0
-      ? { status: 200, body: { ok: true, task: task.label, output: out.trim() } }
-      : { status: 500, body: { error: out.trim() || `${task.label} exited with code ${code}` } }));
+    child.on('error', e => resolve({ code: 1, output: `${out}\n${e.message}` }));
+    child.on('close', code => resolve({ code, output: out }));
   });
 }
 

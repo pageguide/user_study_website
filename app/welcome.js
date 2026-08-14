@@ -2176,18 +2176,20 @@ function freshnessHtml(allRows) {
 function bindVisualizationControls() {
   bindVizTooltip();
   document.getElementById('viz-analyze')?.addEventListener('click', runVizAnalysis);
+  // ALL THREE SEND THE SAME SELECTION. Whatever the four cards are counting when the button is
+  // pressed is what gets built and what gets published — figures, aggregates and rows alike.
+  const selection = () => ({ selection: currentFacetSelection(adminVizRows) });
   bindAdminJob('viz-figures', 'figures', 'Publishing figures…',
-    'Figures and dataset written. They are built from the tasks each card counts BY DEFAULT, not '
-    + 'from any boxes ticked here — re-run after changing a default, not after a look.');
+    'Figures and dataset written from the tasks these cards are counting right now — ticked boxes '
+    + 'included, not just the committed defaults.', selection);
   // The one job that sends state: what it publishes is what the cards are counting AS THEY STAND,
   // ticked boxes included, so the export follows the screen rather than the committed defaults.
   bindAdminJob('viz-publish-rows', 'publish-rows', 'Publishing the counted rows…',
     'Published. These are the rows the four cards are counting right now — including any task you '
-    + 'have ticked or unticked here, which is not what the committed defaults say.',
-    () => ({ selection: currentFacetSelection(adminVizRows) }));
-  bindAdminJob('viz-huggingface', 'huggingface', 'Uploading to Hugging Face…',
-    'Pushed. Participants’ free-text notes and session ids are not in it; the export carries a '
-    + 'per-run participant number instead.');
+    + 'have ticked or unticked here, which is not what the committed defaults say.', selection);
+  bindAdminJob('viz-huggingface', 'huggingface', 'Rebuilding and uploading…',
+    'Rebuilt from this selection and pushed. Participants’ free-text notes and session ids are not '
+    + 'in it; the export carries a per-run participant number instead.', selection);
   // Filters re-slice what is already in hand; this is the one control that goes back to the table.
   document.getElementById('viz-refresh')?.addEventListener('click', () => showAdminVisualizations());
 

@@ -38,6 +38,17 @@ const args = process.argv.slice(2);
 const useAllTasks = args.includes('--all-tasks');
 const outArg = args.find(a => a.startsWith('--out='));
 const OUT_DIR = join(ROOT, outArg ? outArg.split('=')[1] : 'figures');
+/**
+ * A task selection handed in from the dashboard, or '' for the committed defaults.
+ *
+ * The dashboard's tick boxes live in memory and are never written to FACET_TASK_EXCLUSIONS, so
+ * without this the figures would be built from a different study than the screen was showing when
+ * somebody pressed publish — the exact confusion a "publish what I am looking at" button exists to
+ * remove.
+ */
+const selectionArg = args.find(a => a.startsWith('--selection='));
+const SELECTION_FILE = selectionArg ? selectionArg.split('=').slice(1).join('=') : '';
+let SELECTION = null;
 
 // ── The dashboard's own definitions ──────────────────────────────────────────────────────────────
 
@@ -155,8 +166,17 @@ const ARMS = [
 function facetRows(rows, facet, defs) {
   const inFacet = rows.filter(r => r.task_type === facet.taskType && defs.taskStyle(r) === facet.style);
   if (useAllTasks) return inFacet;
+  const asked = SELECTION?.[facet.key];
+  if (Array.isArray(asked)) return inFacet.filter(r => asked.includes(String(r.task_id || '')));
   const excluded = defs.FACET_TASK_EXCLUSIONS[facet.key]?.ids || [];
   return inFacet.filter(r => !excluded.includes(String(r.task_id || '')));
+}
+
+/** Where a facet's task list came from, for the provenance file. */
+function selectionSource(facet, defs) {
+  if (useAllTasks) return 'every task (--all-tasks)';
+  if (Array.isArray(SELECTION?.[facet.key])) return 'the dashboard, as it stood at publish time';
+  return defs.FACET_TASK_EXCLUSIONS[facet.key] ? 'the committed defaults' : 'every task';
 }
 
 function stats(values) {
@@ -727,6 +747,7 @@ function csv(lines) {
 
 async function main() {
   const defs = await dashboardDefinitions();
+  if (SELECTION_FILE) SELECTION = JSON.parse(await readFile(SELECTION_FILE, 'utf8'));
   const rows = await supabase();
 
   // The five the dashboard's cards carry, plus page clicks — the closest thing this study records
@@ -795,9 +816,13 @@ async function main() {
     `- \`study_task_results_v2\`: ${rows.length} rows read, ${pooled.length} counted.`,
     `- Bars are means; whiskers are ±1 standard error (sd/√n), not a confidence interval.`,
     `- Task selection: ${useAllTasks ? '**--all-tasks** — every task, defaults ignored.'
-      : 'the dashboard\'s defaults, as below.'}`,
+      : SELECTION ? '**sent by the dashboard** — the tasks its cards were counting at publish time.'
+        : 'the committed defaults, as below.'}`,
     '',
-    ...(useAllTasks ? [] : excluded),
+    ...FACETS.map(f => `- ${f.label}: ${selectionSource(f, defs)} — `
+      + `${Array.from(new Set(counted.get(f.key).map(r => String(r.task_id || '')))).sort().join(', ') || 'no tasks'}`),
+    '',
+    ...(useAllTasks || SELECTION ? [] : excluded),
     '',
     'Per-cell n, mean, sd and se are in the CSV files beside the figures.',
     '',
