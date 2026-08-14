@@ -11,7 +11,7 @@ the aggregates plotted in the behavioural figures (mean, sd, se and n per cell).
 carries accuracy, localization F1 and its two halves, and the timing stages — mean, sd, se,
 median and quartiles per cell.
 
-Exported 2026-08-14T05:01:39.534Z · 217 rows · 43 participants.
+Exported 2026-08-14T05:06:12.478Z · 217 rows · 43 participants.
 
 ## Conditions
 
