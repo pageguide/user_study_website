@@ -345,13 +345,16 @@ const FACET_TASK_EXCLUSIONS = {
   // one number is not four mistakes; it is a question the page supports two readings of, and until
   // the key is settled the task measures the disagreement rather than the condition.
   //
-  // MUFC-V1-TEXT is the same Wikipedia article as MUFC-V1 in Find × Visual — one snapshot, asked
-  // twice (see getTaskPage in app/supabase.js, which serves them from a single captured page). A
-  // participant who drew both read that article twice, and the second reading is not a cold one, so
-  // counting it here mixes a re-read into a facet whose whole measure is time to locate.
+  // MUFC-V1-TEXT WAS EXCLUDED HERE AND IS NOT ANY MORE, which is worth recording rather than
+  // silently reverting. It is the same captured Wikipedia article as MUFC-V1 (getTaskPage in
+  // app/supabase.js serves both tasks from one page), and it was dropped so the facet would not
+  // count a participant's SECOND reading of an article they had already met in Find × Visual. That
+  // reason is now spent: MUFC-V1 is itself excluded from Find × Visual below, so in the counted data
+  // the article appears exactly once and nobody reads it twice. Put this back if MUFC-V1 ever
+  // returns to that card — the two entries only make sense read together.
   find_text: {
-    ids: ['MARS-v1', 'MUFC-V1-TEXT'],
-    why: 'a disputed answer key, and the page already read in Find × Visual',
+    ids: ['MARS-v1'],
+    why: 'a disputed answer key',
   },
 
   // WHAT IS LEFT IS FOUR GOALS, RECORDED ONCE EACH: Austin hotels (gv2-ed05972e-i5fi3b), the
@@ -384,9 +387,10 @@ const FACET_TASK_EXCLUSIONS = {
   // never resolved on the snapshot, a highlight participants sat waiting for — and it is exactly
   // the "broken in a way the numbers cannot see" case this map exists for.
   //
-  // MUFC-V1 has a second reason of its own: it is the same captured Wikipedia page as MUFC-V1-TEXT,
-  // which Find × Text already leaves out for it. Dropping both copies takes that shared snapshot,
-  // and the re-read it allows, out of the study altogether.
+  // MUFC-V1 has a second reason of its own: it is the same captured Wikipedia page as MUFC-V1-TEXT
+  // in Find × Text. Only one of the two can be counted without a participant's second reading of
+  // that article entering the data as if it were a first — and it is this one that leaves, so the
+  // article is still measured once, on the text card, where its clock did not blow up.
   //
   // READ WHAT THIS DOES TO THE HEADLINE BEFORE QUOTING IT. Those two tasks were the whole of this
   // card's "grounding is slower" finding; without them the facet reverses direction. That is a

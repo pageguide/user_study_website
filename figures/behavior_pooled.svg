@@ -8,31 +8,27 @@
         x2="206.0" y2="184.0"
         stroke="#d8d8e0" stroke-width="1" ></line>
       <text x="50.0" y="187.5" text-anchor="end"
-        font-size="9.5" fill="#5c5c66">0</text><line x1="56.0" y1="146.5"
-        x2="206.0" y2="146.5"
+        font-size="9.5" fill="#5c5c66">0</text><line x1="56.0" y1="134.0"
+        x2="206.0" y2="134.0"
         stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
-      <text x="50.0" y="150.0" text-anchor="end"
-        font-size="9.5" fill="#5c5c66">5</text><line x1="56.0" y1="109.0"
-        x2="206.0" y2="109.0"
+      <text x="50.0" y="137.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">5</text><line x1="56.0" y1="84.0"
+        x2="206.0" y2="84.0"
         stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
-      <text x="50.0" y="112.5" text-anchor="end"
-        font-size="9.5" fill="#5c5c66">10</text><line x1="56.0" y1="71.5"
-        x2="206.0" y2="71.5"
-        stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
-      <text x="50.0" y="75.0" text-anchor="end"
-        font-size="9.5" fill="#5c5c66">15</text><line x1="56.0" y1="34.0"
+      <text x="50.0" y="87.5" text-anchor="end"
+        font-size="9.5" fill="#5c5c66">10</text><line x1="56.0" y1="34.0"
         x2="206.0" y2="34.0"
         stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
       <text x="50.0" y="37.5" text-anchor="end"
-        font-size="9.5" fill="#5c5c66">20</text>
-    <path d="M104.0,184.0 L104.0,99.7 Q104.0,95.7 108.0,95.7 L126.0,95.7 Q130.0,95.7 130.0,99.7 L130.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="117.0" y1="104.2" x2="117.0" y2="87.2"></line>
-      <line x1="112.0" y1="87.2" x2="122.0" y2="87.2"></line>
-      <line x1="112.0" y1="104.2" x2="122.0" y2="104.2"></line>
-    </g><path d="M132.0,184.0 L132.0,82.5 Q132.0,78.5 136.0,78.5 L154.0,78.5 Q158.0,78.5 158.0,82.5 L158.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="145.0" y1="86.6" x2="145.0" y2="70.4"></line>
-      <line x1="140.0" y1="70.4" x2="150.0" y2="70.4"></line>
-      <line x1="140.0" y1="86.6" x2="150.0" y2="86.6"></line>
+        font-size="9.5" fill="#5c5c66">15</text>
+    <path d="M104.0,184.0 L104.0,65.7 Q104.0,61.7 108.0,61.7 L126.0,61.7 Q130.0,61.7 130.0,65.7 L130.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="117.0" y1="72.3" x2="117.0" y2="51.2"></line>
+      <line x1="112.0" y1="51.2" x2="122.0" y2="51.2"></line>
+      <line x1="112.0" y1="72.3" x2="122.0" y2="72.3"></line>
+    </g><path d="M132.0,184.0 L132.0,53.3 Q132.0,49.3 136.0,49.3 L154.0,49.3 Q158.0,49.3 158.0,53.3 L158.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="145.0" y1="58.5" x2="145.0" y2="40.1"></line>
+      <line x1="140.0" y1="40.1" x2="150.0" y2="40.1"></line>
+      <line x1="140.0" y1="58.5" x2="150.0" y2="58.5"></line>
     </g>
     <text transform="translate(24.0,109.0) rotate(-90)"
       text-anchor="middle" font-size="10.5" fill="#5c5c66">Mean per task</text>
@@ -56,14 +52,14 @@
         stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
       <text x="250.0" y="37.5" text-anchor="end"
         font-size="9.5" fill="#5c5c66">0.60</text>
-    <path d="M304.0,184.0 L304.0,86.8 Q304.0,82.8 308.0,82.8 L326.0,82.8 Q330.0,82.8 330.0,86.8 L330.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="317.0" y1="104.4" x2="317.0" y2="61.2"></line>
-      <line x1="312.0" y1="61.2" x2="322.0" y2="61.2"></line>
-      <line x1="312.0" y1="104.4" x2="322.0" y2="104.4"></line>
-    </g><path d="M332.0,184.0 L332.0,93.9 Q332.0,89.9 336.0,89.9 L354.0,89.9 Q358.0,89.9 358.0,93.9 L358.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="345.0" y1="111.8" x2="345.0" y2="68.0"></line>
-      <line x1="340.0" y1="68.0" x2="350.0" y2="68.0"></line>
-      <line x1="340.0" y1="111.8" x2="350.0" y2="111.8"></line>
+    <path d="M304.0,184.0 L304.0,67.9 Q304.0,63.9 308.0,63.9 L326.0,63.9 Q330.0,63.9 330.0,67.9 L330.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="317.0" y1="84.4" x2="317.0" y2="43.4"></line>
+      <line x1="312.0" y1="43.4" x2="322.0" y2="43.4"></line>
+      <line x1="312.0" y1="84.4" x2="322.0" y2="84.4"></line>
+    </g><path d="M332.0,184.0 L332.0,88.0 Q332.0,84.0 336.0,84.0 L354.0,84.0 Q358.0,84.0 358.0,88.0 L358.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="345.0" y1="104.7" x2="345.0" y2="63.3"></line>
+      <line x1="340.0" y1="63.3" x2="350.0" y2="63.3"></line>
+      <line x1="340.0" y1="104.7" x2="350.0" y2="104.7"></line>
     </g>
     
   </g><g>
@@ -86,14 +82,14 @@
         stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
       <text x="450.0" y="37.5" text-anchor="end"
         font-size="9.5" fill="#5c5c66">3.0</text>
-    <path d="M504.0,184.0 L504.0,102.3 Q504.0,98.3 508.0,98.3 L526.0,98.3 Q530.0,98.3 530.0,102.3 L530.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="517.0" y1="118.4" x2="517.0" y2="78.1"></line>
-      <line x1="512.0" y1="78.1" x2="522.0" y2="78.1"></line>
-      <line x1="512.0" y1="118.4" x2="522.0" y2="118.4"></line>
-    </g><path d="M532.0,184.0 L532.0,137.5 Q532.0,133.5 536.0,133.5 L554.0,133.5 Q558.0,133.5 558.0,137.5 L558.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="545.0" y1="142.5" x2="545.0" y2="124.4"></line>
-      <line x1="540.0" y1="124.4" x2="550.0" y2="124.4"></line>
-      <line x1="540.0" y1="142.5" x2="550.0" y2="142.5"></line>
+    <path d="M504.0,184.0 L504.0,100.3 Q504.0,96.3 508.0,96.3 L526.0,96.3 Q530.0,96.3 530.0,100.3 L530.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="517.0" y1="114.1" x2="517.0" y2="78.4"></line>
+      <line x1="512.0" y1="78.4" x2="522.0" y2="78.4"></line>
+      <line x1="512.0" y1="114.1" x2="522.0" y2="114.1"></line>
+    </g><path d="M532.0,184.0 L532.0,135.0 Q532.0,131.0 536.0,131.0 L554.0,131.0 Q558.0,131.0 558.0,135.0 L558.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="545.0" y1="139.3" x2="545.0" y2="122.6"></line>
+      <line x1="540.0" y1="122.6" x2="550.0" y2="122.6"></line>
+      <line x1="540.0" y1="139.3" x2="550.0" y2="139.3"></line>
     </g>
     
   </g><g>
@@ -116,14 +112,14 @@
         stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
       <text x="650.0" y="37.5" text-anchor="end"
         font-size="9.5" fill="#5c5c66">30</text>
-    <path d="M704.0,184.0 L704.0,89.3 Q704.0,85.3 708.0,85.3 L726.0,85.3 Q730.0,85.3 730.0,89.3 L730.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="717.0" y1="91.9" x2="717.0" y2="78.6"></line>
-      <line x1="712.0" y1="78.6" x2="722.0" y2="78.6"></line>
-      <line x1="712.0" y1="91.9" x2="722.0" y2="91.9"></line>
-    </g><path d="M732.0,184.0 L732.0,87.7 Q732.0,83.7 736.0,83.7 L754.0,83.7 Q758.0,83.7 758.0,87.7 L758.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="745.0" y1="90.6" x2="745.0" y2="76.7"></line>
-      <line x1="740.0" y1="76.7" x2="750.0" y2="76.7"></line>
-      <line x1="740.0" y1="90.6" x2="750.0" y2="90.6"></line>
+    <path d="M704.0,184.0 L704.0,90.8 Q704.0,86.8 708.0,86.8 L726.0,86.8 Q730.0,86.8 730.0,90.8 L730.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="717.0" y1="92.8" x2="717.0" y2="80.9"></line>
+      <line x1="712.0" y1="80.9" x2="722.0" y2="80.9"></line>
+      <line x1="712.0" y1="92.8" x2="722.0" y2="92.8"></line>
+    </g><path d="M732.0,184.0 L732.0,91.5 Q732.0,87.5 736.0,87.5 L754.0,87.5 Q758.0,87.5 758.0,91.5 L758.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="745.0" y1="93.4" x2="745.0" y2="81.5"></line>
+      <line x1="740.0" y1="81.5" x2="750.0" y2="81.5"></line>
+      <line x1="740.0" y1="93.4" x2="750.0" y2="93.4"></line>
     </g>
     
   </g><g>
@@ -146,14 +142,14 @@
         stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
       <text x="850.0" y="37.5" text-anchor="end"
         font-size="9.5" fill="#5c5c66">30k</text>
-    <path d="M904.0,184.0 L904.0,91.7 Q904.0,87.7 908.0,87.7 L926.0,87.7 Q930.0,87.7 930.0,91.7 L930.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="917.0" y1="98.0" x2="917.0" y2="77.4"></line>
-      <line x1="912.0" y1="77.4" x2="922.0" y2="77.4"></line>
-      <line x1="912.0" y1="98.0" x2="922.0" y2="98.0"></line>
-    </g><path d="M932.0,184.0 L932.0,85.6 Q932.0,81.6 936.0,81.6 L954.0,81.6 Q958.0,81.6 958.0,85.6 L958.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="945.0" y1="89.1" x2="945.0" y2="74.0"></line>
-      <line x1="940.0" y1="74.0" x2="950.0" y2="74.0"></line>
-      <line x1="940.0" y1="89.1" x2="950.0" y2="89.1"></line>
+    <path d="M904.0,184.0 L904.0,85.4 Q904.0,81.4 908.0,81.4 L926.0,81.4 Q930.0,81.4 930.0,85.4 L930.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="917.0" y1="90.7" x2="917.0" y2="72.1"></line>
+      <line x1="912.0" y1="72.1" x2="922.0" y2="72.1"></line>
+      <line x1="912.0" y1="90.7" x2="922.0" y2="90.7"></line>
+    </g><path d="M932.0,184.0 L932.0,75.1 Q932.0,71.1 936.0,71.1 L954.0,71.1 Q958.0,71.1 958.0,75.1 L958.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="945.0" y1="79.1" x2="945.0" y2="63.1"></line>
+      <line x1="940.0" y1="63.1" x2="950.0" y2="63.1"></line>
+      <line x1="940.0" y1="79.1" x2="950.0" y2="79.1"></line>
     </g>
     
   </g><g>
@@ -180,14 +176,14 @@
         stroke="#d8d8e0" stroke-width="1" opacity="0.6"></line>
       <text x="1050.0" y="37.5" text-anchor="end"
         font-size="9.5" fill="#5c5c66">8.0</text>
-    <path d="M1104.0,184.0 L1104.0,68.6 Q1104.0,64.6 1108.0,64.6 L1126.0,64.6 Q1130.0,64.6 1130.0,68.6 L1130.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="1117.0" y1="82.9" x2="1117.0" y2="46.3"></line>
-      <line x1="1112.0" y1="46.3" x2="1122.0" y2="46.3"></line>
-      <line x1="1112.0" y1="82.9" x2="1122.0" y2="82.9"></line>
-    </g><path d="M1132.0,184.0 L1132.0,63.6 Q1132.0,59.6 1136.0,59.6 L1154.0,59.6 Q1158.0,59.6 1158.0,63.6 L1158.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
-      <line x1="1145.0" y1="77.9" x2="1145.0" y2="41.3"></line>
-      <line x1="1140.0" y1="41.3" x2="1150.0" y2="41.3"></line>
-      <line x1="1140.0" y1="77.9" x2="1150.0" y2="77.9"></line>
+    <path d="M1104.0,184.0 L1104.0,74.8 Q1104.0,70.8 1108.0,70.8 L1126.0,70.8 Q1130.0,70.8 1130.0,74.8 L1130.0,184.0 Z" fill="#bf5a64"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="1117.0" y1="86.7" x2="1117.0" y2="54.8"></line>
+      <line x1="1112.0" y1="54.8" x2="1122.0" y2="54.8"></line>
+      <line x1="1112.0" y1="86.7" x2="1122.0" y2="86.7"></line>
+    </g><path d="M1132.0,184.0 L1132.0,69.8 Q1132.0,65.8 1136.0,65.8 L1154.0,65.8 Q1158.0,65.8 1158.0,69.8 L1158.0,184.0 Z" fill="#5183c9"></path><g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="1145.0" y1="81.1" x2="1145.0" y2="50.5"></line>
+      <line x1="1140.0" y1="50.5" x2="1150.0" y2="50.5"></line>
+      <line x1="1140.0" y1="81.1" x2="1150.0" y2="81.1"></line>
     </g>
     
   </g><g>
