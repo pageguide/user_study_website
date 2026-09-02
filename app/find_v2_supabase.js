@@ -447,6 +447,9 @@
       // ON. The walkthrough teaches the journey by pointing at the flagged steps, so a project that
       // has not run the migration yet must not rehearse a screen the study then withholds.
       flagMilestones: true,
+      // OFF. The trail is the agent's own account of the run, not evidence about it — see
+      // supabase_v2_reasoning_trail.sql for why it frames the judgement rather than informing it.
+      showReasoningTrail: false,
       // A project that has not run supabase_v2_queue_design.sql answers with the default design,
       // which is the crossed one — the same answer it will give once the migration lands, so the
       // study a participant is dealt does not change when the SQL is applied.
@@ -465,6 +468,7 @@
       showGroupChip: row.show_group_chip === true,
       // Absent means on, matching the column default and the fallback above.
       flagMilestones: row.flag_milestones !== false,
+      showReasoningTrail: row.show_reasoning_trail === true,
     };
   }
 
@@ -492,6 +496,9 @@
     if (typeof flags?.flagMilestones === 'boolean') {
       body.p_flag_milestones = flags.flagMilestones;
     }
+    if (typeof flags?.showReasoningTrail === 'boolean') {
+      body.p_show_reasoning_trail = flags.showReasoningTrail;
+    }
     const data = await rpc('save_pageguide_find_v2_flags', body);
     const row = Array.isArray(data) ? data[0] : data;
     return {
@@ -501,6 +508,7 @@
       queueDesign: queueDesignOf(row),
       showGroupChip: row?.show_group_chip === true,
       flagMilestones: row?.flag_milestones !== false,
+      showReasoningTrail: row?.show_reasoning_trail === true,
     };
   }
 

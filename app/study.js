@@ -1143,6 +1143,10 @@ async function showGuideV2Task(task, arm) {
     // walkthrough cannot teach a screen the study then withholds — which is the one thing a practice
     // run must not do.
     highlightMilestones: S.studyFlags().flagMilestones,
+    // THE TRAIL IS OFF BY DEFAULT. It is the agent's own story about the run, written afterwards,
+    // and putting it above the record asks a participant to disconfirm a confident claim rather than
+    // to check one. The journey, the two page states and the answer are what remains.
+    sections: { trail: S.studyFlags().showReasoningTrail },
   });
   renderGuideV2Questions(task, record, arm);
 }

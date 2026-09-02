@@ -1541,6 +1541,13 @@
           'Adds the two “point at what supports it” questions after the verdict — a sentence and, on '
           + 'a FIND × VISUAL claim, an image. While this is off, <code>evidence_time_ms</code> and the '
           + '<code>score_evidence_*</code> columns stay null and <code>evidence_responses</code> is empty.')}
+        ${row('v2-show-trail', flags.showReasoningTrail,
+          'Show the reasoning trail on Guide tasks',
+          'The agent’s own account of the run, above its answer. <b>Off by default.</b> It is a story '
+          + 'about the run rather than evidence from it — it opens “I have completed the task” and '
+          + 'names only the steps the agent chose to narrate — so showing it asks a participant to '
+          + 'disconfirm a confident claim instead of checking the record. The View Journey, the two '
+          + 'page states and the answer are shown either way.')}
         ${row('v2-flag-milestones', flags.flagMilestones,
           'Flag the trail’s steps in the journey',
           'Marks the View Journey rows the reasoning trail accounts for as <b>important milestone</b>, '
@@ -1658,6 +1665,7 @@
           queueDesign: chosenDesign(),
           showGroupChip: document.getElementById('v2-show-group').checked,
           flagMilestones: document.getElementById('v2-flag-milestones').checked,
+          showReasoningTrail: document.getElementById('v2-show-trail').checked,
         });
         // Reflect what the SERVER stored, not what the boxes said — the two differ if a write is
         // rejected, and a panel that reports its own optimism is how a pilot runs the wrong protocol.
@@ -1666,7 +1674,8 @@
           + `${saved.collectFollowup ? 'on' : 'off'} · ${saved.taskLimitSeconds}s per task · queue: `
           + `${DESIGNS[designOf(saved.queueDesign)].short} · group chip: `
           + `${saved.showGroupChip ? 'shown' : 'hidden'} · milestones: `
-          + `${saved.flagMilestones ? 'flagged' : 'not flagged'}.`
+          + `${saved.flagMilestones ? 'flagged' : 'not flagged'} · trail: `
+          + `${saved.showReasoningTrail ? 'shown' : 'hidden'}.`
           + ' Runs already in progress keep the protocol they started with.');
       } catch (error) {
         setStatus(error.message || String(error), true);

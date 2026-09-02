@@ -51,6 +51,8 @@
       // Absent means on: the flag predates nothing, and a run resumed from a session saved before
       // the setting existed should look like the study looks now.
       flagMilestones: f.flagMilestones !== false,
+      // Absent means off, for a resumed run as for a fresh one.
+      showReasoningTrail: f.showReasoningTrail === true,
     };
   }
 
@@ -151,6 +153,7 @@
         queueDesign: value.flags?.queueDesign || '',
         showGroupChip: value.flags?.showGroupChip === true,
         flagMilestones: value.flags?.flagMilestones !== false,
+        showReasoningTrail: value.flags?.showReasoningTrail === true,
       };
       return value;
     } catch (e) { return null; }
