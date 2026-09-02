@@ -346,9 +346,9 @@ function render() {
 
       <details class="tv-journey"${layout.journeyCollapsed ? '' : ' open'}>
         <summary class="tv-journey-summary">The steps${marking
-          ? ` <span class="tv-key-count">${keySteps.size} marked important</span>` : ''}</summary>
+          ? ` <span class="tv-key-count">${keySteps.size} milestones</span>` : ''}</summary>
         <div class="tv-journey-list">
-          ${marking ? `<p class="tv-key-legend">The steps marked <span class="tv-key-flag">important milestone</span>
+          ${marking ? `<p class="tv-key-legend">The steps marked <span class="tv-key-flag">milestone</span>
             are the ones ${layout.sections.trail
               ? 'the reasoning trail above accounts for'
               : 'the agent treated as milestones'}. Start there — the rest are still yours to read.</p>` : ''}
@@ -358,7 +358,7 @@ function render() {
             return `
             <div class="tv-journey-row${live ? ' is-shot' : ''}${key ? ' is-key' : ''}"${live ? ` data-step="${esc(String(step.n))}"` : ''}>
               <span class="tv-dot"></span>
-              <span class="tv-journey-text">${key ? '<span class="tv-key-flag">important milestone</span>' : ''}<b>${esc(String(step.n))}</b> ${esc(step.instruction || '')}</span>
+              <span class="tv-journey-text">${key ? '<span class="tv-key-flag">milestone</span>' : ''}<b>${esc(String(step.n))}</b> ${esc(step.instruction || '')}</span>
               ${live ? '<span class="tv-peek" aria-hidden="true">⌕</span>' : ''}
             </div>`;
           }).join('')}

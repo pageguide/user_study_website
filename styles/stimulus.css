@@ -499,9 +499,7 @@ body {
   color: #fff;
   font-size: 10px;
   font-weight: 800;
-  /* Tighter than the other uppercase chips: "IMPORTANT MILESTONE" is a long label sitting inline in
-     front of the step number, and the default tracking pushed the instruction off to the right. */
-  letter-spacing: 0.02em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
   vertical-align: 2px;

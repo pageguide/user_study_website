@@ -883,7 +883,7 @@
         journey folded are what the live study ships.</p>
       <p class="viz-note"><b>Flag the trail’s steps</b> is on by default in this tab and <b>off in the
         live study</b>: it marks the journey rows the reasoning trail accounts for as
-        <b>important milestone</b>. Before turning it on for participants, note that it is a second
+        <b>milestone</b>. Before turning it on for participants, note that it is a second
         manipulation stacked on grounding, and that it points at the steps the agent chose to
         narrate — which, for a run that misreports what it saw, is exactly where the discrepancy is
         not. It still draws with the trail switched off, worded as the agent’s milestones rather than
@@ -1605,7 +1605,7 @@
           + 'page states and the answer are shown either way.')}
         ${row('v2-flag-milestones', flags.flagMilestones,
           'Flag the trail’s steps in the journey',
-          'Marks the View Journey rows the reasoning trail accounts for as <b>important milestone</b>, '
+          'Marks the View Journey rows the reasoning trail accounts for as <b>milestone</b>, '
           + 'and counts them on the fold. On by default, and the walkthrough follows it. It is a real '
           + 'manipulation: it changes where a participant looks first, and it points at the steps the '
           + 'agent <em>chose</em> to narrate — which, for a run that misreports what it saw, is exactly '
