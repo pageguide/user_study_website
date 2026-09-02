@@ -312,7 +312,7 @@
       const deployed = location.protocol === 'http:' || location.protocol === 'https:';
       const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
       say(deployed && !local
-        ? 'This site is not connected to its Supabase project. Set FIND_V2_SUPABASE_URL and FIND_V2_SUPABASE_ANON_KEY as repository secrets, then re-run the deploy.'
+        ? 'This site is not connected to its Supabase project. Set SUPABASE_URL_V2 and SUPABASE_PUBLISH_KEY_V2 as repository secrets, then re-run the deploy.'
         : 'Find V2 is waiting for its Supabase project. Copy app/find_v2_config.example.js to app/find_v2_config.js and fill it in.', true);
       return;
     }

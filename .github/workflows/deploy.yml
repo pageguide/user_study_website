@@ -15,8 +15,11 @@
 # Repository secrets required (Settings → Secrets and variables → Actions):
 #   SUPABASE_URL                e.g. https://xxxx.supabase.co        — the V1 project
 #   SUPABASE_ANON_KEY           the publishable / anon key           — the one meant to be in a browser
-#   FIND_V2_SUPABASE_URL        e.g. https://yyyy.supabase.co        — the Find V2 project
-#   FIND_V2_SUPABASE_ANON_KEY   the V2 project's publishable / anon key
+#   SUPABASE_URL_V2             e.g. https://yyyy.supabase.co        — the Find V2 project
+#   SUPABASE_PUBLISH_KEY_V2     the V2 project's publishable / anon key
+#
+# The V2 pair is named the way .env and the scripts name it (SUPABASE_URL_V2, and _V2 for the key),
+# so one project's credentials go by one name wherever they are read.
 #
 # ⚠ If SUPABASE_SECRET_KEY is stored in this repository, delete it. Nothing here reads it, and a
 #   secret sitting in a repo that deploys a public site is one careless edit away from shipping.
@@ -79,18 +82,18 @@ jobs:
       # which is why it went unnoticed: the broken half is the half participants land on.
       - name: Write app/find_v2_config.js
         env:
-          FIND_V2_SUPABASE_URL: ${{ secrets.FIND_V2_SUPABASE_URL }}
-          FIND_V2_SUPABASE_ANON_KEY: ${{ secrets.FIND_V2_SUPABASE_ANON_KEY }}
+          SUPABASE_URL_V2: ${{ secrets.SUPABASE_URL_V2 }}
+          SUPABASE_PUBLISH_KEY_V2: ${{ secrets.SUPABASE_PUBLISH_KEY_V2 }}
         run: |
-          if [ -z "$FIND_V2_SUPABASE_URL" ] || [ -z "$FIND_V2_SUPABASE_ANON_KEY" ]; then
-            echo "::error::FIND_V2_SUPABASE_URL and FIND_V2_SUPABASE_ANON_KEY must be set as repository secrets (Settings -> Secrets and variables -> Actions). They are the V2 project's Project URL and anon/publishable key."
+          if [ -z "$SUPABASE_URL_V2" ] || [ -z "$SUPABASE_PUBLISH_KEY_V2" ]; then
+            echo "::error::SUPABASE_URL_V2 and SUPABASE_PUBLISH_KEY_V2 must be set as repository secrets (Settings -> Secrets and variables -> Actions). They are the V2 project's Project URL and publishable/anon key."
             exit 1
           fi
           # NO FALLBACK TO THE V1 SECRETS, deliberately. V2 is a different project with different
           # tables, and a site pointed at the wrong database does not fail — it runs, reads no
           # claims, and writes results where nobody will look for them. Failing the deploy is the
           # cheaper mistake: the previous deployment stays live while this is fixed.
-          case "$FIND_V2_SUPABASE_ANON_KEY" in
+          case "$SUPABASE_PUBLISH_KEY_V2" in
             sb_secret_*|*service_role*)
               echo "::error::That is the SECRET key. app/find_v2_config.js is served to every participant - use the anon/publishable key."
               exit 1 ;;
@@ -99,8 +102,8 @@ jobs:
           // Generated at deploy time from repository secrets. Do not commit.
           // ANON KEY ONLY: this file is served to every participant.
           window.FIND_V2_CONFIG = {
-            SUPABASE_URL: '${FIND_V2_SUPABASE_URL}',
-            SUPABASE_ANON_KEY: '${FIND_V2_SUPABASE_ANON_KEY}',
+            SUPABASE_URL: '${SUPABASE_URL_V2}',
+            SUPABASE_ANON_KEY: '${SUPABASE_PUBLISH_KEY_V2}',
           };
           EOF
 

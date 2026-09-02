@@ -155,8 +155,8 @@ and the deploy fails loudly without them rather than publishing a site that reac
 | --- | --- |
 | `SUPABASE_URL` | the V1 project's Project URL |
 | `SUPABASE_ANON_KEY` | the V1 project's anon / publishable key |
-| `FIND_V2_SUPABASE_URL` | the **Find V2** project's Project URL |
-| `FIND_V2_SUPABASE_ANON_KEY` | the Find V2 project's anon / publishable key |
+| `SUPABASE_URL_V2` | the **Find V2** project's Project URL |
+| `SUPABASE_PUBLISH_KEY_V2` | the Find V2 project's publishable / anon key |
 
 The V2 pair is the one the front door needs: `index.html` is Find V2, and a deploy without it shows
 "Find V2 is waiting for its new Supabase project" with a Start button nobody can press. There is
