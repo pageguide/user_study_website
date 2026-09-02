@@ -25,7 +25,19 @@ the data already collected.
 ./scripts/sync-vendor.sh --write  # update it from the extension
 ```
 
-Run the check before every deploy.
+Run the check before every deploy — and this one with it:
+
+```bash
+node scripts/check-page-scripts.mjs
+```
+
+Every page loads its JavaScript as classic `<script src>` tags, which share **one global lexical
+scope**. Two files that each declare a top-level `const REFERENCE_DWELL_MS` are fine apart and fatal
+together: the duplicate is a parse error, so the second file never runs — not one function of it —
+and there is no exception to catch. The page renders its static shell and stops, with both panes
+sitting on their "Loading…" placeholders and every request in the Network tab returning 200. That is
+how it presents: as a slow network, not as a dead page. The script concatenates each page's scripts
+in load order and parses the result the way the browser would.
 
 ## Setup
 
@@ -143,6 +155,10 @@ project that has only ever run `supabase_find_v2.sql`, run these in order in the
 | `supabase_v2_anchors.sql` | citation anchors for Find references |
 | `supabase_v2_faithfulness.sql` | `claims_completion`, which separates a false success from an honest failure |
 | `supabase_v2_arms.sql` | builds `arms` from what the recorder writes, so a recorded run is not a blank stimulus |
+| `supabase_v2_failure_mode.sql` | `failure_mode` on Guide results, and a publish gate that accepts both ground-truth dialects |
+| `supabase_v2_queue_design.sql` | `queue_design` — which of the two queues a sitting is dealt (see below) |
+| `supabase_v2_group_chip.sql` | `show_group_chip` — whether a participant is told which group they are in (off by default) |
+| `supabase_v2_milestone_flag.sql` | `flag_milestones` — whether the Guide journey flags the trail's steps (on by default) |
 
 Then, once per batch of imported runs:
 
@@ -150,6 +166,45 @@ Then, once per batch of imported runs:
 node scripts/migrate_guide_v2.mjs      # copy V1's recorded Guide runs across (optional)
 node scripts/classify_guide_runs.mjs   # fill claims_completion from how each answer opens
 ```
+
+## Which queue a participant is dealt
+
+Two designs, chosen in **Admin → Study settings**, read once when a sitting starts and snapshotted
+into the session — a switch flipped mid-run cannot make task 4 belong to a different experiment from
+task 1.
+
+- **Crossed 2 × 2** (`balanced_2x2`, the default) — four tasks, one per cell: Find × Grounded,
+  Find × Non-grounded, Guide × Grounded, Guide × Non-grounded. Correctness alternates cell by cell
+  and sitting by sitting, so every participant sees two correct runs and two incorrect ones and no
+  cell is stuck on one answer. Group A is text throughout, group B visual: modality stays
+  between-subjects while task type and grounding are both within.
+- **Three Find cells + one grounded Guide task** (`legacy_find3`) — what V2 shipped with. Find deals
+  three of its four correctness × grounding cells (there is deliberately no correct-and-grounded Find
+  task) and the Guide task is grounded only, so nothing in it estimates grounding for the Guide half.
+
+## The walkthrough
+
+Offered once, before task 1, on a browser that has not seen it — and skippable from anywhere. Two
+practice tasks, one Find and one Guide, rendered by the study's own screens so what is rehearsed is
+the thing that comes next rather than a diagram of it. Each is followed by the answer and why.
+
+The material is invented (`app/find_v2_tutorial_fixtures.js`): a community pool timetable that no
+real stimulus touches, and not the library V1's walkthrough uses, so somebody who has done both
+studies does not meet the same practice twice. A practice answer builds no row, writes nothing and
+never advances the queue, so the real study still begins at task 1. Both practice tasks are grounded
+and the non-grounded arm is explained in words — the one thing practice must not teach is that a
+missing screenshot means you did something wrong.
+
+One verdict of each kind, deliberately: the Find practice is a correct answer and the Guide practice
+is a run that finishes, sounds certain, and reports a booking reference its own steps never produced.
+
+Admin → Study settings has **Preview the walkthrough** (`study.html?tutorial=preview`, which claims
+no assignment slot) and a button to clear the "already seen" mark on that browser.
+
+Switching designs mid-study splits the collected rows into two experiments. `queue_design` defaults
+to the crossed design for every project, including one that has already collected sittings under the
+old one — `supabase_v2_queue_design.sql` ends with the one-line update that pins such a project back
+to `legacy_find3`.
 
 `supabase_v2_arms.sql` matters for any run recorded through the extension rather than migrated from
 V1. `app/stimulus.js` reads only `arms.{grounding,nongrounding}.{steps, answer, trail, …}`, and the
@@ -228,6 +283,44 @@ Guide scores stay in two groups, never averaged:
 
 `null` means *not scored* — no ground truth recorded, or nothing to be precise about — and never
 zero. An unfinished stimulus must not read as a participant who got everything wrong.
+
+That is the V1 protocol. **Find V2's Guide task asks one question**, in these exact words:
+
+> **Did the agent successfully complete the task?**
+>
+> **Yes** — It did the whole job, and its answer matches what it actually did.
+> **No** — It did not finish the job, **or** its answer claims something that did not happen.
+
+The options name both failure modes deliberately. A run can fall short of the job, or it can finish
+and misdescribe what it saw, and the second is the item the Guide condition exists to measure —
+the answer reads clean and only the trajectory contradicts it. Asked as "did the agent complete the
+task?", a participant had no way to know that a fluent, confident, fabricated answer was a **No**,
+so the wording served that item worst of all.
+
+It stays one verdict rather than two questions. A second key derived from the two facts already
+stored (`claims_completion = agent_completed`) lands every live run on the diagonal — every run
+keyed correct claims completion, and so does every run keyed incorrect — so a second question would
+have measured nothing without either re-admitting the excluded honest failures or re-keying the
+successes.
+
+**Why** a run is incorrect is not asked, because the recorder already wrote it down.
+`app/find_v2_guide_key.js` reads `guide_ground_truth` and classifies each run as `none`,
+`misreported`, `incomplete`, `could_not_complete` or `unspecified`, and the mode is snapshotted onto
+each result row as `failure_mode` — snapshotted, not joined, because the ground truth is editable
+and a verdict is only interpretable against the classification that was live when it was shown.
+Accuracy is then reported per mode and, like detection and localization above, **never averaged**:
+
+| | |
+|---|---|
+| **misreported** | the answer claims what the trajectory does not support — only checking the steps reveals it |
+| **incomplete** | the job was part done — readable from the outcome alone |
+
+Grounding should move the first without needing to move the second.
+
+That module is also the only place that reads across **two live ground-truth dialects**: runs
+migrated from V1 carry `correctness: 'success'|'failure'`, runs saved by the extension recorder carry
+`correct: boolean`, and `problems[]` contains a `wrong_result` id that
+`vendor/guide_trajectories.js` does not declare.
 
 ## Known gap
 

@@ -18,6 +18,8 @@
     group: '',
     // Review mode only: a researcher checking one claim's references on the real task screen.
     adminReview: false,
+    // An `admin` dry run: the real study, walked with ← → and recorded nowhere.
+    previewNav: false,
     variantKey: '',
     queue: [],
     idx: 0,
@@ -30,22 +32,52 @@
     // keep the protocol it began with: an admin flipping a switch mid-session
     // would otherwise change what task 4 asks compared with task 3 of the same
     // participant, and the two would be indistinguishable in the results.
-    flags: { collectEvidence: false, collectFollowup: false },
+    flags: { collectEvidence: false, collectFollowup: false, taskLimitSeconds: 120 },
   };
 
-  /** The protocol switches for THIS run, with both keys guaranteed boolean. */
+  /** The protocol switches for THIS run, normalized — booleans boolean, the limit in range. */
   function studyFlags() {
     const f = state.flags || {};
-    return { collectEvidence: !!f.collectEvidence, collectFollowup: !!f.collectFollowup };
+    const seconds = Number(f.taskLimitSeconds);
+    return {
+      collectEvidence: !!f.collectEvidence,
+      collectFollowup: !!f.collectFollowup,
+      // Clamped to the same bounds the settings column enforces. A run resumed from a session saved
+      // before the limit existed has no value here and gets the current default, which is right:
+      // there is no recorded limit to honour, so honouring today's is the only honest option.
+      taskLimitSeconds: Number.isFinite(seconds) ? Math.min(900, Math.max(30, Math.round(seconds))) : 120,
+      // Absent means off, for a resumed run as for a fresh one.
+      showGroupChip: f.showGroupChip === true,
+      // Absent means on: the flag predates nothing, and a run resumed from a session saved before
+      // the setting existed should look like the study looks now.
+      flagMilestones: f.flagMilestones !== false,
+    };
   }
 
+  // `test` and `admin`, either case, optionally with a slot number: test-3, Admin_1, ADMIN.
+  // Both are dry runs — no session row, no result rows — so a researcher can walk the real study
+  // without leaving data that looks exactly like a participant's.
+  const DRY_RUN_ID = /^(test|admin)(?:[-_ ]?(\d+))?$/i;
+
   function isDryRunId(id) {
-    return /^test(?:[-_ ]?(\d+))?$/i.test(String(id || '').trim());
+    return DRY_RUN_ID.test(String(id || '').trim());
+  }
+
+  /**
+   * An `admin` dry run, which additionally gets ← → to walk the queue.
+   *
+   * Separate from `test` on purpose. A test run is meant to be indistinguishable from a real sitting
+   * — that is what makes it a rehearsal — so it keeps the one-way flow and the three-minute cutoff.
+   * `admin` is for LOOKING at the four tasks a slot deals, which needs to go backwards and needs to
+   * skip a task without answering it. Naming the two differently keeps a rehearsal honest.
+   */
+  function isPreviewId(id) {
+    return /^admin(?:[-_ ]?\d+)?$/i.test(String(id || '').trim());
   }
 
   function dryRunSlot(id) {
-    const match = /^test[-_ ]?(\d+)$/i.exec(String(id || '').trim());
-    return match ? Number(match[1]) : 0;
+    const match = DRY_RUN_ID.exec(String(id || '').trim());
+    return match && match[2] ? Number(match[2]) : 0;
   }
 
   function conditionLabel(arm) {
@@ -110,6 +142,15 @@
       value.flags = {
         collectEvidence: !!value.flags?.collectEvidence,
         collectFollowup: !!value.flags?.collectFollowup,
+        taskLimitSeconds: Number(value.flags?.taskLimitSeconds) || 120,
+        // CARRIED, NOT DEFAULTED. The queue was dealt when the run started and is saved with it, so
+        // this changes nothing about what is played — but it is the only record of WHICH DESIGN a
+        // half-finished run belongs to, and the welcome screen says so before offering to resume it.
+        // A run saved before the setting existed has none, and reads as unknown rather than as the
+        // current default: it was dealt under the old three-cell queue by definition.
+        queueDesign: value.flags?.queueDesign || '',
+        showGroupChip: value.flags?.showGroupChip === true,
+        flagMilestones: value.flags?.flagMilestones !== false,
       };
       return value;
     } catch (e) { return null; }
@@ -182,6 +223,15 @@
       text_select_count: count('text_select_count'),
       click_count: count('click_count'),
       mouse_move_px: count('mouse_move_px'),
+      // THE MANIPULATION CHECK. Did the participant open any of the evidence the grounded arm is
+      // defined by? Null when there is no telemetry at all, and 0 when there is — a grounded
+      // participant who opened nothing had the chance, and that is the finding rather than a gap.
+      // `condition` already says whether references were on offer, so analysis splits on that.
+      reference_click_count: count('reference_click_count'),
+      reference_hover_count: count('reference_hover_count'),
+      reference_distinct_count: count('reference_distinct_count'),
+      // The one genuine null here: no first open happened, and 0 would read as "opened one instantly".
+      reference_first_ms: count('reference_first_ms'),
     };
   }
 
@@ -244,7 +294,9 @@
    *
    * `answer_correct_snapshot` is the key AS IT STOOD when this participant was shown the run. The
    * key is authored in Admin and can be revised, and a verdict is only interpretable against the
-   * judgement that was live at the time.
+   * judgement that was live at the time. `failure_mode` is snapshotted for exactly the same reason:
+   * it is read off `guide_ground_truth`, which Admin can edit, so joining for it at analysis time
+   * would describe the run as it is now rather than as it was judged.
    */
   function buildGuideResultRow({ task, payload, confidence, helpfulness, notes }) {
     const verdict = payload.answer == null
@@ -267,6 +319,12 @@
       goal: task?.goal || task?.question || '',
       answer_text_snapshot: payload.claimText || '',
       answer_correct_snapshot: expected,
+      // WHY this run is keyed incorrect — none / misreported / incomplete / could_not_complete /
+      // unspecified. NULL, not 'unspecified', when the task carried no key at all: "keyed incorrect
+      // and nobody wrote down why" and "never keyed" are different facts, and only one of them is a
+      // gap in the authoring. See app/find_v2_guide_key.js.
+      failure_mode: window.FindV2GuideKey.FAILURE_MODES.includes(payload.failureMode)
+        ? payload.failureMode : null,
       guide_answer_correct: verdict,
       verdict_timed_out: verdict == null,
       score_verdict_correct: verdict == null || expected == null ? null : verdict === expected,
@@ -285,6 +343,7 @@
     state,
     SESSION_VERSION,
     isDryRunId,
+    isPreviewId,
     dryRunSlot,
     studyFlags,
     conditionLabel,

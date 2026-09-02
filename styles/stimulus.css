@@ -476,3 +476,53 @@ body {
 
 .tv-answer p { margin: 0 0 8px; }
 .tv-answer p:last-child { margin-bottom: 0; }
+
+/* ── Key steps ────────────────────────────────────────────────────────────────
+   The journey rows the reasoning trail accounts for, flagged so a participant can start there
+   instead of matching step numbers by eye. Only drawn when mountStimulus is passed
+   `highlightMilestones` — off in the live study, see the note in render(). */
+.tv-journey-row.is-key {
+  background: rgba(255, 176, 32, 0.10);
+  box-shadow: inset 2px 0 0 #f0a020;
+}
+
+.tv-journey-row.is-key.is-shot:hover { background: rgba(255, 176, 32, 0.18); }
+
+.tv-journey-row.is-key .tv-dot { background: #f0a020; }
+
+.tv-key-flag {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f0a020;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  /* Tighter than the other uppercase chips: "IMPORTANT MILESTONE" is a long label sitting inline in
+     front of the step number, and the default tracking pushed the instruction off to the right. */
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  vertical-align: 2px;
+}
+
+.tv-key-count {
+  margin-left: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(240, 160, 32, 0.16);
+  color: #8a5a00;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.tv-key-legend {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(240, 160, 32, 0.08);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, 0.62);
+}

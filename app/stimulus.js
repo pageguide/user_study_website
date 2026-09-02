@@ -30,9 +30,17 @@ let els = { goal: null, count: null, stage: null };
 
 let arm = null;
 
-// Which way round the two sections go, and whether the journey opens folded. Set per mount rather
-// than read from a global so one file can serve both studies without either knowing about the other.
-let layout = { trailFirst: false, journeyCollapsed: false };
+// Which way round the two sections go, whether the journey opens folded, and whether the steps the
+// trail calls out are flagged in the journey. Set per mount rather than read from a global so one
+// file can serve both studies without either knowing about the other.
+let layout = {
+  trailFirst: false, journeyCollapsed: false, highlightMilestones: false,
+  // WHICH SECTIONS ARE ON THE PAGE AT ALL. Every one of them is on by default, because that is the
+  // stimulus: dropping one is a change to what a participant is asked to judge from, not a display
+  // preference. Named here so the four can be varied deliberately (Admin -> Session preview) rather
+  // than by editing render() and forgetting to put it back.
+  sections: { states: true, journey: true, answer: true, trail: true },
+};
 
 // Gated on the arm, not on whether the data happens to carry a screenshot. _stripGuideArm nulls
 // them, but an arm can also be hand-edited in the recorder, and one uploaded image would undo the
@@ -58,15 +66,27 @@ function esc(value) {
  * @param {object} record - a study_guide_trajectories row
  * @param {'grounding'|'nongrounding'} armName
  * @param {{goal: Element, count: Element, stage: Element}} mount
- * @param {{trailFirst?: boolean, journeyCollapsed?: boolean}} [options] - V2's Guide task leads with
- *   the reasoning trail and folds the journey away beneath it. Defaults to V1's layout, whose
- *   recorded runs were judged with the journey open and first and must stay that way.
+ * @param {{trailFirst?: boolean, journeyCollapsed?: boolean, highlightMilestones?: boolean}} [options]
+ *   - V2's Guide task leads with the reasoning trail and folds the journey away beneath it. Defaults
+ *   to V1's layout, whose recorded runs were judged with the journey open and first and must stay
+ *   that way. `highlightMilestones` is OFF by default and is a study variable, not a polish: see the
+ *   note above the flag in render(). `sections` drops one of the four blocks from the page; every
+ *   one of them is shown unless it is explicitly `false`.
  */
 function mountStimulus(record, armName, mount, options) {
   els = mount;
   layout = {
     trailFirst: !!options?.trailFirst,
     journeyCollapsed: !!options?.journeyCollapsed,
+    highlightMilestones: !!options?.highlightMilestones,
+    // Absent means shown. A caller that passes nothing gets the whole stimulus, so a section can
+    // only ever go missing because someone asked for it to.
+    sections: {
+      states: options?.sections?.states !== false,
+      journey: options?.sections?.journey !== false,
+      answer: options?.sections?.answer !== false,
+      trail: options?.sections?.trail !== false,
+    },
   };
   showShots = armName !== 'nongrounding';
   document.body.classList.toggle('tv-nogrounding', !showShots);
@@ -128,11 +148,19 @@ function bindHints() {
  * them would make the condition about who was told whether the task succeeded.
  */
 function bindStates() {
+  // GUARDED, like bindHints. The stage node is rebuilt per task today, which is the only reason a
+  // second listener never accumulated here; reuse that node once and every state open would be
+  // counted twice.
+  if (els.stage.dataset.statesBound === '1') return;
+  els.stage.dataset.statesBound = '1';
   els.stage.addEventListener('click', (e) => {
     const btn = e.target.closest('.tv-state-btn');
     if (!btn) return;
     const state = btn.dataset.state === 'initial' ? arm.initial_state : arm.final_state;
     if (!state?.screenshot) return;
+    // The one reference kind a NON-GROUNDED participant can still open — the before/after pair is
+    // shown in both arms, on purpose. A non-zero count on a non-grounded row is not a bug.
+    if (e.isTrusted) reportReference(btn, 'click');
     openLightbox({
       shot: state.screenshot,
       title: btn.dataset.state === 'initial' ? 'Before the agent started' : 'After the agent finished',
@@ -287,20 +315,40 @@ function render() {
   const steps = arm.steps || [];
   const milestones = (arm.trail?.milestones || []);
 
+  // THE STEPS THE TRAIL CALLS OUT, FLAGGED IN THE JOURNEY.
+  //
+  // The trail names some of the journey's steps and not others, and a participant reading a
+  // thirty-step list has no way to tell which ones the agent treated as milestones without holding
+  // the trail in their head and matching numbers by eye. Flagging them turns that lookup into a
+  // glance.
+  //
+  // OFF BY DEFAULT, AND A STUDY VARIABLE. It changes where a participant looks first, so it is a
+  // manipulation and not a nicety — and it points at the steps the agent CHOSE to narrate, which for
+  // a misreported run is exactly where the discrepancy is not. Turning it on for everyone would add
+  // a second uncontrolled difference to a design that already varies grounding.
+  const keySteps = new Set(milestones.map(m => Number(m.step)).filter(n => Number.isFinite(n)));
+  const marking = layout.highlightMilestones && keySteps.size > 0;
+
   const journeyHtml = `
       ${sectionTitle('View Journey', showShots
         ? 'Every action the agent took, in the order it took them. Hover a step to see the page it was looking at when it acted; click for a full-size view.'
         : 'Every action the agent took, in the order it took them.')}
 
       <details class="tv-journey"${layout.journeyCollapsed ? '' : ' open'}>
-        <summary class="tv-journey-summary">The steps</summary>
+        <summary class="tv-journey-summary">The steps${marking
+          ? ` <span class="tv-key-count">${keySteps.size} marked important</span>` : ''}</summary>
         <div class="tv-journey-list">
+          ${marking ? `<p class="tv-key-legend">The steps marked <span class="tv-key-flag">important milestone</span>
+            are the ones ${layout.sections.trail
+              ? 'the reasoning trail above accounts for'
+              : 'the agent treated as milestones'}. Start there — the rest are still yours to read.</p>` : ''}
           ${steps.map(step => {
             const live = showShots && !!step.screenshot;
+            const key = marking && keySteps.has(Number(step.n));
             return `
-            <div class="tv-journey-row${live ? ' is-shot' : ''}"${live ? ` data-step="${esc(String(step.n))}"` : ''}>
+            <div class="tv-journey-row${live ? ' is-shot' : ''}${key ? ' is-key' : ''}"${live ? ` data-step="${esc(String(step.n))}"` : ''}>
               <span class="tv-dot"></span>
-              <span class="tv-journey-text"><b>${esc(String(step.n))}</b> ${esc(step.instruction || '')}</span>
+              <span class="tv-journey-text">${key ? '<span class="tv-key-flag">important milestone</span>' : ''}<b>${esc(String(step.n))}</b> ${esc(step.instruction || '')}</span>
               ${live ? '<span class="tv-peek" aria-hidden="true">⌕</span>' : ''}
             </div>`;
           }).join('')}
@@ -319,7 +367,7 @@ function render() {
   //
   // The fields are still in the data and the editor still shows them, so restoring the flags is a
   // small change if the design ever calls for a condition that reveals them.
-  const trailHtml = (arm.trail?.summary || milestones.length) ? `
+  const trailHtml = (layout.sections.trail && (arm.trail?.summary || milestones.length)) ? `
       ${sectionTitle('Reasoning trail', 'The agent\'s own account of what it did and why, written after the run. It picks out the steps it treated as milestones — some of the journey above, not all of it — in the agent\'s words rather than as actions.')}
       <div class="tv-trail">
         ${arm.trail?.summary ? `<p class="tv-trail-summary">${richText(arm.trail.summary)}</p>` : ''}
@@ -342,12 +390,18 @@ function render() {
         : 'What the agent reported back when it finished — the claim you are being asked to judge.')}
       <div class="tv-answer">${richText(arm.answer)}</div>`;
 
+  // The answer sits between the two accounts either way; with a section switched off the remaining
+  // ones close up rather than leaving a gap where it was.
+  const ordered = layout.trailFirst
+    ? [trailHtml, layout.sections.answer ? answerHtml : '', layout.sections.journey ? journeyHtml : '']
+    : [layout.sections.journey ? journeyHtml : '', layout.sections.answer ? answerHtml : '', trailHtml];
+
   els.stage.innerHTML = `
     <div class="tv-col">
-      ${statesSection()}
-      ${layout.trailFirst
-        ? `${trailHtml}${answerHtml}${journeyHtml}`
-        : `${journeyHtml}${answerHtml}${trailHtml}`}
+      ${layout.sections.states ? statesSection() : ''}
+      ${ordered.join('')}
+      ${ordered.every(part => !part) && !layout.sections.states
+        ? '<div class="tv-empty">Every section is switched off — there is nothing here to judge from.</div>' : ''}
     </div>`;
 }
 
@@ -405,6 +459,12 @@ function milestoneHasShot(step) {
  */
 function bindPreviews() {
   if (!showShots) return;   // no card, no lightbox, nothing to click: that is the arm.
+  if (els.stage.dataset.previewsBound === '1') return;
+  els.stage.dataset.previewsBound = '1';
+  // Held, not merely crossed. Reading the journey sweeps the pointer over every row on the way down.
+  let dwellTimer = null;
+  let dwellFor = null;
+  const cancelDwell = () => { clearTimeout(dwellTimer); dwellTimer = null; dwellFor = null; };
   let hideTimer = null;
   const cancelHide = () => { if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; } };
   const hideNow = () => { cancelHide(); document.getElementById('tv-pop')?.remove(); };
@@ -412,8 +472,13 @@ function bindPreviews() {
 
   els.stage.addEventListener('mouseover', (e) => {
     const anchor = e.target.closest('[data-step], [data-ev-key], [data-ev-step]');
-    if (!anchor) { if (!e.target.closest('#tv-pop')) scheduleHide(); return; }
+    if (!anchor) { if (!e.target.closest('#tv-pop')) { cancelDwell(); scheduleHide(); } return; }
     cancelHide();
+    if (e.isTrusted && dwellFor !== anchorKey(anchor)) {
+      cancelDwell();
+      dwellFor = anchorKey(anchor);
+      dwellTimer = setTimeout(() => reportReference(anchor, 'hover'), REFERENCE_DWELL_MS);
+    }
     if (document.getElementById('tv-pop')?.dataset.for === anchorKey(anchor)) return;
     const item = previewFor(anchor);
     if (!item) return;
@@ -447,16 +512,52 @@ function bindPreviews() {
   });
 
   els.stage.addEventListener('mouseout', (e) => {
-    if (e.target.closest('[data-step], [data-ev-key], [data-ev-step]')) scheduleHide();
+    if (e.target.closest('[data-step], [data-ev-key], [data-ev-step]')) { cancelDwell(); scheduleHide(); }
   });
 
   // Clicking the row itself opens the big view too — the card is a preview, not a toll gate.
   els.stage.addEventListener('click', (e) => {
     const anchor = e.target.closest('[data-step], [data-ev-key], [data-ev-step]');
     if (!anchor) return;
+    // One handler for .tv-chip, .tv-ref, journey rows and trail rows alike — the four ways a Guide
+    // participant reaches the evidence behind a claim.
+    if (e.isTrusted) reportReference(anchor, 'click');
     const item = previewFor(anchor);
     if (item) { hideNow(); openLightbox(item); }
   });
+}
+
+// How long a preview must be held before it counts as looked at. Short enough that a deliberate
+// check registers, long enough that crossing a chip on the way somewhere else does not.
+//
+// DECLARED ONCE, HERE, AND EXPORTED. app/study.js makes the same judgement about the same gesture and
+// used to declare its own `const REFERENCE_DWELL_MS` — but classic <script> tags share ONE global
+// lexical scope, and study.html loads both files, so two top-level `const`s of one name is a PARSE
+// error that kills the whole of study.js. The page then renders its static shell and stops: both
+// panes sit on "Loading…" forever, and the console blames a line in a file that looks fine. This
+// file is the one loaded on every page that shows a trajectory, so the constant lives here and
+// study.js reads it off the export.
+const REFERENCE_DWELL_MS = 400;
+
+/**
+ * Tell the study page a reference was opened, if a study page is listening.
+ *
+ * OPTIONAL BY DESIGN. This viewer is also loaded by V1 and by preview.html, neither of which has the
+ * task telemetry, so it reports through a hook it does not require. The viewer stays a viewer.
+ */
+function reportReference(el, via) {
+  if (!el) return;
+  const kind = el.classList?.contains('tv-chip') ? 'chip'
+    : el.classList?.contains('tv-ref') ? 'ref'
+    : el.classList?.contains('tv-state-btn') ? 'state' : 'step';
+  try { window.StudyTelemetry?.reference(kind, anchorKey2(el), via); } catch (e) { /* not listening */ }
+}
+
+/** anchorKey, but tolerant of the state buttons, which carry data-state instead. */
+function anchorKey2(el) {
+  if (el.dataset?.state != null) return `t${el.dataset.state}`;
+  if (el.dataset?.step == null && el.dataset?.evKey == null && el.dataset?.evStep == null) return '';
+  return anchorKey(el);
 }
 
 function anchorKey(el) {
@@ -510,4 +611,4 @@ function openLightbox(item) {
   document.body.appendChild(overlay);
 }
 
-window.Stimulus = { mountStimulus, stimulusSteps };
+window.Stimulus = { mountStimulus, stimulusSteps, REFERENCE_DWELL_MS };

@@ -81,25 +81,53 @@
     };
   }
 
-  // `answer_variants` is small (four short answers) next to `page_html`, which is
-  // still deliberately omitted here: the queue lists every claim, the snapshot is
-  // fetched only when its task opens.
+  // `page_html` is omitted here — the queue lists every claim, the snapshot is fetched only when its
+  // task opens. So was `answer_variants`, on the grounds that it was "four short answers"; it is not.
+  // Each variant carries its EVIDENCE, and evidence carries base64 screenshots, so the four cells run
+  // to 584 KB on SVSF-V1 and 1.57 MB across the ten live claims — downloaded on the welcome screen
+  // before Start could be pressed, to answer four booleans per claim.
+  //
+  // Everything that reads this list wants only WHETHER each cell has text: FindV2Variants.authored
+  // for the queue, missingVariants for the Admin list. So the four answer_texts are projected as
+  // scalars and reassembled below into the shape those callers already expect. Editing a claim still
+  // goes through getClaim, which selects the whole row.
+  const VARIANT_TEXT_COLUMNS = window.FindV2Variants.KEYS
+    .map(key => `${key}:answer_variants->${key}->>answer_text`).join(',');
+
   const CLAIM_LIST_COLUMNS = [
     'id', 'source_task_id', 'title', 'url', 'task_style', 'question',
-    'answer_variants', 'correctness_mode', 'claim_correct', 'answer_text',
+    'correctness_mode', 'claim_correct', 'answer_text',
     'in_study', 'task_index', 'page_bytes', 'updated_at',
+    VARIANT_TEXT_COLUMNS,
   ].join(',');
+
+  /**
+   * Put `answer_variants` back, carrying the answer text and nothing else.
+   *
+   * Callers do `variantOf(row, key).answer_text`, so they get exactly what they ask for. `evidence`
+   * and `citation_anchors` come back empty rather than absent — a caller that reads them off a LIST
+   * row would otherwise get undefined and throw, and this way it gets the truth for a list query:
+   * they were not fetched.
+   */
+  function withVariantTexts(row) {
+    const variants = {};
+    window.FindV2Variants.KEYS.forEach(key => {
+      variants[key] = { answer_text: row[key] || '', evidence: [], citation_anchors: [] };
+      delete row[key];
+    });
+    return { ...row, answer_variants: variants };
+  }
 
   async function listStudyTasks() {
     const rows = await get(`pageguide_find_v2_claims?select=${CLAIM_LIST_COLUMNS}`
       + '&in_study=is.true&order=task_index.asc,id.asc');
-    return (Array.isArray(rows) ? rows : []).map(taskRow);
+    return (Array.isArray(rows) ? rows : []).map(row => taskRow(withVariantTexts(row)));
   }
 
   async function listAllClaims() {
     const rows = await get(`pageguide_find_v2_claims?select=${CLAIM_LIST_COLUMNS}`
       + '&order=task_index.asc,id.asc');
-    return Array.isArray(rows) ? rows : [];
+    return (Array.isArray(rows) ? rows : []).map(withVariantTexts);
   }
 
   async function getClaim(id) {
@@ -116,8 +144,29 @@
    * the shared Find shell passes the task through as a third argument — V1's
    * adapter takes two and ignores it.
    */
+  // WHAT THE PLAYER NEEDS TO RENDER AN ANSWER — and nothing else.
+  //
+  // This used to call getClaim, which is `select=*`. On a claim with a captured page that pulls
+  // `page_html` — the whole snapshot, megabytes of it — to read an answer paragraph, and it does so
+  // IN PARALLEL WITH getTaskPage, which is fetching the same column for the same row at the same
+  // time. Every Find task therefore downloaded its page snapshot twice before it could be shown,
+  // and the second copy was thrown away. `page_title` and `page_bytes` go with it for the same
+  // reason: the answer card does not read them.
+  //
+  // `answer_variants` stays whole. FindV2Variants.resolve walks the cells looking for the authored
+  // one and falls back across them, so projecting a single subpath would change which stimulus a
+  // half-authored claim shows — a correctness bug traded for a few kilobytes.
+  const CLAIM_ANSWER_COLUMNS = 'id,url,question,claim_correct,answer_text,'
+    + 'citation_anchors,evidence,answer_variants';
+
+  async function getClaimAnswer(id) {
+    const rows = await get(`pageguide_find_v2_claims?select=${CLAIM_ANSWER_COLUMNS}`
+      + `&id=eq.${encodeURIComponent(id)}&limit=1`);
+    return (Array.isArray(rows) && rows[0]) || null;
+  }
+
   async function getCannedResponse(taskId, condition, task) {
-    const row = await getClaim(taskId);
+    const row = await getClaimAnswer(taskId);
     if (!row) return null;
     const correct = task ? task.claimCorrect === true : row.claim_correct === true;
     const chosen = window.FindV2Variants.resolve(row, correct, condition);
@@ -162,9 +211,13 @@
   // `arms` carries every step's base64 screenshot, so it is NEVER in a list query: pulling thirteen
   // trajectories to build a four-task queue would move megabytes to choose one id. The list carries
   // the fields a queue is built from; getGuideTask fetches the one that is about to be played.
+  // `guide_ground_truth` is a hundred-odd bytes a row and is what the failure-mode chip is read
+  // from, so it belongs in the list. It is the ONLY jsonb column that does — never add one to a
+  // query that also selects `arms`, which is base64 screenshots and times the request out.
   const GUIDE_LIST_BASE = [
     'id', 'source_trajectory_id', 'title', 'goal', 'task_style',
     'agent_completed', 'in_study', 'task_index', 'step_count', 'updated_at',
+    'guide_ground_truth',
   ];
   const GUIDE_LIST_COLUMNS = GUIDE_LIST_BASE.concat('claims_completion').join(',');
   // Retried without it when supabase_v2_faithfulness.sql has not been applied yet: the panel is more
@@ -195,6 +248,11 @@
       type: row.task_style === 'guide_visual' ? 'GUIDE × VISUAL' : 'GUIDE × TEXT',
       // The authored answer key. A task whose key is null is never dealt — see pickGuideTask.
       agentCompleted: typeof row.agent_completed === 'boolean' ? row.agent_completed : null,
+      groundTruth: row.guide_ground_truth && typeof row.guide_ground_truth === 'object'
+        ? row.guide_ground_truth : {},
+      // Why it is keyed incorrect, for the Admin chip and the per-mode accuracy split. Derived, not
+      // stored: nothing new is authored, so there is nothing new to keep in sync.
+      failureMode: window.FindV2GuideKey.failureMode(row.guide_ground_truth, row.agent_completed),
       in_study: row.in_study === true,
       task_index: Number(row.task_index) || 0,
       stepCount: Number(row.step_count) || 0,
@@ -271,6 +329,22 @@
     return row;
   }
 
+  /**
+   * The failure-mode classification for one Guide task.
+   *
+   * SEPARATE FROM saveGuideMeta on purpose. That one writes the four judged fields through
+   * save_pageguide_guide_v2_meta; this writes `guide_ground_truth.problems`, which is a different
+   * fact with a different owner — the recorder writes the rest of that object and this must not
+   * touch it.
+   */
+  async function saveGuideProblems(password, id, problems) {
+    return rpc('save_pageguide_guide_v2_problems', {
+      p_password: password,
+      p_id: id,
+      p_problems: Array.isArray(problems) ? problems.filter(Boolean) : [],
+    });
+  }
+
   async function saveGuideMeta(password, meta) {
     return rpc('save_pageguide_guide_v2_meta', {
       p_password: password,
@@ -341,8 +415,43 @@
    * run supabase_v2_flags.sql yet gets the short study, not a welcome screen
    * that refuses to start.
    */
+  // Two minutes, matching the column default — what a project answers before
+  // supabase_v2_task_limit.sql has been applied and the RPC returns no such field.
+  const DEFAULT_TASK_LIMIT_SECONDS = 120;
+
+  // The queue designs the site can deal. An unknown value — a project written to by hand, or one
+  // running a newer site than this browser — maps to the default rather than throwing: a welcome
+  // screen that refuses to start is worse than a sitting dealt under the documented default.
+  const QUEUE_DESIGNS = ['balanced_2x2', 'legacy_find3'];
+  const DEFAULT_QUEUE_DESIGN = 'balanced_2x2';
+
+  function queueDesignOf(row) {
+    const value = String(row?.queue_design || '');
+    return QUEUE_DESIGNS.includes(value) ? value : DEFAULT_QUEUE_DESIGN;
+  }
+
+  function taskLimitOf(row) {
+    const value = Number(row?.task_limit_seconds);
+    if (!Number.isFinite(value)) return DEFAULT_TASK_LIMIT_SECONDS;
+    return Math.min(900, Math.max(30, Math.round(value)));
+  }
+
   async function getStudyFlags() {
-    const fallback = { collectEvidence: false, collectFollowup: false };
+    const fallback = {
+      collectEvidence: false,
+      collectFollowup: false,
+      taskLimitSeconds: DEFAULT_TASK_LIMIT_SECONDS,
+      // OFF, and the same answer a migrated project gives. The chip names an experimental factor the
+      // participant is not asked about, so its absence is the default rather than a degraded mode.
+      showGroupChip: false,
+      // ON. The walkthrough teaches the journey by pointing at the flagged steps, so a project that
+      // has not run the migration yet must not rehearse a screen the study then withholds.
+      flagMilestones: true,
+      // A project that has not run supabase_v2_queue_design.sql answers with the default design,
+      // which is the crossed one — the same answer it will give once the migration lands, so the
+      // study a participant is dealt does not change when the SQL is applied.
+      queueDesign: DEFAULT_QUEUE_DESIGN,
+    };
     let data;
     try { data = await rpc('pageguide_find_v2_study_flags', {}); }
     catch (e) { return fallback; }
@@ -351,19 +460,47 @@
     return {
       collectEvidence: !!row.collect_evidence,
       collectFollowup: !!row.collect_followup,
+      taskLimitSeconds: taskLimitOf(row),
+      queueDesign: queueDesignOf(row),
+      showGroupChip: row.show_group_chip === true,
+      // Absent means on, matching the column default and the fallback above.
+      flagMilestones: row.flag_milestones !== false,
     };
   }
 
   async function saveStudyFlags(password, flags) {
-    const data = await rpc('save_pageguide_find_v2_flags', {
+    const body = {
       p_password: password,
       p_collect_evidence: !!flags?.collectEvidence,
       p_collect_followup: !!flags?.collectFollowup,
-    });
+    };
+    // Omitted rather than sent as null when absent, so a project still on the three-argument
+    // function keeps saving the two booleans instead of failing on an unknown parameter.
+    if (Number.isFinite(Number(flags?.taskLimitSeconds))) {
+      body.p_task_limit_seconds = Math.round(Number(flags.taskLimitSeconds));
+    }
+    // Same rule for the same reason: a project still on the four-argument function keeps saving the
+    // rest rather than failing on a parameter it does not have.
+    if (QUEUE_DESIGNS.includes(String(flags?.queueDesign || ''))) {
+      body.p_queue_design = String(flags.queueDesign);
+    }
+    // Sent only when the caller actually has an opinion, so a browser older than the column keeps
+    // saving the rest instead of failing on a parameter the function does not have.
+    if (typeof flags?.showGroupChip === 'boolean') {
+      body.p_show_group_chip = flags.showGroupChip;
+    }
+    if (typeof flags?.flagMilestones === 'boolean') {
+      body.p_flag_milestones = flags.flagMilestones;
+    }
+    const data = await rpc('save_pageguide_find_v2_flags', body);
     const row = Array.isArray(data) ? data[0] : data;
     return {
       collectEvidence: !!row?.collect_evidence,
       collectFollowup: !!row?.collect_followup,
+      taskLimitSeconds: taskLimitOf(row),
+      queueDesign: queueDesignOf(row),
+      showGroupChip: row?.show_group_chip === true,
+      flagMilestones: row?.flag_milestones !== false,
     };
   }
 
@@ -382,13 +519,23 @@
    * put the question, the page and all four answers at risk of being restored from a stale copy.
    * This writes one path in the jsonb and never touches the rest.
    */
-  async function saveVariantAnchors(password, id, variantKey, anchors) {
-    return rpc('save_pageguide_find_v2_anchors', {
+  /**
+   * One variant's citation anchors, and — only when a reference was deleted — its answer text.
+   *
+   * `p_answer_text` is omitted entirely when null rather than sent as null, so a project that has
+   * not run supabase_v2_answer_edit.sql still resolves the 4-argument overload and re-linking keeps
+   * working. Deleting a reference on such a project fails loudly, which is the right way round: the
+   * alternative is an answer that still shows a citation the anchors no longer have.
+   */
+  async function saveVariantAnchors(password, id, variantKey, anchors, answerText = null) {
+    const body = {
       p_password: password,
       p_id: id,
       p_variant_key: variantKey,
       p_anchors: Array.isArray(anchors) ? anchors : [],
-    });
+    };
+    if (typeof answerText === 'string') body.p_answer_text = answerText;
+    return rpc('save_pageguide_find_v2_anchors', body);
   }
 
   async function listGuideResults(password, limit = 20000) {
@@ -424,12 +571,15 @@
     saveVariantAnchors,
     getStudyFlags,
     saveStudyFlags,
+    QUEUE_DESIGNS,
+    DEFAULT_QUEUE_DESIGN,
     listStudyGuideTasks,
     listAllGuideTasks,
     getGuideTrajectory,
     getGuideInspect,
     getGuideSteps,
     saveGuideMeta,
+    saveGuideProblems,
     insertGuideResult,
   };
 }());

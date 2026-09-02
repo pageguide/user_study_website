@@ -722,6 +722,10 @@ const BEHAVIOR_METRICS = [
   { key: 'text_select_count', column: 'text_select_count', label: 'Selections', short: 'text selections' },
   { key: 'click_count', column: 'click_count', label: 'Clicks', short: 'clicks' },
   { key: 'mouse_move_px', column: 'mouse_move_px', label: 'Mouse travel', short: 'mouse travel' },
+  // APPENDED, never inserted. scripts/figures.mjs relabels this list POSITIONALLY and
+  // scripts/results_table.mjs looks entries up BY LABEL, so a metric added in the middle renames
+  // every one after it without any error to notice.
+  { key: 'reference_click_count', column: 'reference_click_count', label: 'Reference opens', short: 'reference opens' },
 ];
 
 /**

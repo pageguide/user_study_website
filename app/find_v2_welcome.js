@@ -16,7 +16,12 @@
 
   let liveTasks = [];
   let liveGuideTasks = [];
-  let studyFlags = { collectEvidence: false, collectFollowup: false };
+  // The design here is only what a page reads before the flags come back; the study is dealt from
+  // what loadWelcome fetched, and beginStudy snapshots that into the session.
+  let studyFlags = {
+    collectEvidence: false, collectFollowup: false, taskLimitSeconds: 120,
+    queueDesign: 'balanced_2x2',
+  };
   let adminPassword = '';
   let adminClaims = [];
   let editingClaim = null;
@@ -57,6 +62,69 @@
     { correct: true, arm: 'nongrounding' },
     { correct: false, arm: 'nongrounding' },
   ];
+
+  // ── The second design: the 2 × 2 crossed queue ────────────────────────────
+  //
+  // FOUR TASKS, ONE PER CELL of task type × grounding:
+  //
+  //     Find  × Grounded        Find  × Non-grounded
+  //     Guide × Grounded        Guide × Non-grounded
+  //
+  // Group A is text throughout and group B is visual throughout, unchanged — modality stays
+  // between-subjects, and task type and grounding are both within. That is the difference from
+  // FIND_CELLS, where Guide is grounded-only: with no non-grounded Guide task, nothing in the old
+  // queue estimates grounding for the Guide half, and the interaction cannot be asked at all.
+  const CROSSED_CELLS = [
+    { taskType: 'find', arm: 'grounding' },
+    { taskType: 'find', arm: 'nongrounding' },
+    { taskType: 'guide', arm: 'grounding' },
+    { taskType: 'guide', arm: 'nongrounding' },
+  ];
+
+  /**
+   * Whether cell `index` shows a correct run in this sitting.
+   *
+   * TWO THINGS AT ONCE, and both matter:
+   *
+   *   ACROSS SITTINGS — every cell alternates correct → incorrect for consecutive participants of
+   *   the same group, so no cell is stuck on one answer and the pool is not read as "the grounded
+   *   one is always the true one".
+   *
+   *   WITHIN A SITTING — two cells are correct and two are not, so a participant cannot learn on
+   *   task 2 that the agent always fails and answer tasks 3 and 4 without reading. This is the
+   *   failure the old queue's rotating Guide key was already guarding against, applied to all four.
+   *
+   * The Guide half is offset by one so that Find × Grounded and Guide × Grounded do not carry the
+   * same correctness in every sitting. Without the offset the two factors are perfectly correlated
+   * within a participant and "did task type matter?" and "did correctness matter?" would be the
+   * same question asked twice.
+   */
+  function crossedCorrect(cycle, index) {
+    return (Number(cycle) + index + (index >= 2 ? 1 : 0)) % 2 === 0;
+  }
+
+  const DESIGNS = {
+    balanced_2x2: {
+      label: 'Crossed 2 × 2 — Find and Guide, each grounded and non-grounded',
+      short: 'crossed 2 × 2',
+      tasks: 4,
+    },
+    legacy_find3: {
+      label: 'Three Find cells + one grounded Guide task',
+      short: 'three Find + one Guide',
+      tasks: 4,
+    },
+  };
+
+  function designOf(value) {
+    const key = String(value || '');
+    return DESIGNS[key] ? key : (DB.DEFAULT_QUEUE_DESIGN || 'balanced_2x2');
+  }
+
+  /** The design this browser will deal under, from the flags it loaded. */
+  function currentDesign() {
+    return designOf(studyFlags.queueDesign);
+  }
 
   function groupOf(slot) {
     return Number(slot) % 2 === 0 ? 'A' : 'B';
@@ -100,8 +168,78 @@
     return from[Math.floor(cycle / 2) % from.length];
   }
 
-  /** The four tasks this slot is dealt, in order. */
-  function buildQueue(claims, guideTasks, slot) {
+  /**
+   * A guide task of the wanted correctness, not already dealt in this sitting.
+   *
+   * The two fallbacks are ordered, and both are accommodations rather than choices: prefer the
+   * wanted key, then any unused task, then repeat. An authoring gap should cost the balance of one
+   * cell, not a participant's whole session — and the welcome screen names the gap before anyone
+   * sits down, which is where it gets fixed.
+   */
+  function pickGuideFor(pool, cycle, want, taken) {
+    if (!pool.length) return null;
+    const fresh = pool.filter(task => !taken.includes(task.id));
+    const wanted = fresh.filter(task => task.agentCompleted === want);
+    const from = wanted.length ? wanted : (fresh.length ? fresh : pool);
+    return from[Math.floor(Number(cycle) / 2) % from.length] || null;
+  }
+
+  /** The crossed queue: one task per cell of task type × grounding, correctness alternating. */
+  function buildCrossedQueue(claims, guideTasks, slot) {
+    const group = groupOf(slot);
+    const styles = stylesFor(group);
+    const cycle = Math.floor(Number(slot) / 2);
+
+    const findPool = claims.filter(task => task.style === styles.find);
+    const guidePool = guideTasks.filter(task => task.style === styles.guide);
+    const findCells = CROSSED_CELLS.filter(cell => cell.taskType === 'find');
+    const picked = pickClaims(findPool, cycle, findCells.length);
+
+    const queue = [];
+    const takenGuides = [];
+    CROSSED_CELLS.forEach((cell, index) => {
+      const correct = crossedCorrect(cycle, index);
+      if (cell.taskType === 'find') {
+        const task = picked[index];
+        if (!task) return;
+        queue.push({
+          ...task,
+          group,
+          arm: cell.arm,
+          claimCorrect: correct,
+          variantKey: window.FindV2Variants.variantKey(correct, cell.arm),
+          assignedOrder: queue.length,
+        });
+        return;
+      }
+      const guide = pickGuideFor(guidePool, cycle, correct, takenGuides);
+      if (!guide) return;
+      takenGuides.push(guide.id);
+      queue.push({
+        ...guide,
+        group,
+        arm: cell.arm,
+        // THE KEY IS THE TASK'S, NOT THE CELL'S. A Guide run is correct or not because of what the
+        // agent did; the cell says which one this slot ASKED for, and pickGuideFor may have had to
+        // settle. Recording the request rather than the recording would key an answer against a run
+        // the participant never saw.
+        claimCorrect: guide.agentCompleted,
+        variantKey: window.FindV2Variants.variantKey(guide.agentCompleted !== false, cell.arm),
+        assignedOrder: queue.length,
+      });
+    });
+    return queue;
+  }
+
+  /** The four tasks this slot is dealt, in order, under the design the study is set to. */
+  function buildQueue(claims, guideTasks, slot, design) {
+    return designOf(design) === 'legacy_find3'
+      ? buildLegacyQueue(claims, guideTasks, slot)
+      : buildCrossedQueue(claims, guideTasks, slot);
+  }
+
+  /** The original queue: three fixed Find cells, then one grounded Guide task. */
+  function buildLegacyQueue(claims, guideTasks, slot) {
     const group = groupOf(slot);
     const styles = stylesFor(group);
     const cycle = Math.floor(Number(slot) / 2);
@@ -144,16 +282,6 @@
     }
 
     const saved = S.loadLocal();
-    if (saved && saved.idx < saved.queue.length) {
-      const left = saved.queue.length - saved.idx;
-      countChip.textContent = String(saved.queue.length);
-      count.textContent = `${saved.idx} completed · ${left} remaining in this saved Find V2 run.`;
-      say('An unfinished Find V2 run was found on this browser.');
-      start.textContent = 'Continue Find V2 →';
-      start.disabled = false;
-      start.onclick = () => { location.href = 'study.html'; };
-      return;
-    }
 
     try {
       // getStudyFlags never throws — an unmigrated project answers "both off", which is the default
@@ -167,8 +295,49 @@
     }
     if (!studyFlags.collectEvidence) document.getElementById('welcome-step-evidence')?.remove();
 
+    // AN UNFINISHED RUN RESUMES UNDER THE DESIGN IT WAS DEALT UNDER, always — the queue is saved with
+    // the run, and re-dealing it mid-sitting would make task 4 belong to a different experiment from
+    // task 1. What was missing is that nothing SAID so, so a pilot run left on this browser under the
+    // old three-cell queue came back as "Continue →" with no hint that it was not the design now set,
+    // and it looked like the setting had not taken.
+    //
+    // Now it is named, and a stale one can be thrown away. The discard button appears only when the
+    // saved run's design is not the one the study is set to (a run saved before the setting existed
+    // counts, since it was dealt under the old queue by definition) — so a participant mid-sitting
+    // under the current design is never offered a button that destroys their progress.
+    if (saved && saved.idx < saved.queue.length) {
+      const design = currentDesign();
+      const savedDesign = saved.flags?.queueDesign || '';
+      const stale = designOf(savedDesign) !== design || !savedDesign;
+      const left = saved.queue.length - saved.idx;
+      countChip.textContent = String(saved.queue.length);
+      count.textContent = `${saved.idx} completed · ${left} remaining in this saved Find V2 run.`;
+      say(stale
+        ? `This browser has an unfinished run dealt under the ${savedDesign
+            ? DESIGNS[designOf(savedDesign)].short : 'original three Find + one Guide'} queue. `
+          + `The study is now set to deal ${DESIGNS[design].short}. Continuing plays the old queue.`
+        : 'An unfinished Find V2 run was found on this browser.', stale);
+      start.textContent = 'Continue →';
+      start.disabled = false;
+      start.onclick = () => { location.href = 'study.html'; };
+      if (stale) addDiscardButton();
+      return;
+    }
+
     // Every queue is four tasks now, whatever the pools hold, so the chip does not count the pool.
-    countChip.textContent = String(FIND_CELLS.length + (liveGuideTasks.length ? 1 : 0));
+    // Both designs deal four; what differs is how they are split between Find and Guide, which is a
+    // researcher's concern and not something to put in front of a participant.
+    const design = currentDesign();
+    const guideSlots = design === 'legacy_find3' ? 1 : 2;
+    const findSlots = design === 'legacy_find3' ? FIND_CELLS.length : 2;
+    countChip.textContent = String(findSlots + (liveGuideTasks.length ? guideSlots : 0));
+    // The limit chip reads the SETTING, not a number written into the page. A welcome screen
+    // promising three minutes over a two-minute clock is worse than no promise at all.
+    const limitChip = document.getElementById('find-v2-task-limit');
+    if (limitChip) {
+      const seconds = Number(studyFlags.taskLimitSeconds) || 120;
+      limitChip.textContent = seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
+    }
     if (!liveTasks.length) {
       say('Find V2 is configured, but no claim is marked “Use in study” yet.', true);
       count.textContent = 'Open Admin to create or publish a claim.';
@@ -182,22 +351,78 @@
     ['A', 'B'].forEach(group => {
       const styles = stylesFor(group);
       const find = liveTasks.filter(task => task.style === styles.find).length;
-      const guide = liveGuideTasks.filter(task => task.style === styles.guide).length;
-      if (find < FIND_CELLS.length) shortages.push(`group ${group} has ${find} ${styles.find} claim${find === 1 ? '' : 's'} for ${FIND_CELLS.length} slots`);
-      if (!guide) shortages.push(`group ${group} has no ${styles.guide} task`);
+      const guidePool = liveGuideTasks.filter(task => task.style === styles.guide);
+      if (find < findSlots) shortages.push(`group ${group} has ${find} ${styles.find} claim${find === 1 ? '' : 's'} for ${findSlots} slots`);
+      if (!guidePool.length) shortages.push(`group ${group} has no ${styles.guide} task`);
+      // The crossed design deals TWO Guide tasks per sitting and wants one of each key. One task, or
+      // two that agree, means a cell falls back to the wrong correctness — and pickGuideFor would
+      // then repeat a task within the sitting, which is worth knowing before the participant sits.
+      else if (design !== 'legacy_find3') {
+        if (guidePool.length < 2) shortages.push(`group ${group} has 1 ${styles.guide} task for 2 slots`);
+        else if (!guidePool.some(task => task.agentCompleted === true)) shortages.push(`group ${group} has no “completed” ${styles.guide} task`);
+        else if (!guidePool.some(task => task.agentCompleted === false)) shortages.push(`group ${group} has no “did not complete” ${styles.guide} task`);
+      }
     });
+
+    // THE CROSSED QUEUE DEALS ALL FOUR FIND CELLS, and the old one never dealt correct-and-grounded —
+    // so a claim authored under the old design can have that cell empty. resolve() falls back across
+    // the grounding axis rather than rendering a blank answer card, but the fallback is a DIFFERENT
+    // stimulus from the one the cell names, and nothing downstream would say which was shown.
+    if (design !== 'legacy_find3') {
+      const short = liveTasks.filter(task => !window.FindV2Variants.KEYS
+        .every(key => task.authoredVariants?.[key]));
+      if (short.length) {
+        shortages.push(`${short.length} live claim${short.length === 1 ? '' : 's'} `
+          + `${short.length === 1 ? 'is' : 'are'} missing an authored answer variant `
+          + '(the crossed queue deals all four correctness × grounding cells)');
+      }
+    }
 
     // A run with no guide task at all is the un-migrated case, and naming the fix beats listing the
     // symptom twice.
     const noGuideAtAll = !liveGuideTasks.length;
+    // Nothing is said when the set is healthy. "Find V2 is ready" told a PARTICIPANT that the
+    // apparatus works, which is not their concern and is one more sentence between them and the
+    // task; the gaps below are still reported, because those a researcher needs to see.
     say(noGuideAtAll
       ? 'Ready — Find only. No Guide task is available yet; run supabase_v2_guide.sql, then scripts/migrate_guide_v2.mjs, then tag them in Admin → Guide tasks.'
-      : (shortages.length ? `Ready, with gaps: ${shortages.join('; ')}.` : 'Find V2 is ready.'),
+      : (shortages.length ? `Ready, with gaps: ${shortages.join('; ')}.` : ''),
     !!shortages.length);
-    count.textContent = `Each participant gets ${FIND_CELLS.length} Find claims and `
-      + `${liveGuideTasks.length ? '1 Guide task' : 'no Guide task yet'} · groups A (text) and B (visual) alternate automatically.`;
+    // Also silent. How the queue is composed and which group a sitting lands in are the researcher's
+    // business, and telling a participant that groups "alternate automatically" invites them to
+    // wonder which one they got — see the Group chip in the task pane, which is where that belongs.
+    count.textContent = '';
     start.disabled = false;
     start.onclick = beginStudy;
+  }
+
+  /**
+   * Throw away the saved run and deal a fresh one under the current design.
+   *
+   * Deliberately a second, quieter control rather than a mode of the Start button: it destroys work,
+   * and a participant who pressed the wrong one would lose their answers and be re-assigned a slot.
+   * Only rendered when the saved run's design is not the one now set — see the note at the call.
+   */
+  function addDiscardButton() {
+    const actions = document.querySelector('.welcome-actions');
+    if (!actions || document.getElementById('v2-discard-saved')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'welcome-id-toggle';
+    button.id = 'v2-discard-saved';
+    button.textContent = 'Discard it and start a new run';
+    button.onclick = () => {
+      if (button.dataset.armed !== 'true') {
+        // One confirmation, in the button itself: a window.confirm on the welcome screen is a modal a
+        // participant can dismiss without reading, and this is not a participant's decision anyway.
+        button.dataset.armed = 'true';
+        button.textContent = 'Discard the saved answers — click again to confirm';
+        return;
+      }
+      S.clearLocal();
+      location.reload();
+    };
+    actions.appendChild(button);
   }
 
   async function beginStudy() {
@@ -237,7 +462,9 @@
       // session and an older row still read the same field.
       arm: 'grounding',
       group: groupOf(assignment.assignmentSlot),
-      queue: buildQueue(liveTasks, liveGuideTasks, assignment.assignmentSlot),
+      // `admin` walks the same queue a participant gets, with ← → and nothing recorded.
+      previewNav: S.isPreviewId(participantId),
+      queue: buildQueue(liveTasks, liveGuideTasks, assignment.assignmentSlot, currentDesign()),
       idx: 0,
       results: [],
       startedAt: Date.now(),
@@ -311,7 +538,6 @@
     document.getElementById('find-v2-admin-login').onclick = submit;
     field.onkeydown = event => { if (event.key === 'Enter') submit(); };
     document.getElementById('find-v2-admin-close').onclick = () => {
-      showV1Link(false);
       adminPanel.hidden = true;
       adminPanel.innerHTML = '';
     };
@@ -330,24 +556,27 @@
     renderAdminShell();
   }
 
-  /** The V1 study is a researcher's door, not a participant's. Shown only while Admin is open. */
-  function showV1Link(on) {
-    const link = document.getElementById('find-v1-link');
-    if (link) link.hidden = !on;
-  }
 
   function renderAdminShell() {
-    showV1Link(true);
     adminPanel.innerHTML = `
       <div class="admin-title">🔓 Find V2 Admin <span class="admin-warn">changes V2 only</span></div>
       <div class="admin-tabs">
         <button class="admin-tab${adminTab === 'claims' ? ' admin-tab-on' : ''}" data-v2-tab="claims">Edit claims</button>
         <button class="admin-tab${adminTab === 'results' ? ' admin-tab-on' : ''}" data-v2-tab="results">Results</button>
         <button class="admin-tab${adminTab === 'guide' ? ' admin-tab-on' : ''}" data-v2-tab="guide">Guide tasks</button>
+        <button class="admin-tab${adminTab === 'preview' ? ' admin-tab-on' : ''}" data-v2-tab="preview">Session preview</button>
         <button class="admin-tab${adminTab === 'settings' ? ' admin-tab-on' : ''}" data-v2-tab="settings">Study settings</button>
       </div>
       <div id="find-v2-admin-content"></div>
-      <button class="admin-exit" id="find-v2-admin-exit">Leave Admin</button>`;
+      <div class="admin-row admin-exit-row">
+        <button class="admin-exit" id="find-v2-admin-exit">Leave Admin</button>
+        <!-- INSIDE the unlocked shell, not merely hidden on the welcome page. A hidden <a> is still
+             in the participant's DOM with its href readable, so "hidden" was never the same thing as
+             "behind Admin". Rendered here it does not exist until the password has been checked.
+             NOTE: this controls discoverability, not access — find-v1.html is a static page with its
+             own configuration and anyone typing the URL still reaches it. -->
+        <a class="admin-door" id="find-v1-link" href="find-v1.html">Original V1 study →</a>
+      </div>`;
 
     adminPanel.querySelectorAll('[data-v2-tab]').forEach(button => {
       button.onclick = () => {
@@ -360,12 +589,408 @@
       editingClaim = null;
       adminPanel.hidden = true;
       adminPanel.innerHTML = '';
-      showV1Link(false);
     };
     if (adminTab === 'results') renderResults();
     else if (adminTab === 'settings') renderSettings();
     else if (adminTab === 'guide') renderGuideTasks();
+    else if (adminTab === 'preview') renderSessionPreview();
     else renderClaims();
+  }
+
+  // ── Session preview ──────────────────────────────────────────────────────
+  //
+  // WHAT THE PARTICIPANT ACTUALLY SEES DURING A GUIDE TASK, rendered here rather than described.
+  //
+  // Every other tab in this panel shows the material as the researcher stores it — the answer as a
+  // paragraph, the trail as a list, the journey as thumbnails. None of that is the stimulus. The
+  // stimulus is a two-pane screen with the trail on top, the journey folded away beneath it, a
+  // hover that produces a screenshot in one arm and nothing in the other, and a verdict that cannot
+  // be answered for the first few seconds. Reviewing wording against the storage view is how a
+  // condition gets shipped that reads differently from the one that was designed.
+  //
+  // So this mounts THE REAL RENDERER — app/stimulus.js, the same file study.html drives — against
+  // the real published trajectory, in the real arm. The only facsimile is the question pane on the
+  // right: it is inert markup with the study's own classes, because instrumenting it would start
+  // clocks and offer a Submit that writes nothing, and a preview that pretends to be the task gets
+  // reviewed as though it were one.
+  let previewTasks = null;
+  let previewRecords = new Map();   // id -> trajectory. Each is megabytes of base64; capped below.
+  const PREVIEW_PREFS_KEY = 'pageguide_find_v2_preview_opts';
+
+  function previewDefaults() {
+    return {
+      id: '',
+      arm: 'grounding',
+      trailFirst: true,
+      journeyCollapsed: true,
+      highlight: true,
+    // WHAT IS ON THE PAGE AT ALL, as opposed to how it is arranged. The live study shows all four;
+    // this tab starts with the REASONING TRAIL OFF so the page a participant would face without the
+    // agent's own account of itself can be looked at first, and the trail added back deliberately.
+    // Every switch here is a change to the stimulus, which is why they are their own group and not
+    // mixed in with the layout ones.
+      sections: { states: true, journey: true, answer: true, trail: false },
+    };
+  }
+
+  /**
+   * The saved preview settings, or the defaults.
+   *
+   * LOCAL TO THIS BROWSER, AND ONLY THIS TAB. It is a researcher's bookmark for how they like to
+   * look at the stimulus — it does not touch the study, and a participant's session is unaffected by
+   * anything saved here. The study's own switches live in Study settings and are written to the
+   * database, which is the difference between a preference and a condition.
+   */
+  function loadPreviewOpts() {
+    const base = previewDefaults();
+    let saved;
+    try { saved = JSON.parse(localStorage.getItem(PREVIEW_PREFS_KEY) || 'null'); }
+    catch (e) { saved = null; }   // private mode, or a half-written value: fall back, never throw
+    if (!saved || typeof saved !== 'object') return base;
+    return {
+      ...base,
+      ...saved,
+      // Merged rather than replaced, so a settings blob saved before a section existed does not
+      // arrive with that section undefined and drop it from the page.
+      sections: { ...base.sections, ...(saved.sections || {}) },
+    };
+  }
+
+  let previewOpts = loadPreviewOpts();
+
+  const PREVIEW_SECTIONS = [
+    { key: 'states', label: 'Page before / after', note: 'the two state shots, shown in both arms' },
+    { key: 'journey', label: 'View Journey', note: 'every action, in order' },
+    { key: 'answer', label: 'Agent answer', note: 'the claim being judged' },
+    { key: 'trail', label: 'Reasoning trail', note: 'the agent’s own account — off until you add it' },
+  ];
+
+  const PREVIEW_STAGES = [
+    {
+      pane: 'right', name: 'Condition and group',
+      body: 'Named out loud before anything else. The banner says which arm this task is in and what '
+        + 'is different about it; the chip says which counterbalancing half the sitting is in. A '
+        + 'participant who is not told reads a missing screenshot as a broken page.',
+    },
+    {
+      pane: 'right', name: 'The task the agent was given',
+      body: 'The goal, with the countdown beside it. This is the only statement of what the agent was '
+        + 'supposed to do — everything on the left is what it did instead.',
+    },
+    {
+      pane: 'left', name: 'Page state · before and after',
+      body: 'Shown in BOTH arms. The arms differ in whether each action can be checked, not in '
+        + 'whether the outcome is known.',
+    },
+    {
+      pane: 'left', name: 'Reasoning trail',
+      body: 'The agent’s own account, written after the run, naming the steps it treated as '
+        + 'milestones — some of the journey, not all of it. Deliberately neutral: no status flags, '
+        + 'or it would answer the question for them.',
+    },
+    {
+      pane: 'left', name: 'Agent answer',
+      body: 'The claim being judged. In the grounded arm it carries numbered chips and underlined '
+        + 'phrases that resolve to what the agent saw; in the non-grounded arm it is plain prose.',
+    },
+    {
+      pane: 'left', name: 'View Journey',
+      body: 'Every action, in order, folded shut so the trail is read first. Opening it is a '
+        + 'deliberate act and one of the few navigation events worth measuring. Grounded: hover a row '
+        + 'for the page the agent was looking at, click for full size. Non-grounded: text, and '
+        + 'nothing to hover.',
+    },
+    {
+      pane: 'right', name: 'The verdict',
+      body: 'One question — did the agent complete the task — locked for the first few seconds so it '
+        + 'cannot be answered before the material has been looked at, and force-submitted at the '
+        + 'task limit.',
+    },
+    {
+      pane: 'right', name: 'Follow-up',
+      body: 'Confidence and helpfulness, asked only when the study settings collect them.',
+    },
+  ];
+
+  function previewFlowHtml() {
+    return `
+      <details class="welcome-fold preview-flow">
+        <summary><strong>How a participant moves through a Guide task</strong> — the eight moments, in order</summary>
+        <div class="welcome-fold-body">
+          <ol class="preview-stages">
+            ${PREVIEW_STAGES.map((stage, i) => `
+              <li class="preview-stage is-${stage.pane}">
+                <span class="preview-stage-n">${i + 1}</span>
+                <div>
+                  <b>${esc(stage.name)}</b>
+                  <span class="preview-stage-pane">${stage.pane === 'left' ? 'left pane · the material' : 'right pane · the instrument'}</span>
+                  <p>${esc(stage.body)}</p>
+                </div>
+              </li>`).join('')}
+          </ol>
+          <p class="viz-note"><b>The gestures</b>, all of them grounded-arm only except the last:
+            hover a journey row → the page at that step · click a row → full-size · hover a numbered
+            chip in the answer → the evidence behind that clause · hover a trail milestone → its step’s
+            picture · <b>ⓘ</b> beside any section heading → what that section is, in both arms.</p>
+        </div>
+      </details>`;
+  }
+
+  /** The task picker, the arm switch and the three layout switches. */
+  function previewControlsHtml(tasks) {
+    const opt = (task) => `
+      <option value="${esc(task.id)}"${task.id === previewOpts.id ? ' selected' : ''}>
+        ${task.task_style === 'guide_visual' ? 'B · visual' : 'A · text'} —
+        ${esc(task.goal || task.title || task.id)}
+        ${task.agent_completed === true ? '— keyed CORRECT' : task.agent_completed === false ? '— keyed INCORRECT' : ''}
+      </option>`;
+    return `
+      <div class="preview-controls">
+        <label class="preview-field">
+          <span class="welcome-label">Guide task</span>
+          <select class="welcome-input" id="preview-task">${tasks.map(opt).join('')}</select>
+        </label>
+        <div class="preview-field">
+          <span class="welcome-label">Arm</span>
+          <div class="preview-chips">
+            <button class="admin-chip${previewOpts.arm === 'grounding' ? ' admin-chip-on' : ''}" data-preview-arm="grounding">Grounded</button>
+            <button class="admin-chip${previewOpts.arm === 'nongrounding' ? ' admin-chip-on' : ''}" data-preview-arm="nongrounding">Non-grounded</button>
+          </div>
+        </div>
+        <div class="preview-field preview-field-wide">
+          <span class="welcome-label">Include on the page</span>
+          <div class="preview-chips">
+            ${PREVIEW_SECTIONS.map(section => `
+              <label class="preview-toggle preview-section${previewOpts.sections[section.key] ? ' is-in' : ''}"
+                title="${esc(section.note)}">
+                <input type="checkbox" data-preview-section="${section.key}"${previewOpts.sections[section.key] ? ' checked' : ''}>
+                ${esc(section.label)}</label>`).join('')}
+          </div>
+        </div>
+        <div class="preview-field">
+          <span class="welcome-label">Layout</span>
+          <div class="preview-chips">
+            <label class="preview-toggle"><input type="checkbox" data-preview-flag="trailFirst"${previewOpts.trailFirst ? ' checked' : ''}> Trail first</label>
+            <label class="preview-toggle"><input type="checkbox" data-preview-flag="journeyCollapsed"${previewOpts.journeyCollapsed ? ' checked' : ''}> Journey folded</label>
+            <label class="preview-toggle is-proposal"><input type="checkbox" data-preview-flag="highlight"${previewOpts.highlight ? ' checked' : ''}> Flag the trail’s steps in the journey</label>
+          </div>
+        </div>
+        <div class="preview-field preview-save">
+          <span class="welcome-label">These settings</span>
+          <div class="preview-chips">
+            <button class="admin-chip" id="preview-save">Save as my default</button>
+            <button class="admin-chip" id="preview-reset">Reset</button>
+            <span class="welcome-status" id="preview-save-status"></span>
+          </div>
+        </div>
+      </div>
+      <p class="viz-note"><b>Include</b> decides what is on the page at all — each box is a different
+        stimulus, not a different view of one. The live study shows all four; the <b>reasoning trail
+        starts unticked here</b>, so the screen can be read first without the agent’s account of
+        itself and the trail added back deliberately. Dropping the answer leaves nothing to judge,
+        which is worth seeing once. <b>Layout</b> only rearranges what is included — trail first and
+        journey folded are what the live study ships.</p>
+      <p class="viz-note"><b>Flag the trail’s steps</b> is on by default in this tab and <b>off in the
+        live study</b>: it marks the journey rows the reasoning trail accounts for as
+        <b>important milestone</b>. Before turning it on for participants, note that it is a second
+        manipulation stacked on grounding, and that it points at the steps the agent chose to
+        narrate — which, for a run that misreports what it saw, is exactly where the discrepancy is
+        not. It still draws with the trail switched off, worded as the agent’s milestones rather than
+        as the trail’s.</p>
+      <p class="viz-note"><b>Save as my default</b> keeps this arrangement in this browser for the
+        next time the tab is opened. It is a bookmark for looking at the stimulus and changes nothing
+        a participant sees — the study’s own switches are in <b>Study settings</b>.</p>`;
+  }
+
+  /** The right pane, as inert markup. Same classes as the live instrument, no clocks, no submit. */
+  function previewQuestionPaneHtml(task) {
+    const arm = previewOpts.arm;
+    const group = task?.task_style === 'guide_visual' ? 'B' : 'A';
+    const limit = Number(studyFlags.taskLimitSeconds) || 120;
+    const mmss = `${String(Math.floor(limit / 60)).padStart(2, '0')}:${String(limit % 60).padStart(2, '0')}`;
+    const copy = arm === 'nongrounding'
+      ? { label: 'Non-grounded', note: 'no screenshots, and no evidence behind the answer' }
+      : { label: 'Grounded', note: 'each step can be checked against the page' };
+    return `
+      <div class="q-head"><span class="q-title">📘 Review the task</span></div>
+      <div class="q-progress">Task 4/4</div>
+      <div class="q-body">
+        <div class="q-task-card">
+          <div class="q-timers">
+            <div class="q-timer-chip">
+              <span class="q-timer-label">Time left</span>
+              <span class="q-timer">${esc(mmss)}</span>
+            </div>
+          </div>
+          <div class="q-task-label">The task the agent was given</div>
+          ${esc(task?.goal || task?.title || '')}
+        </div>
+        <div class="tv-condition ${arm === 'nongrounding' ? 'is-nongrounded' : 'is-grounded'}">
+          <span class="tv-condition-badge"><span class="tv-condition-dot" aria-hidden="true"></span>${esc(copy.label)}</span>
+          <span class="tv-condition-note">${esc(copy.note)}</span>
+        </div>
+        <div class="tv-group">
+          <span class="tv-group-badge">Group ${group}</span>
+          <span class="tv-group-note">${group === 'B' ? 'visual' : 'text'}</span>
+        </div>
+        <div class="q-card">
+          <div class="q-card-head"><span class="q-badge">Q1</span>
+            <p class="q-text">Did the agent successfully complete the task?</p></div>
+          <p class="q-sub q-answer-lock">Read the question and the agent’s answer first — you can respond in <b>5</b>s.</p>
+          <div class="q-options is-locked">
+            <label class="q-opt q-opt-rich"><input type="radio" disabled>
+              <span><b>Yes</b><small>It did the whole job, and its answer matches what it actually did.</small></span></label>
+            <label class="q-opt q-opt-rich"><input type="radio" disabled>
+              <span><b>No</b><small>It did not finish the job, <b>or</b> its answer claims something that did not happen.</small></span></label>
+          </div>
+        </div>
+        <div class="q-actions"><button class="q-btn q-btn-primary" disabled>Submit →</button></div>
+        <p class="viz-note preview-inert">Inert on purpose — no clock runs and nothing is recorded.
+          The left pane is the real renderer against the real trajectory.</p>
+      </div>`;
+  }
+
+  /** Fetch a trajectory once and keep at most two: `arms` is base64 screenshots and runs to megabytes. */
+  async function previewRecord(id) {
+    if (previewRecords.has(id)) return previewRecords.get(id);
+    const record = await DB.getGuideTrajectory(id);
+    if (previewRecords.size >= 2) previewRecords = new Map();
+    previewRecords.set(id, record);
+    return record;
+  }
+
+  async function paintPreview() {
+    const stage = document.getElementById('preview-stage');
+    const panel = document.getElementById('preview-question');
+    if (!stage || !panel) return;
+    const task = (previewTasks || []).find(t => t.id === previewOpts.id);
+    panel.innerHTML = previewQuestionPaneHtml(task);
+    stage.innerHTML = '<div class="tv-empty">Loading the trajectory…</div>';
+    let record;
+    try { record = await previewRecord(previewOpts.id); }
+    catch (error) {
+      stage.innerHTML = `<div class="tv-empty">${esc(error.message || String(error))}</div>`;
+      return;
+    }
+    // Re-read the stage: an await means the tab may have been left and re-rendered under us.
+    const live = document.getElementById('preview-stage');
+    if (!live) return;
+    window.Stimulus.mountStimulus(record, previewOpts.arm, {
+      goal: document.createElement('h1'),
+      count: document.createElement('div'),
+      stage: live,
+    }, {
+      trailFirst: previewOpts.trailFirst,
+      journeyCollapsed: previewOpts.journeyCollapsed,
+      highlightMilestones: previewOpts.highlight,
+      sections: previewOpts.sections,
+    });
+
+    // SAY WHICH ONE IS ON SCREEN. Most tasks carry only a recorded grounded arm, and the
+    // non-grounded one is derived at render by _stripGuideArm — the same rule the extension applies,
+    // and the definition of the arm rather than a substitute for it. A researcher reading the left
+    // pane should know whether they are looking at authored material or at the strip of it.
+    const derived = previewOpts.arm === 'nongrounding' && !record?.arms?.nongrounding;
+    const label = document.getElementById('preview-source');
+    if (label) {
+      label.textContent = derived
+        ? 'Non-grounded arm derived from the recorded grounded one — steps as text, no screenshots, no evidence.'
+        : `Recorded ${previewOpts.arm === 'nongrounding' ? 'non-grounded' : 'grounded'} arm, as published.`;
+      label.className = `viz-note preview-source${derived ? ' is-derived' : ''}`;
+    }
+  }
+
+  async function renderSessionPreview() {
+    const content = document.getElementById('find-v2-admin-content');
+
+    // The renderer is the point of this tab; without it the tab would draw a mock-up, which is the
+    // one thing it exists not to do.
+    if (!window.Stimulus?.mountStimulus) {
+      content.innerHTML = `<p class="welcome-status welcome-status-bad">The trajectory viewer is not
+        loaded. index.html must include <code>styles/stimulus.css</code> and
+        <code>app/stimulus.js</code> for this tab to show the real participant view.</p>`;
+      return;
+    }
+
+    content.innerHTML = '<div class="viz-loading">Loading the Guide tasks…</div>';
+    if (!previewTasks) {
+      try { previewTasks = (await DB.listAllGuideTasks()).filter(row => row.in_study); }
+      catch (error) {
+        previewTasks = null;
+        content.innerHTML = `<p class="welcome-status welcome-status-bad">${esc(error.message || String(error))}</p>`;
+        return;
+      }
+    }
+
+    if (!previewTasks.length) {
+      content.innerHTML = `<p class="viz-note">No Guide task is in the study yet, so there is nothing
+        a participant would see. Tag one in <b>Guide tasks</b> first.</p>`;
+      return;
+    }
+
+    if (!previewTasks.some(task => task.id === previewOpts.id)) previewOpts.id = previewTasks[0].id;
+
+    content.innerHTML = `
+      <p class="viz-note">The Guide task as a participant meets it: the real left pane, rendered by
+        the same <code>app/stimulus.js</code> the study runs, against the published trajectory in the
+        arm you pick. The right pane is a still of the instrument.</p>
+      ${previewFlowHtml()}
+      ${previewControlsHtml(previewTasks)}
+      <p class="viz-note preview-source" id="preview-source"></p>
+      <div class="preview-frame">
+        <div class="preview-pane-label">Left pane — the material</div>
+        <div class="preview-pane-label">Right pane — the instrument</div>
+        <section class="preview-stimulus"><main class="tv-main">
+          <section class="tv-stage" id="preview-stage"></section>
+        </main></section>
+        <aside class="preview-question task-panel" id="preview-question"></aside>
+      </div>`;
+
+    content.querySelector('#preview-task').onchange = (e) => {
+      previewOpts.id = e.target.value;
+      void paintPreview();
+    };
+    content.querySelectorAll('[data-preview-arm]').forEach(button => {
+      button.onclick = () => {
+        previewOpts.arm = button.dataset.previewArm;
+        renderSessionPreview();
+      };
+    });
+    // A full re-render, not a repaint: the checkbox's own on/off styling lives in the markup, and
+    // the flag legend's wording depends on whether the trail is on the page.
+    const saveStatus = content.querySelector('#preview-save-status');
+    content.querySelector('#preview-save').onclick = () => {
+      try {
+        localStorage.setItem(PREVIEW_PREFS_KEY, JSON.stringify(previewOpts));
+        saveStatus.textContent = 'Saved for this browser.';
+        saveStatus.className = 'welcome-status';
+      } catch (error) {
+        saveStatus.textContent = `Could not save: ${error.message || error}`;
+        saveStatus.className = 'welcome-status welcome-status-bad';
+      }
+    };
+    content.querySelector('#preview-reset').onclick = () => {
+      try { localStorage.removeItem(PREVIEW_PREFS_KEY); } catch (e) { /* nothing to clear */ }
+      const id = previewOpts.id;
+      previewOpts = previewDefaults();
+      previewOpts.id = id;          // the task on screen is not one of the settings being reset
+      renderSessionPreview();
+    };
+
+    content.querySelectorAll('[data-preview-section]').forEach(box => {
+      box.onchange = () => {
+        previewOpts.sections[box.dataset.previewSection] = box.checked;
+        renderSessionPreview();
+      };
+    });
+    content.querySelectorAll('[data-preview-flag]').forEach(box => {
+      box.onchange = () => {
+        previewOpts[box.dataset.previewFlag] = box.checked;
+        void paintPreview();
+      };
+    });
+
+    await paintPreview();
   }
 
   function blankVariants() {
@@ -732,26 +1357,53 @@
         const row = editingClaim;
         if (!row?.id) return;
         const dealt = V.parseKey(key);
-        S.state.participantId = 'admin-review';
-        S.state.variantKey = key;
-        S.state.adminReview = true;
-        S.state.idx = 0;
-        S.state.results = [];
-        S.state.queue = [{
-          id: row.id,
+        const entry = (claim) => ({
+          id: claim.id,
           taskType: 'find',
           studyVersion: 'find-v2',
-          title: row.title || '',
-          url: row.url || '',
-          type: row.task_style === 'find_text' ? 'FIND × TEXT' : 'FIND × VISUAL',
-          question: row.question || '',
-          style: row.task_style,
+          title: claim.title || '',
+          url: claim.url || '',
+          type: claim.task_style === 'find_text' ? 'FIND × TEXT' : 'FIND × VISUAL',
+          question: claim.question || '',
+          style: claim.task_style,
           arm: dealt.condition,
           claimCorrect: dealt.correct,
           variantKey: key,
+          // What adminTaskLabel prints HELD OUT from, and what adminNavHtml warns on.
+          inStudy: claim.in_study === true,
           answer: '',
           distractors: [],
-        }];
+        });
+
+        // THE WHOLE STUDY SET, not just the claim that was clicked.
+        //
+        // This used to queue one claim, so "Next" had nowhere to go and the jump list had a single
+        // entry — which made a screen built for walking a set behave like a dead end. Checking
+        // references is work you do across the set: a snapshot is re-captured or an answer re-worded
+        // and several claims need re-linking, and going back to Admin between each one reloads the
+        // panel and loses your place.
+        //
+        // LIVE CLAIMS ONLY, in the order participants meet them, because those are the ones whose
+        // references a participant will actually be shown. A held-out claim's links can be fixed
+        // when it goes live.
+        const live = adminClaims
+          .filter(claim => claim.in_study && claim.id)
+          .sort((a, b) => (Number(a.task_index) || 0) - (Number(b.task_index) || 0)
+            || String(a.id).localeCompare(String(b.id)));
+        const queue = live.map(entry);
+
+        // The clicked claim is always reachable, even held out — it is the one the researcher asked
+        // for, and dropping it because it is not live would answer a different request than the one
+        // the button made. It goes first so review opens where it was opened from.
+        let at = queue.findIndex(task => task.id === row.id);
+        if (at < 0) { queue.unshift(entry(row)); at = 0; }
+
+        S.state.participantId = 'admin-review';
+        S.state.variantKey = key;
+        S.state.adminReview = true;
+        S.state.idx = at;
+        S.state.results = [];
+        S.state.queue = queue;
         S.saveReview();
         // Same tab, so the admin password in sessionStorage travels with it — that is what lets the
         // task screen save a re-link without asking for it again.
@@ -836,6 +1488,8 @@
       return;
     }
 
+    const design = designOf(flags.queueDesign);
+
     const row = (id, on, title, detail) => `
       <label class="q-opt q-opt-rich admin-setting">
         <input type="checkbox" id="${id}"${on ? ' checked' : ''}>
@@ -843,8 +1497,7 @@
       </label>`;
 
     content.innerHTML = `
-      <p class="viz-note">What every participant is asked, beyond the Yes/No verdict. Both are off by
-        default. A change applies to runs <b>started after</b> it is saved — a session in progress
+      <p class="viz-note">What every participant is asked and told, beyond the Yes/No verdict. A change applies to runs <b>started after</b> it is saved — a session in progress
         keeps the protocol it began with.</p>
       <div class="admin-settings">
         ${row('v2-collect-evidence', flags.collectEvidence,
@@ -852,18 +1505,99 @@
           'Adds the two “point at what supports it” questions after the verdict — a sentence and, on '
           + 'a FIND × VISUAL claim, an image. While this is off, <code>evidence_time_ms</code> and the '
           + '<code>score_evidence_*</code> columns stay null and <code>evidence_responses</code> is empty.')}
+        ${row('v2-flag-milestones', flags.flagMilestones,
+          'Flag the trail’s steps in the journey',
+          'Marks the View Journey rows the reasoning trail accounts for as <b>important milestone</b>, '
+          + 'and counts them on the fold. On by default, and the walkthrough follows it. It is a real '
+          + 'manipulation: it changes where a participant looks first, and it points at the steps the '
+          + 'agent <em>chose</em> to narrate — which, for a run that misreports what it saw, is exactly '
+          + 'where the discrepancy is not.')}
+        ${row('v2-show-group', flags.showGroupChip,
+          'Show participants their group',
+          'Adds a <b>GROUP A · text</b> / <b>GROUP B · visual</b> chip beside the condition banner. '
+          + 'Off by default: it names a factor the participant is not asked about and cannot act on, '
+          + 'and a label saying they are in a group invites them to wonder what the other group is '
+          + 'getting. Useful for piloting and for screenshots. The condition banner is unaffected — '
+          + 'that one says what is on the screen, which a participant does need.')}
         ${row('v2-collect-followup', flags.collectFollowup,
           'Ask the task follow-up',
           'Adds the confidence and usefulness scales and the optional note after each claim. While '
           + 'this is off, <code>confidence</code>, <code>helpfulness</code> and <code>notes</code> stay null.')}
+        <label class="q-opt q-opt-rich admin-setting">
+          <span class="q-opt-body"><span><b>Time per task</b><small>The countdown every task opens
+            on, and the hard cutoff behind it — at zero a participant gets 5 more seconds to choose,
+            and a task that runs those out is stored as unanswered rather than as a No. Between 30
+            and 900 seconds.</small></span></span>
+          <span class="admin-limit">
+            <input type="number" id="v2-task-limit" min="30" max="900" step="10"
+              value="${Number(flags.taskLimitSeconds) || 120}"> seconds
+          </span>
+        </label>
       </div>
-      <p class="viz-note">Scroll, Ctrl-F, text selection, clicks, pointer travel and the per-task
-        timings are recorded either way — the switches change what is <em>asked</em>, not what is
-        <em>observed</em>.</p>
+      <p class="viz-note">Scroll, Ctrl-F, text selection, clicks, pointer travel, whether the
+        references were opened, and the per-task timings are recorded either way — the switches
+        change what is <em>asked</em>, not what is <em>observed</em>.</p>
+
+      <h3 class="admin-subtitle">Which queue a participant is dealt</h3>
+      <p class="viz-note">The one setting here that changes the <b>experiment</b> rather than what is
+        asked within it. It takes effect for sittings started after it is saved; a session already
+        under way keeps the design it began with, and rows already collected were dealt under
+        whichever design was set at the time — so switching mid-study splits the data into two
+        experiments, and only you can say whether that is what you want.</p>
+      <div class="admin-settings" id="v2-design-choice">
+        ${designOptionHtml('balanced_2x2', design,
+          'Crossed 2 × 2 <span class="v2-chip is-grounded">default</span>',
+          'Four tasks: <b>Find × Grounded</b>, <b>Find × Non-grounded</b>, <b>Guide × Grounded</b>, '
+          + '<b>Guide × Non-grounded</b>, each alternating correct and incorrect. Group A is text '
+          + 'throughout, group B visual. Task type and grounding are both within-subjects, so the '
+          + 'grounding effect can be read for the Guide half as well as the Find half.')}
+        ${designOptionHtml('legacy_find3', design,
+          'Three Find cells + one grounded Guide task',
+          'The original V2 queue: Find grounded/incorrect, Find non-grounded/correct, Find '
+          + 'non-grounded/incorrect — there is deliberately no correct-and-grounded Find task — then '
+          + 'one <b>grounded</b> Guide task whose key alternates. Guide is never non-grounded here, '
+          + 'so nothing in it estimates grounding for the Guide half.')}
+      </div>
+      <div id="v2-dealt-tasks">${dealtTasksHtml(design)}</div>
+
+      <h3 class="admin-subtitle">The walkthrough</h3>
+      <p class="viz-note">Two practice tasks, one Find and one Guide, offered once before task 1 and
+        skippable. The material is invented — a pool timetable — and nothing about it is in the
+        study; a practice answer builds no row and never advances the queue. It is offered on a
+        browser that has not seen it, so a researcher who has already taken it needs the second
+        button to be shown it again <b>on this browser</b>.</p>
+      <div class="preview-chips">
+        <a class="admin-chip" href="study.html?tutorial=preview" target="_blank" rel="noopener">Preview the walkthrough ↗</a>
+        <button class="admin-chip" id="v2-tutorial-reset">Show it again on this browser</button>
+        <span class="welcome-status" id="v2-tutorial-status"></span>
+      </div>
+
       <div class="admin-row">
         <button class="welcome-btn" id="v2-save-settings">Save settings</button>
       </div>
       <div class="welcome-status" id="v2-settings-status"></div>`;
+
+    // The table under the choice follows the RADIO, not the saved value — a researcher comparing the
+    // two designs should be able to read what each deals before committing to one. Nothing is written
+    // until Save settings is pressed.
+    const chosenDesign = () => designOf(
+      content.querySelector('input[name="v2-queue-design"]:checked')?.value);
+    content.querySelectorAll('input[name="v2-queue-design"]').forEach(input => {
+      input.onchange = () => {
+        const holder = document.getElementById('v2-dealt-tasks');
+        if (holder) holder.innerHTML = dealtTasksHtml(chosenDesign());
+      };
+    });
+
+    // The walkthrough's "already seen" mark is a localStorage key on whichever browser took it, so
+    // this clears it HERE and says so — it cannot reach a participant's machine, and a button that
+    // implied otherwise would be worse than no button.
+    const tutorialStatus = content.querySelector('#v2-tutorial-status');
+    content.querySelector('#v2-tutorial-reset').onclick = () => {
+      try { localStorage.removeItem('pageguide_find_v2_tutorial_done'); } catch (e) { /* private mode */ }
+      tutorialStatus.textContent = 'Cleared — the next run started in this browser will be offered it.';
+      tutorialStatus.className = 'welcome-status';
+    };
 
     const statusEl = document.getElementById('v2-settings-status');
     const setStatus = (message, bad = false) => {
@@ -876,15 +1610,28 @@
       button.disabled = true;
       setStatus('Saving…');
       try {
+        const seconds = Number(document.getElementById('v2-task-limit').value);
+        if (!Number.isFinite(seconds) || seconds < 30 || seconds > 900) {
+          button.disabled = false;
+          return setStatus('Time per task must be between 30 and 900 seconds.', true);
+        }
         const saved = await DB.saveStudyFlags(adminPassword, {
           collectEvidence: document.getElementById('v2-collect-evidence').checked,
           collectFollowup: document.getElementById('v2-collect-followup').checked,
+          taskLimitSeconds: Math.round(seconds),
+          queueDesign: chosenDesign(),
+          showGroupChip: document.getElementById('v2-show-group').checked,
+          flagMilestones: document.getElementById('v2-flag-milestones').checked,
         });
         // Reflect what the SERVER stored, not what the boxes said — the two differ if a write is
         // rejected, and a panel that reports its own optimism is how a pilot runs the wrong protocol.
         studyFlags = saved;
         setStatus(`Saved. Evidence: ${saved.collectEvidence ? 'on' : 'off'} · Follow-up: `
-          + `${saved.collectFollowup ? 'on' : 'off'}.`);
+          + `${saved.collectFollowup ? 'on' : 'off'} · ${saved.taskLimitSeconds}s per task · queue: `
+          + `${DESIGNS[designOf(saved.queueDesign)].short} · group chip: `
+          + `${saved.showGroupChip ? 'shown' : 'hidden'} · milestones: `
+          + `${saved.flagMilestones ? 'flagged' : 'not flagged'}.`
+          + ' Runs already in progress keep the protocol they started with.');
       } catch (error) {
         setStatus(error.message || String(error), true);
       }
@@ -998,6 +1745,11 @@
             claimsCompletion: (rows.find(r => r.id === id) || {}).claims_completion,
             taskIndex: Number(card.querySelector(`input[data-guide-order="${CSS.escape(id)}"]`).value) || 0,
           });
+          // A SECOND WRITE, because it is a second fact with a different owner: the meta writer sets
+          // the four judged fields, this sets the recorder's problems[]. Sent after the meta save so
+          // a rejected key (no answer key, honest failure, empty arms) stops before either lands.
+          const problem = card.querySelector(`select[data-guide-problem="${CSS.escape(id)}"]`);
+          if (problem) await DB.saveGuideProblems(adminPassword, id, problem.value ? [problem.value] : []);
           await renderGuideTasks();
         } catch (error) {
           statusEl.textContent = error.message || String(error);
@@ -1056,10 +1808,202 @@
    * is a group B row and can be nothing else. Adding a column to store it again would give the
    * dashboard a second source of truth that could disagree with the first.
    */
+  /**
+   * Whether this participant opened any of the agent's evidence.
+   *
+   * THE MANIPULATION CHECK. The grounded arm is defined by the evidence being there to check, and
+   * without this a null result has two opposite readings — grounding does not help, or nobody
+   * looked. Clicks and dwelled hovers are shown apart because they are different gestures: hovering
+   * a step is how the Guide viewer is meant to be read, clicking a chip is a deliberate lookup.
+   */
+  function refsCellHtml(row) {
+    const clicks = Number(row.reference_click_count);
+    const hovers = Number(row.reference_hover_count);
+    const distinct = Number(row.reference_distinct_count);
+    const first = Number(row.reference_first_ms);
+    // Null across the board means the instrumentation never ran — not that nothing was opened.
+    if (!Number.isFinite(clicks) && !Number.isFinite(hovers)) {
+      return '<td class="q-sub" title="No interaction telemetry on this row">—</td>';
+    }
+    const total = (Number.isFinite(clicks) ? clicks : 0) + (Number.isFinite(hovers) ? hovers : 0);
+    if (!total) {
+      return `<td><span class="v2-chip is-none-opened" title="${
+        row.condition === 'nongrounding'
+          ? 'Non-grounded: there were no references to open.'
+          : 'Grounded, and none was opened — the participant judged without checking.'
+      }">none</span></td>`;
+    }
+    const bits = [];
+    if (Number.isFinite(clicks) && clicks) bits.push(`${clicks} click${clicks === 1 ? '' : 's'}`);
+    if (Number.isFinite(hovers) && hovers) bits.push(`${hovers} hover${hovers === 1 ? '' : 's'}`);
+    if (Number.isFinite(distinct) && distinct) bits.push(`${distinct} distinct`);
+    const when = Number.isFinite(first) ? ` · first at ${(first / 1000).toFixed(1)}s` : '';
+    return `<td class="q-sub">${esc(bits.join(' · '))}${esc(when)}</td>`;
+  }
+
+  /**
+   * The manipulation check as one number, per arm.
+   *
+   * REPORTED SEPARATELY, never pooled. A non-grounded row has no references to open, so its zero is
+   * structural; a grounded row's zero is behavioural. One percentage over both would average those
+   * two different facts into a number that means neither.
+   */
+  function referenceUseHtml(rows) {
+    const withTelemetry = rows.filter(r => Number.isFinite(Number(r.reference_click_count))
+      || Number.isFinite(Number(r.reference_hover_count)));
+    if (!withTelemetry.length) return '';
+    const opened = r => (Number(r.reference_click_count) || 0) + (Number(r.reference_hover_count) || 0) > 0;
+    const cell = (arm, label) => {
+      const set = withTelemetry.filter(r => (r.condition === 'nongrounding') === (arm === 'nongrounding'));
+      const pct = set.length ? `${Math.round(100 * set.filter(opened).length / set.length)}%` : '—';
+      return `<div><b>${pct}</b><span>${esc(label)} · n=${set.length}</span></div>`;
+    };
+    return `
+      <p class="viz-note">Did anyone actually open the evidence? The grounded arm is defined by its
+        being there to check, so a null result means nothing until this number is known. The
+        non-grounded figure is the floor: those tasks have no references, and anything above zero
+        there is the before/after pair, which both arms are shown.</p>
+      <div class="find-v2-result-summary">
+        ${cell('grounding', 'grounded · opened ≥1')}
+        ${cell('nongrounding', 'non-grounded · opened ≥1')}
+        <div><b>${withTelemetry.length}</b><span>rows with telemetry</span></div>
+      </div>`;
+  }
+
+  /**
+   * The four tasks a sitting is dealt, spelled out.
+   *
+   * READ FROM FIND_CELLS AND buildQueue, not written out beside them. The protocol is defined by
+   * those two, and a hand-kept description of it is a second definition that drifts — this table is
+   * generated from the same array the queue is, so it cannot say something the study does not do.
+   *
+   * The gaps are as informative as the rows. There is no Find × Correct × Grounded cell: the design
+   * deals three of the four, on purpose. And Guide is grounded-only, so the arm never varies there —
+   * what alternates is its answer key.
+   */
+  /** One queue-design choice. A radio and not a checkbox: the two are alternatives, not switches. */
+  function designOptionHtml(key, current, title, detail) {
+    return `
+      <label class="q-opt q-opt-rich admin-setting">
+        <input type="radio" name="v2-queue-design" value="${key}"${key === current ? ' checked' : ''}>
+        <span class="q-opt-body"><span><b>${title}</b><small>${detail}</small></span></span>
+      </label>`;
+  }
+
+  function dealtTasksHtml(design) {
+    const armLabel = (arm) => (arm === 'nongrounding' ? 'Non-grounded' : 'Grounded');
+    const row = (n, kind, style, correct, arm, note) => `
+      <tr>
+        <td>${n}</td>
+        <td><b>${esc(kind)} × ${esc(style)}</b></td>
+        <td><span class="v2-chip ${correct === null ? '' : correct ? 'is-correct' : 'is-incorrect'}">${
+          correct === null ? 'alternates' : correct ? 'Correct' : 'Incorrect'}</span></td>
+        <td><span class="v2-chip ${arm === 'nongrounding' ? 'is-nongrounded' : 'is-grounded'}">${armLabel(arm)}</span></td>
+        <td class="q-sub">${esc(note)}</td>
+      </tr>`;
+
+    const table = (body) => `
+      <div class="viz-table-wrap"><table class="viz-table">
+        <thead><tr><th>#</th><th>Task</th><th>Answer</th><th>Condition</th><th></th></tr></thead>
+        <tbody>${body}</tbody>
+      </table></div>`;
+
+    const forGroup = (group) => {
+      const styles = stylesFor(group);
+      const find = styles.find === 'find_visual' ? 'Visual' : 'Text';
+      const guide = styles.guide === 'guide_visual' ? 'Visual' : 'Text';
+      const head = `<h4 class="admin-inspect-h">Group ${group} · ${esc(group === 'B' ? 'visual' : 'text')}</h4>`;
+
+      if (design === 'legacy_find3') {
+        return head + table(
+          FIND_CELLS.map((cell, i) => row(i + 1, 'Find', find, cell.correct, cell.arm,
+            i === 0 ? 'walks the live claim pool by slot' : '')).join('')
+          + row(FIND_CELLS.length + 1, 'Guide', guide, null, 'grounding',
+            'grounded only; the key alternates correct → incorrect each sitting in this group'));
+      }
+
+      // The crossed design's correctness is a function of the sitting, so the table shows the two
+      // sittings it alternates between rather than a single "alternates" chip that says nothing
+      // about which cells share an answer.
+      const sitting = (cycle) => table(CROSSED_CELLS.map((cell, i) => row(
+        i + 1,
+        cell.taskType === 'find' ? 'Find' : 'Guide',
+        cell.taskType === 'find' ? find : guide,
+        crossedCorrect(cycle, i),
+        cell.arm,
+        i === 0 ? 'walks the live pool by slot' : '')).join(''));
+
+      return `${head}
+        <p class="q-sub">An even sitting in this group:</p>${sitting(0)}
+        <p class="q-sub">The next one:</p>${sitting(1)}`;
+    };
+
+    const note = design === 'legacy_find3'
+      ? `<p class="viz-note"><b>The missing cell is deliberate.</b> Find deals three of its four
+          correctness × grounding cells — there is no correct-and-grounded Find task — and Guide is
+          grounded-only, so its arm never varies. Accuracy on a correct answer is the false-alarm
+          rate and accuracy on an incorrect one is the catch rate; grounding should move the second
+          without moving the first.</p>`
+      : `<p class="viz-note"><b>Every cell is filled, and correctness alternates twice over.</b> Each
+          cell flips correct → incorrect between consecutive sittings of the same group, and within
+          any one sitting two runs are correct and two are not — so nobody can learn on task 2 that
+          the agent always fails. The Guide half is offset by one so it does not carry the same
+          correctness as the Find half in every sitting; without that, task type and correctness
+          would be perfectly correlated within a participant. Modality stays between-subjects
+          (A text, B visual); task type and grounding are both within.</p>`;
+
+    return `
+      <h3 class="admin-subtitle">What one participant is dealt</h3>
+      <p class="viz-note">Four tasks, in this order, generated from the same cells and
+        <code>buildQueue</code> the study runs — so this cannot describe a protocol the study does
+        not deal. Group is the slot's parity: even slots get A, odd get B.</p>
+      ${forGroup('A')}
+      ${forGroup('B')}
+      ${note}`;
+  }
+
   function groupOfRow(row) {
     return String(row?.task_style || '').endsWith('_visual')
       ? { key: 'B', label: 'B · visual' }
       : { key: 'A', label: 'A · text' };
+  }
+
+  /**
+   * Accuracy split by WHY the run was incorrect — the reason the mode is snapshotted at all.
+   *
+   * MISREPORTED is the item the grounding condition exists to measure: the answer reads clean and
+   * only the trajectory contradicts it. INCOMPLETE is catchable from the outcome alone. If grounding
+   * is doing what the study predicts, it should move the first without needing to move the second,
+   * and the two are therefore reported side by side and NEVER averaged into one accuracy — the same
+   * rule README.md states for detection and localization.
+   *
+   * A mode with no scored rows prints "—", not 0%: nobody has been asked yet, which is not the same
+   * as everybody getting it wrong.
+   */
+  function modeAccuracyHtml(rows) {
+    const modes = ['none', 'misreported', 'incomplete', 'could_not_complete', 'unspecified'];
+    const present = modes.filter(mode => rows.some(r => r.failure_mode === mode));
+    if (!present.length) return '';
+    const cell = (mode) => {
+      const scored = rows.filter(r => r.failure_mode === mode && r.score_verdict_correct != null);
+      const pct = scored.length
+        ? `${(100 * scored.filter(r => r.score_verdict_correct).length / scored.length).toFixed(0)}%`
+        : '—';
+      return `<div><b>${pct}</b><span>${esc(window.FindV2GuideKey.label(mode))} · n=${scored.length}</span></div>`;
+    };
+    return `
+      <p class="viz-note">Verdict accuracy by why the run was incorrect. Reported apart, never
+        averaged: <b>misreported</b> is the item only the trajectory exposes, <b>incomplete</b> is
+        readable from the outcome, and grounding should move the first without needing to move the
+        second.</p>
+      <div class="find-v2-result-summary">${present.map(cell).join('')}</div>`;
+  }
+
+  function modeCellHtml(row) {
+    const mode = row.failure_mode;
+    if (!mode) return '<td class="q-sub">—</td>';
+    if (mode === 'none') return '<td class="q-sub">not a failure item</td>';
+    return `<td><span class="v2-chip is-mode-${esc(mode)}">${esc(window.FindV2GuideKey.label(mode))}</span></td>`;
   }
 
   function groupCellHtml(row) {
@@ -1186,6 +2130,30 @@
       </div>`;
   }
 
+  /**
+   * A stored screenshot, as something an <img> will actually load.
+   *
+   * SCREENSHOTS ARE STORED AS RAW BASE64, with no `data:` prefix — app/fake_page.js strips it at
+   * capture time on purpose, and every renderer puts it back: app/stimulus.js does it twice,
+   * app/study.js and app/welcome.js three more times between them. This inspector was the one place
+   * that forgot, so `src` began with the base64 payload's leading "/9j/…" and the browser read it as
+   * a RELATIVE URL. It fetched /9j/4AAQSkZJRgABAQ… off the origin, got a 404, and drew the broken-
+   * image alt text — which renders as a small box reading "step 1" and looks for all the world like
+   * a deliberate placeholder button rather than a failure.
+   *
+   * A value that already carries the prefix is passed through, so a recorder that starts writing
+   * full data URLs does not double it up.
+   */
+  function shotSrc(shot) {
+    const value = String(shot || '');
+    if (/^data:/.test(value)) return value;
+    // The recorder writes JPEG, and every other renderer hardcodes that. Sniffed from the base64
+    // magic anyway, because a PNG announced as JPEG only works by the browser ignoring what we told
+    // it — and it costs one line to not rely on that.
+    const type = /^iVBORw0KGgo/.test(value) ? 'png' : 'jpeg';
+    return `data:image/${type};base64,${value}`;
+  }
+
   function bindGuideInspect(box, id) {
     // The 📎 chips inside the rendered answer. They are real buttons; nothing was listening.
     box.querySelectorAll(`[data-answer-for="${CSS.escape(id)}"] .find-ev`).forEach(chip => {
@@ -1235,7 +2203,7 @@
                 <div>
                   <div>${esc(step.instruction || step.action || '')}</div>
                   ${step.url ? `<div class="q-sub">${esc(step.url)}</div>` : ''}
-                  ${step.screenshot ? `<img class="admin-journey-shot" src="${esc(step.screenshot)}" alt="step ${esc(String(step.n ?? ''))}">` : '<div class="q-sub">No screenshot saved.</div>'}
+                  ${step.screenshot ? `<img class="admin-journey-shot" src="${esc(shotSrc(step.screenshot))}" alt="step ${esc(String(step.n ?? ''))}">` : '<div class="q-sub">No screenshot saved.</div>'}
                 </div>
               </div>`).join('')}</div>`
           : '<p class="q-sub">No steps recorded for the grounded arm.</p>';
@@ -1254,7 +2222,61 @@
    * — it is a cell the rotation cannot deal, so that group falls back and every participant in it
    * sees the same kind of run. Called out as a gap rather than printed as a quiet 0.
    */
+  /**
+   * WHY a run is keyed incorrect, on the card.
+   *
+   * The derived label and the recorder's raw problem ids together, the same way guideFaithfulness is
+   * shown next to the sentence it judged: a classification a researcher cannot check against its
+   * input is one they have to take on trust.
+   */
+  /**
+   * WHY this run is incorrect — the one thing about a Guide task nothing could previously edit.
+   *
+   * `guide_ground_truth.problems` drives the derived failure mode, the 2x2 board, the per-mode
+   * accuracy split and `failure_mode` on every result row, and until now the only writer was the
+   * recorder's own save path — which rewrites the whole ground-truth object from its payload. A
+   * classification made by hand therefore reverted the next time the run was recorded, with nothing
+   * said. It still will; this is the way to put it back without a script.
+   *
+   * Shown only for a run keyed INCORRECT. A run that completed the task has no failure to classify,
+   * and offering the control there would invite one to be invented.
+   */
+  function failureModeEditorHtml(row) {
+    if (row.agent_completed !== false) return '';
+    const problems = window.FindV2GuideKey.problemsOf(row.guide_ground_truth);
+    const current = problems.includes('hallucinated_result') ? 'hallucinated_result'
+      : problems.includes('wrong_result') ? 'wrong_result'
+      : problems.includes('incomplete') ? 'incomplete'
+      : problems.includes('could_not_complete') ? 'could_not_complete' : '';
+    const opt = (value, label) =>
+      `<option value="${value}"${current === value ? ' selected' : ''}>${esc(label)}</option>`;
+    return `
+      <p class="q-sub">Why is it incorrect? <b>Not asked of the participant</b> — they give one
+        verdict. This is the classification the board and the per-mode accuracy split read, and it is
+        snapshotted onto every result row as <code>failure_mode</code>.</p>
+      <div class="admin-row">
+        <select data-guide-problem="${esc(row.id)}">
+          ${opt('', '— not recorded —')}
+          ${opt('hallucinated_result', 'Misreported — the answer claims what the run does not support')}
+          ${opt('wrong_result', 'Misreported (wrong result) — reported the wrong thing')}
+          ${opt('incomplete', 'Incomplete — only part of the job was done')}
+          ${opt('could_not_complete', 'Could not complete — did not finish, and said so')}
+        </select>
+        <span class="q-sub">recorded as <code>${esc(problems.join(', ') || 'nothing')}</code></span>
+      </div>`;
+  }
+
+  function failureChipHtml(row) {
+    const GK = window.FindV2GuideKey;
+    const mode = GK.failureMode(row.guide_ground_truth, row.agent_completed);
+    if (!mode || mode === 'none') return '';
+    const problems = GK.problemsOf(row.guide_ground_truth);
+    const title = `${GK.note(mode)}${problems.length ? ` · recorded as ${problems.join(', ')}` : ''}`;
+    return `<span class="v2-chip is-mode-${esc(mode)}" title="${esc(title)}">${esc(GK.label(mode))}</span>`;
+  }
+
   function guideBoardHtml(live) {
+    const GK = window.FindV2GuideKey;
     const count = (style, correct) => live.filter(r =>
       r.task_style === style && r.claims_completion !== false && r.agent_completed === correct).length;
     const cell = (style, correct) => {
@@ -1262,6 +2284,31 @@
       return `<td class="${n ? '' : 'is-gap'}"><b>${n}</b>${n ? '' : '<span>no task</span>'}</td>`;
     };
     const total = (style) => count(style, true) + count(style, false);
+
+    // THE INCORRECT ROW SPLIT BY WHY. A group with false successes but none of the misreporting kind
+    // can still run, and would look perfectly healthy on the two rows above — while the one item the
+    // grounding condition exists to measure is missing from it. Indented under INCORRECT because
+    // these are a breakdown of that row, not two more kinds of run.
+    const modeCount = (style, mode) => live.filter(r =>
+      r.task_style === style && r.claims_completion !== false
+      && GK.failureMode(r.guide_ground_truth, r.agent_completed) === mode).length;
+    // A GAP ONLY WHERE ONE MATTERS. Every run that can reach a participant claims completion and is
+    // therefore a misreport — the incomplete and could-not-complete runs are all honest failures,
+    // which are excluded by design. So a zero on the misreported row is a hole in the study set,
+    // while a zero on the others is the design working. Flagging both red taught the board to cry
+    // wolf about the half that can never be filled.
+    const modeRow = (mode, why) => {
+      const gapMatters = mode === 'misreported';
+      const cellFor = (style) => {
+        const n = modeCount(style, mode);
+        if (n) return `<td><b>${n}</b></td>`;
+        return gapMatters
+          ? '<td class="is-gap"><b>0</b><span>no task</span></td>'
+          : '<td class="is-none"><b>0</b><span>not in this design</span></td>';
+      };
+      return `<tr class="guide-board-sub"><th>↳ ${esc(GK.label(mode))}<span>${esc(why)}</span></th>
+        ${cellFor('guide_text')}${cellFor('guide_visual')}</tr>`;
+    };
     return `
       <table class="guide-board">
         <thead><tr>
@@ -1274,6 +2321,8 @@
             ${cell('guide_text', true)}${cell('guide_visual', true)}</tr>
           <tr><th>INCORRECT<span>false success</span></th>
             ${cell('guide_text', false)}${cell('guide_visual', false)}</tr>
+          ${modeRow('misreported', 'only the trajectory shows it')}
+          ${modeRow('incomplete', 'visible in the outcome alone')}
           <tr class="guide-board-total"><th>Total in study</th>
             <td><b>${total('guide_text')}</b></td><td><b>${total('guide_visual')}</b></td></tr>
         </tbody>
@@ -1296,6 +2345,7 @@
           <div class="admin-guide-title">
             <b>${esc(row.goal || row.title || id)}</b>
             <span class="v2-chip ${status.cls}" title="${esc(status.note)}">${esc(status.label)}</span>
+            ${failureChipHtml(row)}
             ${row.in_study ? '<span class="v2-chip is-grounded">In study</span>' : ''}
           </div>
           <span class="q-sub">${esc(id)} · ${Number(row.step_count) || 0} steps · ${esc(status.note)}</span>
@@ -1317,12 +2367,14 @@
           <button class="admin-chip" data-guide-trail="${esc(id)}">Inspect</button>
         </div>
         <div class="admin-guide-trail" data-guide-trail-for="${esc(id)}" hidden></div>
-        <p class="q-sub">Did the agent complete the task? <b>This is the answer key</b> — the
-          participant's Yes/No is scored against it.</p>
+        <p class="q-sub">Did the agent successfully complete the task? <b>This is the answer key</b>
+          — the participant's Yes/No is scored against it, and they are asked it in exactly these
+          words, so a run that finishes the job but misdescribes it is a <b>No</b>.</p>
         <div class="q-options">
-          ${radio('yes', '<b>Yes</b><small>It completed the task.</small>')}
-          ${radio('no', '<b>No</b><small>It did not complete the task.</small>')}
+          ${radio('yes', '<b>Yes</b><small>It did the whole job, and its answer matches what it actually did.</small>')}
+          ${radio('no', '<b>No</b><small>It did not finish the job, <b>or</b> its answer claims something that did not happen.</small>')}
         </div>
+        ${failureModeEditorHtml(row)}
       </div>`;
   }
 
@@ -1377,17 +2429,19 @@
         ${V.KEYS.map(key => `<div><b>${rate(cell(key))}</b>
           <span>${esc(V.LABELS[key])} · n=${cell(key).length}</span></div>`).join('')}
       </div>
+      ${referenceUseHtml(rows)}
       <p class="viz-note">The four cells are the point of the design: accuracy on a correct answer
         is the participant's false-alarm rate, accuracy on an incorrect one is their catch rate, and
         grounding is what should move the second without moving the first.</p>
       <p class="viz-note">${yes} Yes and ${rows.length - yes} No responses. Results are read through
         the password-checked RPC; the anon role has no direct SELECT policy on this table.</p>
       ${rows.length ? `<div class="viz-table-wrap"><table class="viz-table find-v2-results-table">
-        <thead><tr><th>When</th><th>Participant</th><th>Group</th><th>Claim</th><th>Answer shown</th><th>Grounding</th><th>Key</th><th>Answer</th><th>Scored</th><th>Time</th></tr></thead>
+        <thead><tr><th>When</th><th>Participant</th><th>Group</th><th>Claim</th><th>Answer shown</th><th>Grounding</th><th>Refs opened</th><th>Key</th><th>Answer</th><th>Scored</th><th>Time</th></tr></thead>
         <tbody>${rows.slice(0, 1000).map(row => `<tr>
           <td>${esc(new Date(row.created_at).toLocaleString())}</td>
           <td>${esc(row.participant_id)}</td>${groupCellHtml(row)}<td><code>${esc(row.claim_id)}</code></td>
           ${variantCellsHtml(row)}
+          ${refsCellHtml(row)}
           <td>${row.claim_correct_snapshot ? 'Yes' : 'No'}</td>
           <td>${row.participant_verdict == null ? '—' : (row.participant_verdict ? 'Yes' : 'No')}</td>
           <td class="${row.verdict_correct == null ? '' : (row.verdict_correct ? 'is-good' : 'is-bad')}">${
@@ -1430,15 +2484,19 @@
         <div><b>${rows.filter(row => row.task_style === 'guide_text').length}</b><span>group A · text</span></div>
         <div><b>${rows.filter(row => row.task_style === 'guide_visual').length}</b><span>group B · visual</span></div>
       </div>
+      ${modeAccuracyHtml(rows)}
+      ${referenceUseHtml(rows)}
       ${rows.length ? `<div class="viz-table-wrap"><table class="viz-table find-v2-results-table">
-        <thead><tr><th>When</th><th>Participant</th><th>Group</th><th>Task</th><th>Answer shown</th><th>Grounding</th><th>Completed?</th><th>Answer</th><th>Scored</th><th>Time</th></tr></thead>
+        <thead><tr><th>When</th><th>Participant</th><th>Group</th><th>Task</th><th>Why incorrect</th><th>Answer shown</th><th>Grounding</th><th>Refs opened</th><th>Completed?</th><th>Answer</th><th>Scored</th><th>Time</th></tr></thead>
         <tbody>${rows.slice(0, 1000).map(row => `<tr>
           <td>${esc(new Date(row.created_at).toLocaleString())}</td>
           <td>${esc(row.participant_id)}</td>${groupCellHtml(row)}<td><code>${esc(row.task_id)}</code></td>
+          ${modeCellHtml(row)}
           <td><span class="v2-chip ${row.answer_correct_snapshot ? 'is-correct' : 'is-incorrect'}">${
             row.answer_correct_snapshot ? 'Correct' : 'Incorrect'}</span></td>
           <td><span class="v2-chip ${row.condition === 'nongrounding' ? 'is-nongrounded' : 'is-grounded'}">${
             row.condition === 'nongrounding' ? 'Non-grounded' : 'Grounded'}</span></td>
+          ${refsCellHtml(row)}
           <td>${row.answer_correct_snapshot == null ? '—' : (row.answer_correct_snapshot ? 'Yes' : 'No')}</td>
           <td>${row.guide_answer_correct == null ? '—' : (row.guide_answer_correct ? 'Yes' : 'No')}</td>
           <td class="${row.score_verdict_correct == null ? '' : (row.score_verdict_correct ? 'is-good' : 'is-bad')}">${

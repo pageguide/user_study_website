@@ -13,6 +13,12 @@ const IS_FIND_V2 = window.STUDY_VARIANT === 'find-v2';
 // cannot click Yes before the answer they are judging has been read; and once the three-minute limit
 // passes they get this much longer to give one before the task is submitted with none.
 const ANSWER_LOCK_MS = 10 * 1000;
+// How long a preview must be held before it counts as having been looked at. NAMED APART from
+// app/stimulus.js's REFERENCE_DWELL_MS, which owns the value: classic <script> tags share one global
+// lexical scope, and a second top-level `const` of that name is a parse error that kills this entire
+// file — the task page then never boots and both panes stay on "Loading…". Read off the viewer when
+// it is loaded so the two cannot drift; the literal is for the pages that show no trajectory.
+const REFERENCE_DWELL = window.Stimulus?.REFERENCE_DWELL_MS ?? 400;
 const VERDICT_GRACE_MS = 5 * 1000;
 let taskTelemetry = null;
 
@@ -41,8 +47,38 @@ function startTaskTelemetry(task) {
     // Kept as a float and rounded only at snapshot: a slow drag is a long run of sub-pixel steps,
     // and rounding each one to 0 would report a stationary mouse for a pointer that crossed the page.
     mouse_move_px: 0,
+    // DID THEY OPEN THE EVIDENCE? The manipulation check. Clicks and dwelled hovers are kept apart
+    // because they are different gestures with the same meaning — hovering a step IS how the Guide
+    // viewer is read, and folding it into a click count would hide which one happened.
+    reference_click_count: 0,
+    reference_hover_count: 0,
+    // Per kind, jsonb-only: cite, evidence, expand, highlight (Find) · chip, ref, step, state (Guide).
+    reference_kinds: {},
     started_at: Date.now(),
   };
+  // Identities, not tallies: ten clicks on one chip is one reference checked, not ten.
+  const referencesSeen = new Set();
+  let referenceFirstMs = null;
+
+  /**
+   * One reference opened.
+   *
+   * `via` is 'click' or 'hover'. `id` is whatever names this reference within the task — a citation
+   * number, an evidence key, a step number — and only has to be stable, not meaningful.
+   *
+   * REVIEW IS NOT DATA. A researcher walking the task screen to check references would otherwise
+   * write their own behaviour into the participant-facing number this exists to protect.
+   */
+  const countReference = (kind, id, via = 'click') => {
+    if (S.state.adminReview) return;
+    if (via === 'hover') summary.reference_hover_count++;
+    else summary.reference_click_count++;
+    const key = String(kind || 'ref');
+    summary.reference_kinds[key] = (summary.reference_kinds[key] || 0) + 1;
+    referencesSeen.add(`${key}:${id == null ? '' : id}`);
+    if (referenceFirstMs == null) referenceFirstMs = Math.max(0, Date.now() - summary.started_at);
+  };
+
   const cleanups = [];
   const scrollTimers = new WeakMap();
   const onScroll = (target) => {
@@ -100,7 +136,15 @@ function startTaskTelemetry(task) {
       try { doc = frame?.contentDocument; } catch (e) { return; }
       if (!doc) return;
       add(doc, 'scroll', () => onScroll(doc), { passive: true });
-      add(doc, 'click', () => { summary.website_click_count++; }, true);
+      add(doc, 'click', (e) => {
+        summary.website_click_count++;
+        // Clicking the evidence IN THE PAGE — the marks applyFindGrounding draws on the snapshot.
+        // The only place this gesture is observable, and until now it was indistinguishable from a
+        // click on any other paragraph.
+        if (!e.isTrusted) return;
+        const mark = e.target?.closest?.('.pageguide-highlight, .pageguide-highlight-img, [data-pageguide-styled]');
+        if (mark) countReference('highlight', mark.dataset?.pgCite || '', 'click');
+      }, true);
       // The snapshot is where a Find participant does their reading, so its selections and its
       // pointer travel are the ones that matter most — an unwired frame would report the hunt as
       // having happened without a mouse.
@@ -123,9 +167,17 @@ function startTaskTelemetry(task) {
         // The flat column's name and meaning, kept here so the jsonb and the columns cannot drift:
         // every click in the task, either pane, matching study_task_results.click_count.
         click_count: summary.website_click_count + summary.panel_click_count,
+        reference_click_count: summary.reference_click_count,
+        reference_hover_count: summary.reference_hover_count,
+        reference_distinct_count: referencesSeen.size,
+        // Null, not 0: no first open happened. The counts above are genuinely 0 in that case, which
+        // is a finding; a 0 here would read as "opened one immediately".
+        reference_first_ms: referenceFirstMs,
+        reference_kinds: { ...summary.reference_kinds },
         active_ms: Math.max(0, Date.now() - summary.started_at),
       };
     },
+    countReference,
     stop() {
       cleanups.splice(0).forEach(fn => {
         try { fn(); } catch (e) { /* ignore */ }
@@ -133,6 +185,19 @@ function startTaskTelemetry(task) {
     },
   };
 }
+
+/**
+ * The hook app/stimulus.js reports through.
+ *
+ * The Guide viewer is also loaded by V1 and by preview.html, neither of which has this telemetry, so
+ * it calls `window.StudyTelemetry?.reference(...)` and carries on when nothing is listening. Keeping
+ * the dependency one-way means the viewer stays a viewer.
+ */
+window.StudyTelemetry = {
+  reference(kind, id, via) {
+    taskTelemetry?.countReference?.(kind, id, via);
+  },
+};
 
 function taskInteractionSummary() {
   return taskTelemetry ? taskTelemetry.snapshot() : null;
@@ -224,6 +289,14 @@ function conditionBannerHtml(arm, taskType) {
  * and an empty chip there would read as a group that failed to load.
  */
 function groupChipHtml() {
+  // OFF UNLESS THE STUDY ASKS FOR IT. The chip names the counterbalancing half a sitting landed in —
+  // an experimental factor the participant is not asked about and cannot act on, and one that invites
+  // the question the study most needs them not to ask: what is the other group getting, and should I
+  // be answering differently? Kept for piloting and for screenshots, behind a setting.
+  //
+  // The condition banner is not the same thing and is always shown: it says what is ON THE SCREEN, so
+  // a missing screenshot reads as the condition rather than as a fault.
+  if (!S.studyFlags().showGroupChip) return '';
   const group = S.state.group || S.state.queue?.[S.state.idx]?.group || '';
   if (group !== 'A' && group !== 'B') return '';
   return `
@@ -340,6 +413,13 @@ async function boot() {
     return;
   }
   Object.assign(S.state, saved);
+
+  // THE LIMIT THIS RUN BEGAN WITH, applied before the first task paints. It was snapshotted into
+  // state.flags at start and saved with the session, so resuming a run tomorrow keeps the minutes it
+  // was dealt even if Admin has changed them since — the same rule the evidence and follow-up
+  // switches follow, and for the same reason: task 4 must be the same task as task 3.
+  window.TaskTimer.setLimit(S.studyFlags().taskLimitSeconds * 1000);
+
   if (!S.state.runId) {
     S.state.runId = S.newRunId();
     if (!window.STUDY_SOURCE && !S.state.adminReview) S.saveLocal();
@@ -814,6 +894,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
         <button class="q-btn q-btn-primary" id="q-find-next"${askEvidence ? '' : ' hidden'}${IS_FIND_V2 ? ' disabled' : ''}>Next →</button>
         <button class="q-btn q-btn-primary" id="q-find-submit"${askEvidence ? ' hidden' : ''}${IS_FIND_V2 ? ' disabled' : ''}>Submit →</button>
       </div>
+      ${previewNavHtml()}
     </div>`;
 
   bindFindAnswerChips(canned, arm, cites);
@@ -1010,6 +1091,8 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   };
 
   window.Tutorial?.onTaskRendered(task);
+
+  bindPreviewNav();
 }
 
 /**
@@ -1019,6 +1102,18 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
  * was, then which error types at which steps — a taxonomy that takes most of the three minutes. V2
  * asks the verdict and stops. Nothing here should grow back towards mountInstrument without the
  * protocol changing first.
+ *
+ * THE VERDICT COVERS BOTH WAYS A RUN FAILS, which is why the wording names them. A run can fall
+ * short of the job, or it can finish and misdescribe what it saw — and the second is the item the
+ * grounding condition exists to measure, because only the trajectory exposes it. Asked as "did the
+ * agent complete the task?", a participant had no way to know that a fluent, confident, fabricated
+ * answer was a No, so the question served that item worst of all. It is still ONE verdict: adding a
+ * second question would have measured nothing here, since every live run keyed correct and every
+ * run keyed incorrect both claim completion, putting a second key on the diagonal for all of them.
+ *
+ * WHY it failed is not asked. The recorder already wrote it down, so app/find_v2_guide_key.js reads
+ * it off guide_ground_truth and the row carries it — a split for the analysis that costs the
+ * participant no time at all.
  *
  * The left pane leads with the reasoning trail and folds the journey away beneath it, which is the
  * one place this differs from what V1 participants saw — see the layout options on mountStimulus.
@@ -1044,6 +1139,10 @@ async function showGuideV2Task(task, arm) {
   window.Stimulus.mountStimulus(record, arm, mount, {
     trailFirst: true,
     journeyCollapsed: true,
+    // THE SAME FLAG FOR THE PRACTICE AND THE REAL TASK. This renderer serves both, so the
+    // walkthrough cannot teach a screen the study then withholds — which is the one thing a practice
+    // run must not do.
+    highlightMilestones: S.studyFlags().flagMilestones,
   });
   renderGuideV2Questions(task, record, arm);
 }
@@ -1071,16 +1170,17 @@ function renderGuideV2Questions(task, record, arm) {
 
       <div class="q-card">
         <div class="q-card-head"><span class="q-badge">Q1</span>
-          <p class="q-text">Did the agent complete the task?${window.QForm.requiredMark()}</p></div>
+          <p class="q-text">Did the agent successfully complete the task?${window.QForm.requiredMark()}</p></div>
         ${verdictOptionsHtml(['yes', 'no'], opt => (opt === 'yes'
-          ? '<b>Yes</b><small>It completed the task.</small>'
-          : '<b>No</b><small>It did not complete the task.</small>'))}
+          ? '<b>Yes</b><small>It did the whole job, and its answer matches what it actually did.</small>'
+          : '<b>No</b><small>It did not finish the job, <b>or</b> its answer claims something that did not happen.</small>'))}
       </div>
 
       <div class="q-error-msg" id="q-error-msg" hidden></div>
       <div class="q-actions">
         <button class="q-btn q-btn-primary" id="q-find-submit"${IS_FIND_V2 ? ' disabled' : ''}>Submit →</button>
       </div>
+      ${previewNavHtml()}
     </div>`;
 
   const $q = (id) => questionPane.querySelector(`#${id}`);
@@ -1095,6 +1195,9 @@ function renderGuideV2Questions(task, record, arm) {
     await submitGuideV2Result(task, {
       answer: answerValue,
       claimText: answerText,
+      // Read off the record that is on screen, not off the queue: `guide_ground_truth` rides along
+      // with the trajectory fetch, and the classification has to describe the run as it was shown.
+      failureMode: window.FindV2GuideKey.failureMode(record?.guide_ground_truth, task?.agentCompleted),
       answerElapsed: Math.max(0, Date.now() - startedAt),
       answerChoiceMs: answerValue == null ? null : Math.max(0, Date.now() - startedAt),
       interactionSummary: taskInteractionSummary(),
@@ -1123,12 +1226,18 @@ function renderGuideV2Questions(task, record, arm) {
     const sel = questionPane.querySelector('input[name="q-find-answer"]:checked');
     if (!sel) {
       window.QForm.flagMissing([$q('q-find-answer')]);
-      return showError('Please answer the highlighted question: did the agent complete the task?');
+      return showError('Please answer the highlighted question: did the agent successfully complete the task?');
     }
     clearError();
     clocks.settle();
     await finish(sel.value);
   };
+
+  // The walkthrough's orientation card, above the question it is about. The Find half already had
+  // this; the Guide half is the one where knowing what "View Journey" is worth opening matters most.
+  window.Tutorial?.onTaskRendered(task);
+
+  bindPreviewNav();
 }
 
 /** Record the Guide result, then move on. The follow-up is the same one Find asks. */
@@ -1136,6 +1245,10 @@ async function submitGuideV2Result(task, payload) {
   const askFollowup = !!S.studyFlags().collectFollowup;
 
   const finishTask = async (confidence, helpfulness, notes) => {
+    // A practice task is answered in full and then goes nowhere: no row, no write, no idx++. Same
+    // rule the Find half follows in submitFindResult.
+    if (S.state.tutorial?.active) return window.Tutorial.finishPracticeTask(task, payload);
+
     const row = S.buildGuideResultRow({ task, payload, confidence, helpfulness, notes });
     S.state.results.push(row);
     S.state.idx++;
@@ -2037,6 +2150,9 @@ function referencePanelHtml(report, orphans) {
       <p class="q-sub">Click <b>Re-link</b>, then click the exact sentence or caption in the page on
         the left. A reference saved this way records where the passage <em>is</em>, not just what it
         says, so it keeps resolving when the wording around it shifts.</p>
+      <p class="q-sub"><b>Delete</b> takes the reference out of the agent's answer as well as
+        forgetting where it pointed, and the ones after it renumber. That edits the text a
+        participant reads, so nothing is written until you press <b>Save references</b>.</p>
       ${report.length ? `<ol class="admin-link-list">${report.map(item => {
         const tier = LINK_TIERS[item.tier] || LINK_TIERS.none;
         return `
@@ -2050,6 +2166,8 @@ function referencePanelHtml(report, orphans) {
             ${item.anchored ? '' : '<span class="admin-link-tier is-none">No saved position</span>'}
             <button type="button" class="q-btn admin-link-pick" data-relink="${item.n - 1}">Re-link</button>
             <button type="button" class="q-btn admin-link-show" data-showlink="${item.n - 1}">Show</button>
+            <button type="button" class="q-btn admin-link-drop" data-dropcite="${item.n}"
+              title="Remove this reference from the answer and forget its saved position">Delete</button>
           </div>
         </li>`;
       }).join('')}</ol>` : '<p class="q-sub">This answer has no citation markers.</p>'}
@@ -2138,13 +2256,24 @@ function adminGroundingReviewHtml(task, canned, arm, cites, hasPage) {
  *   • only this ONE VARIANT's citation_anchors are written. The other three are re-sent exactly as
  *     they were loaded, because the save RPC takes a whole claim and a partial one would blank them.
  */
-function bindReferencePanel(task, canned, arm) {
+function bindReferencePanel(task, canned, arm, baseline, painted) {
   const list = document.getElementById('admin-links-save')?.closest('.admin-links');
   if (!list) return;
   const status = document.getElementById('admin-links-status');
   const save = document.getElementById('admin-links-save');
   const frame = () => document.getElementById('find-page');
-  const answer = canned?.answer_display || canned?.answer_raw || '';
+  // The answer is EDITABLE HERE NOW, which it deliberately was not before — see Delete below. It is
+  // held locally and only written on Save, so a mis-click is undone by leaving the screen.
+  let answer = canned?.answer_display || canned?.answer_raw || '';
+
+  // THE ANSWER AS IT WAS WHEN THE SCREEN OPENED, threaded through every re-bind.
+  //
+  // repaint() rebuilds this panel and binds it again, so each delete leaves the Save button living
+  // in a NEWER closure than the delete that enabled it. Recomputing this from `canned` there would
+  // set it to the already-edited text, making `answer !== answerAtLoad` false on the very save that
+  // needs to be true — the anchors would be written, the marker would stay in the answer, and the
+  // reference would be back on the next load. Which is exactly how it behaved.
+  const answerAtLoad = typeof baseline === 'string' ? baseline : answer;
   let anchors = Array.isArray(canned?.citation_anchors) ? canned.citation_anchors.slice() : [];
   let dirty = false;
 
@@ -2164,11 +2293,23 @@ function bindReferencePanel(task, canned, arm) {
     const holder = document.createElement('div');
     holder.innerHTML = referencePanelHtml(report, orphans);
     list.replaceWith(holder.firstElementChild);
-    bindReferencePanel(task, { ...canned, citation_anchors: anchors }, arm);
+
+    // The answer card too, so the chips renumber in front of the researcher rather than only after a
+    // reload. renderAnswer counts chips positionally, so deleting [2] leaves [1] and [2] with no
+    // renumbering pass anywhere — but only if what is on screen is re-rendered from the new text.
+    const card = questionPane.querySelector('.find-answer');
+    if (card) card.innerHTML = renderFindAnswer(answer, arm);
+    bindFindAnswerChips({ ...canned, answer_display: answer, answer_raw: answer, citation_anchors: anchors },
+      arm, parseFindCitations(answer));
+
+    bindReferencePanel(task, { ...canned, answer_display: answer, answer_raw: answer, citation_anchors: anchors },
+      arm, answerAtLoad, true);
     if (dirty) {
       const again = document.getElementById('admin-links-save');
       if (again) again.disabled = false;
-      setStatus('Unsaved re-links. Save references to write them.', true);
+      setStatus(answer !== answerAtLoad
+        ? 'Unsaved changes to the answer and its references. Save references to write them.'
+        : 'Unsaved re-links. Save references to write them.', true);
     }
   };
 
@@ -2195,6 +2336,55 @@ function bindReferencePanel(task, canned, arm) {
     };
   });
 
+  /**
+   * Remove one reference: the marker in the answer AND the anchor that says where it pointed.
+   *
+   * BOTH, because either alone leaves a contradiction. Dropping the anchor but keeping the marker
+   * leaves a citation that resolves nowhere; dropping the marker but keeping the anchor leaves a
+   * saved position for a citation nobody can see — which is the orphan state this panel already
+   * warns about, and creating more of them by hand is not an improvement.
+   *
+   * The number on the button is POSITIONAL — the same count renderAnswer uses — so deleting [2] is
+   * "remove the second citation in the text" and everything after it renumbers by itself.
+   */
+  list.querySelectorAll('[data-dropcite]').forEach(button => {
+    button.onclick = () => {
+      // WRAPPED, because this is the one handler here that can fail silently. It rewrites the answer
+      // and repaints two panels, and a throw inside an onclick goes to the console and nowhere the
+      // researcher is looking — leaving a button that visibly does nothing. Any failure is put on
+      // the status line instead, where the rest of this panel already reports itself.
+      try {
+        const n = Number(button.dataset.dropcite);
+        const cites = parseFindCitations(answer);
+        const cite = cites[n - 1];
+        if (!cite) {
+          return setStatus(`Cannot remove [${n}]: this answer has ${cites.length} reference${
+            cites.length === 1 ? '' : 's'}. Reload the page and try again.`);
+        }
+        if (typeof window.FindCitations?.removeAt !== 'function') {
+          return setStatus('This page is running an older app/find_citations.js. Hard-reload (Cmd+Shift+R) and try again.');
+        }
+        dropCitation(n, cite);
+      } catch (e) {
+        console.error('[study] could not delete the reference:', e);
+        setStatus(`Could not delete that reference: ${e?.message || e}`);
+      }
+    };
+  });
+
+  function dropCitation(n, cite) {
+    const next = window.FindCitations.removeAt(answer, n);
+    if (next === answer) return setStatus('That reference could not be removed from the answer.');
+    answer = next;
+    // Only the anchor for THIS citation goes. anchorsForAnswer would also sweep away every orphan in
+    // one move, and orphans are kept on purpose so a re-worded answer can be re-attached.
+    const key = citationAnchorKey(cite.index, cite.text);
+    anchors = anchors.filter(a => citationAnchorKey(a?.index, a?.quote) !== key);
+    dirty = true;
+    repaint();
+    setStatus(`Removed [${n}] “${cite.text.slice(0, 60)}”. Save references to write it.`, true);
+  }
+
   list.querySelectorAll('[data-showlink]').forEach(button => {
     button.onclick = () => {
       const i = Number(button.dataset.showlink);
@@ -2209,14 +2399,34 @@ function bindReferencePanel(task, canned, arm) {
       save.disabled = true;
       setStatus('Saving references…');
       try {
-        await saveVariantAnchors(task, arm, anchors);
+        // The answer text is sent ONLY if a delete changed it. A plain re-link keeps passing null,
+        // so the one edit that can alter what participants read stays something you have to ask for.
+        const edited = answer !== answerAtLoad ? answer : null;
+        await saveVariantAnchors(task, arm, anchors, edited);
+        if (edited != null) { canned.answer_display = answer; canned.answer_raw = answer; }
         dirty = false;
-        setStatus('References saved.', true);
+        setStatus(edited != null ? 'Answer and references saved.' : 'References saved.', true);
       } catch (e) {
         save.disabled = false;
         setStatus(`Not saved: ${e?.message || e}`);
       }
     };
+  }
+
+  // PAINT ONCE THE PAGE IS ACTUALLY THERE.
+  //
+  // showFindTask draws this panel before the snapshot frame has a document, so citationLinkReport
+  // gets a null doc and every row reports "Not found" — including references that resolve perfectly.
+  // The call site says a repaint was meant to follow ("the panel is only honest if the page it is
+  // reporting on is actually there"), but binding handlers is all that ever happened, so the first
+  // honest report only appeared once something else triggered a repaint. A reference read Exact
+  // after you clicked it and Not found on a fresh load, which is the opposite of useful.
+  //
+  // Guarded by `painted` so the repaint that follows cannot re-enter this and loop.
+  if (!painted) {
+    let ready = null;
+    try { ready = frame()?.contentDocument?.body; } catch (e) { ready = null; }
+    if (ready) repaint();
   }
 }
 
@@ -2232,14 +2442,14 @@ function bindReferencePanel(task, canned, arm) {
  * SAME TAB rather than opening a new one: sessionStorage survives a same-tab navigation, so the
  * researcher is not asked to log in twice to finish one edit.
  */
-async function saveVariantAnchors(task, arm, anchors) {
+async function saveVariantAnchors(task, arm, anchors, answerText = null) {
   const key = window.FindV2Variants.KEYS.includes(S.state.variantKey)
     ? S.state.variantKey
     : window.FindV2Variants.variantKey(task?.claimCorrect !== false, arm);
   let password = '';
   try { password = sessionStorage.getItem('pageguide_find_v2_admin_password') || ''; } catch (e) { password = ''; }
   if (!password) throw new Error('This tab has no admin password. Open Admin on the welcome screen, then use “Check & fix references”.');
-  await DB.saveVariantAnchors(password, task.id, key, anchors);
+  await DB.saveVariantAnchors(password, task.id, key, anchors, answerText);
 }
 
 function bindAdminGroundingReview(task, canned, arm, cites) {
@@ -2688,6 +2898,15 @@ function rerenderFindGrounding(frame, canned, arm) {
     else el.classList.remove('pageguide-highlight');
   });
   doc.querySelectorAll('.pageguide-context').forEach(el => el.classList.remove('pageguide-context'));
+  // AND THE ATTRIBUTE, not just the classes. markElement sets `data-pageguide-styled` alongside
+  // .pageguide-context, and only the class was ever taken off again — so one fallback left the
+  // attribute on the element permanently, flattenSubtreeWithMap skipped that block from then on, and
+  // every later attempt to mark the quote inside it failed the same way. The bug re-armed itself.
+  doc.querySelectorAll('[data-pageguide-styled]').forEach(el => {
+    el.removeAttribute('data-pageguide-styled');
+    if (el.dataset) delete el.dataset.pgCite;
+  });
+  doc.body.normalize();
   doc.querySelectorAll('.pageguide-highlight-imgwrap').forEach(wrap => {
     const img = wrap.querySelector('img');
     if (img) wrap.replaceWith(img);
@@ -2900,6 +3119,11 @@ function bindFindAnswerChips(canned, arm, cites) {
     answerEl.onclick = (e) => {
       if (e.target.closest('.find-cite')) return;
       answerEl.classList.toggle('citations-expanded');
+      // Expanding reveals the cited phrases behind the [N] chips — a way of consulting the
+      // references that involves no chip click at all, so counting only chips would miss it.
+      if (e.isTrusted && answerEl.classList.contains('citations-expanded')) {
+        window.StudyTelemetry.reference('expand', '', 'click');
+      }
     };
   }
 
@@ -2909,6 +3133,7 @@ function bindFindAnswerChips(canned, arm, cites) {
       e.stopPropagation();
       const item = (canned?.evidence || [])
         .find(ev => String(ev?.key || '').trim().toLowerCase() === chip.dataset.evKey.trim().toLowerCase());
+      if (e.isTrusted) window.StudyTelemetry.reference('evidence', chip.dataset.evKey, 'click');
       const f = document.getElementById('find-page');
       if (f && item) focusEvidenceItem(f, item);
       openEvidenceLightbox(item, chip.dataset.evKey);
@@ -2918,17 +3143,31 @@ function bindFindAnswerChips(canned, arm, cites) {
   // Hover names it, click goes to it — the two gestures the panel already gives a citation.
   questionPane.querySelectorAll('.find-cite').forEach(chip => {
     const frame = () => document.getElementById('find-page');
-    chip.onmouseenter = () => {
+    // A hover counts only once it has been HELD. Sweeping the pointer across a line of prose crosses
+    // every chip in it, and counting those would report a participant as having checked references
+    // they never looked at.
+    let dwell = null;
+    chip.onmouseenter = (e) => {
       const f = frame();
       if (f) focusFindCitation(f, chip.dataset.citeText || '', false);
       chip.classList.add('find-cite-active');
+      if (!e?.isTrusted) return;
+      clearTimeout(dwell);
+      dwell = setTimeout(() => {
+        window.StudyTelemetry.reference('cite', chip.dataset.citeN || '', 'hover');
+      }, REFERENCE_DWELL);
     };
     chip.onmouseleave = () => {
+      clearTimeout(dwell);
+      dwell = null;
       const f = frame();
       if (!chip.dataset.pinned) chip.classList.remove('find-cite-active');
       try { if (f && !chip.dataset.pinned) clearFindFocus(f.contentDocument); } catch (e) {}
     };
-    chip.onclick = () => {
+    chip.onclick = (e) => {
+      // NOT synthetic clicks. The admin reference panel's Show button calls .click() on a chip, and
+      // without this a researcher checking their own references would inflate the participant number.
+      if (e?.isTrusted) window.StudyTelemetry.reference('cite', chip.dataset.citeN || '', 'click');
       const f = frame();
       if (!f) return;
       questionPane.querySelectorAll('.find-cite').forEach(c => {
@@ -2993,6 +3232,41 @@ function renderMarkdown(escaped) {
  *
  * The non-grounded arm gets nothing. That is the arm.
  */
+/**
+ * Remove the PageGuide markup the capture baked in.
+ *
+ * A snapshot is sometimes taken while a highlight is live on the page, and the marks travel into the
+ * stored HTML: HARRY-v1 arrived with `data-pageguide-styled` sitting on the very paragraph its
+ * citation points at, plus a leftover `<span style="border-radius:3px;padding:1px 4px">` where a
+ * highlight used to be.
+ *
+ * That is not cosmetic. flattenSubtreeWithMap SKIPS every text node inside `[data-pageguide-styled]`
+ * — a sensible guard against re-marking text this session already marked, but it cannot tell our
+ * mark from the recorder's. With the attribute pre-set on the paragraph, the flattened text came out
+ * EMPTY, the quote could never be found, and marking fell through to tinting the whole block. Which
+ * is exactly what a reviewer saw: a paragraph washed purple and no keyword inside it.
+ *
+ * Cleared here, before applyFindGrounding runs, so replay always starts from an unmarked page.
+ */
+function stripCapturedPageGuideMarks(doc) {
+  if (!doc?.body) return;
+  doc.querySelectorAll('[data-pageguide-styled]').forEach(el => {
+    el.removeAttribute('data-pageguide-styled');
+    if (el.dataset) delete el.dataset.pgCite;
+  });
+  doc.querySelectorAll('.pageguide-highlight, .pageguide-context, .pageguide-preview-target')
+    .forEach(el => {
+      // A leftover wrapper span carries no meaning of its own — unwrap it so the text it holds
+      // rejoins its neighbours and a quote spanning it is one run again.
+      if (el.tagName === 'SPAN' && el.classList.contains('pageguide-highlight')) {
+        el.replaceWith(doc.createTextNode(el.textContent || ''));
+        return;
+      }
+      el.classList.remove('pageguide-highlight', 'pageguide-context', 'pageguide-preview-target');
+    });
+  doc.body.normalize();
+}
+
 function cleanupFindSnapshotObstructions(doc) {
   if (!doc?.body || doc.getElementById('pg-snapshot-cleanup-style')) return;
   const style = doc.createElement('style');
@@ -3029,6 +3303,7 @@ function applyFindGrounding(frame, canned, arm) {
   try { doc = frame.contentDocument; } catch (e) { return; }
   if (!doc?.body) return;
   cleanupFindSnapshotObstructions(doc);
+  stripCapturedPageGuideMarks(doc);
 
   if (arm === 'nongrounding') return;
   const answer = canned?.answer_display || canned?.answer_raw || '';
@@ -3042,6 +3317,10 @@ function applyFindGrounding(frame, canned, arm) {
   // same thing: the same tint on a cited phrase, the same outline on a cited picture, and the same
   // "PageGuide highlight" badge when one is pointed at. A second visual language for the same idea
   // would be one more difference between the arms that nobody is measuring.
+  // The flag the review-only rules below hang off. Set on the snapshot's own root, so it travels
+  // with the document rather than depending on anything in the host page.
+  if (S.state.adminReview) doc.documentElement?.classList.add('pg-admin-review');
+
   const style = doc.createElement('style');
   style.textContent = `
     .pageguide-highlight {
@@ -3080,6 +3359,40 @@ function applyFindGrounding(frame, canned, arm) {
       white-space: nowrap;
       pointer-events: none;
     }
+    /* ── Review mode only: tell the keyword apart from its sentence ──────────────────────────
+       The two marks nest — .pageguide-context washes the block a citation sits in, and
+       .pageguide-highlight wraps the exact quoted phrase inside it. At 10% and 16% they are six
+       points apart and the inner one sits ON the outer one, so a researcher re-linking a reference
+       cannot see where the sentence ends and the keyword begins. That matters here in a way it does
+       not for a participant: re-linking is the act of confirming that THIS phrase is the one the
+       citation points at.
+       Scoped to .pg-admin-review, and applied to nothing a participant ever loads, because the tint
+       above is copied from the extension's content.css on purpose — a participant who saw the live
+       page and one who sees this snapshot have to be looking at the same thing, and the arms differ
+       by grounding alone. */
+    .pg-admin-review .pageguide-context {
+      background-color: color-mix(in srgb, #7857ff 8%, transparent);
+      outline: 1px dashed color-mix(in srgb, #7857ff 52%, transparent);
+      outline-offset: 3px;
+    }
+    /* The UNDERLINE does the work, not the tint. A fill dark enough to be unmistakable is also dark
+       enough to fight the text it sits under, and this text is the thing being read. A light wash
+       plus a solid rule under the phrase separates it from its sentence at a glance and still leaves
+       the words the darkest thing in the line.
+       No font-weight change either: reflowing a paragraph to emphasise part of it moves everything
+       after it, and the reviewer is comparing this layout with the page they recorded. */
+    .pg-admin-review .pageguide-highlight {
+      background-color: color-mix(in srgb, #7857ff 22%, transparent);
+      box-shadow: inset 0 -2px 0 color-mix(in srgb, #5b3fd6 75%, transparent);
+    }
+    /* The keyword still wins when it is also the thing just pointed at — otherwise clicking Show on
+       a reference makes it lighter than it was a moment ago, which reads as losing the selection. */
+    .pg-admin-review .pageguide-highlight.pageguide-preview-target,
+    .pg-admin-review .pageguide-highlight[data-pageguide-styled]:hover {
+      background-color: color-mix(in srgb, #7857ff 34%, transparent);
+      box-shadow: inset 0 -2px 0 #5b3fd6;
+    }
+
     /* A cited picture is outlined rather than tinted — a tint over an engraving hides the engraving,
        which is the thing being asked about. */
     .pageguide-highlight-img {
@@ -3524,7 +3837,18 @@ function markCitationElement(el, needle) {
   }
   if (needle && normText(needle).length >= 4) {
     const mark = markText(el.ownerDocument, needle, el) || markTextAcrossNodes(el, needle);
-    if (mark) return mark;
+    if (mark) {
+      // THE BLOCK GETS THE WASH TOO, not just the phrase. These were either/or: mark the exact quote
+      // and the surrounding sentence stayed plain, or fail and tint the whole block. Both together is
+      // what a reviewer re-linking actually needs — the wash says "the citation resolved to here",
+      // the darker phrase says "and this is the part it points at".
+      //
+      // The class alone, without markElement's data-pageguide-styled: that attribute is what draws
+      // the hover outline and the "PageGuide highlight" badge, and putting it on the whole paragraph
+      // would make the badge fire anywhere in it and swallow the phrase inside its own hover state.
+      el.classList.add('pageguide-context');
+      return mark;
+    }
   }
   markElement(el, needle);
   return el;
@@ -3921,19 +4245,53 @@ function markTextAcrossNodes(root, needle) {
   if (!map.length) return null;
   const hit = text.toLowerCase().indexOf(target);
   if (hit < 0) return null;
-  const startPos = map[hit];
-  const endPos = map[hit + target.length - 1];
-  if (!startPos || !endPos) return null;
   const doc = root.ownerDocument || document;
-  const range = doc.createRange();
-  range.setStart(startPos.node, startPos.offset);
-  range.setEnd(endPos.node, endPos.offset + 1);
-  const mark = doc.createElement('span');
-  mark.className = 'pageguide-highlight';
-  mark.setAttribute('data-pageguide-styled', '');
-  mark.dataset.pgCite = needle;
-  try { range.surroundContents(mark); } catch (e) { return null; }  // malformed/overlapping markup
-  return mark;
+
+  // ONE WRAP PER TEXT NODE, not one Range around the lot.
+  //
+  // This function exists for quotes that cross an inline tag, and it used to build a single Range
+  // over the whole phrase and call surroundContents on it — which throws InvalidStateError for
+  // exactly that case, because such a range partially selects the element it crosses. So the one
+  // function written to handle spanning quotes failed on every spanning quote, silently, and the
+  // caller fell back to tinting the whole paragraph. "he opposes <span>Snape</span>" is the shape:
+  // the phrase ends inside a sibling element, so nothing was ever marked and there was no keyword
+  // for the reviewer to see.
+  //
+  // Splitting the hit into one run per text node gives each wrap a range that lies wholly inside a
+  // single Text node, which surroundContents accepts. The phrase ends up as several adjacent marks
+  // that read as one highlight.
+  const runs = [];
+  for (let i = hit; i < hit + target.length; i++) {
+    const pos = map[i];
+    if (!pos) return null;
+    const last = runs[runs.length - 1];
+    // `>=` rather than `===`: normText collapses runs of whitespace, so two kept characters in the
+    // same node can sit either side of a gap. Covering the gap keeps the mark contiguous instead of
+    // striping the phrase with unhighlighted spaces.
+    if (last && last.node === pos.node && pos.offset >= last.end) last.end = pos.offset + 1;
+    else runs.push({ node: pos.node, start: pos.offset, end: pos.offset + 1 });
+  }
+
+  // BACK TO FRONT. Wrapping splits the text node it lands in, so doing the later runs first leaves
+  // every earlier offset still pointing where it did when the map was built.
+  let firstMark = null;
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const run = runs[i];
+    const range = doc.createRange();
+    try {
+      range.setStart(run.node, run.start);
+      range.setEnd(run.node, run.end);
+    } catch (e) { continue; }
+    const mark = doc.createElement('span');
+    mark.className = 'pageguide-highlight';
+    mark.setAttribute('data-pageguide-styled', '');
+    mark.dataset.pgCite = needle;
+    try { range.surroundContents(mark); } catch (e) { continue; }
+    firstMark = mark;
+  }
+  // The first mark in document order — the loop runs backwards, so the last one assigned is runs[0].
+  // Callers use it to scroll to the quote and to reuse the element for a sibling citation.
+  return firstMark;
 }
 
 /**
@@ -4054,6 +4412,55 @@ function removeDryRunNav() {
 }
 
 /** Prev/Next/Exit, for paging through the material without answering anything. */
+/**
+ * ← → across the queue, for an `admin` dry run only.
+ *
+ * A researcher checking what a slot actually deals needs to go BACKWARDS and to skip a task without
+ * answering it — neither of which the study allows, and rightly: a participant gets one pass and a
+ * three-minute cutoff, and a screen that let them wander would not be measuring the same thing.
+ *
+ * So this appears for the `admin` id and nothing else. `test` deliberately does not get it: a test
+ * run exists to rehearse the real flow, and a rehearsal with extra buttons is not one. Neither id
+ * writes a session or a result row — see StudySession.isDryRunId.
+ */
+function previewNavHtml() {
+  if (!S.state.previewNav || S.state.adminReview) return '';
+  const queue = Array.isArray(S.state.queue) ? S.state.queue : [];
+  const here = queue[S.state.idx];
+  const kind = here?.taskType === 'guide' ? 'Guide' : 'Find';
+  return `
+    <div class="preview-nav">
+      <span class="preview-nav-label">Admin preview · ${esc(kind)} ${S.state.idx + 1} of ${queue.length}
+        · nothing is recorded</span>
+      <div class="preview-nav-buttons">
+        <button type="button" class="q-btn" id="preview-prev"${S.state.idx === 0 ? ' disabled' : ''}>←</button>
+        <button type="button" class="q-btn" id="preview-next"${
+          S.state.idx >= queue.length - 1 ? ' disabled' : ''}>→</button>
+      </div>
+    </div>`;
+}
+
+/**
+ * Move without answering. The task's own interval is torn down first — showTask builds a new one,
+ * and two live clocks would both tick the same pane.
+ */
+function bindPreviewNav() {
+  if (!S.state.previewNav || S.state.adminReview) return;
+  const go = (delta) => {
+    const queue = Array.isArray(S.state.queue) ? S.state.queue : [];
+    const next = S.state.idx + delta;
+    if (next < 0 || next >= queue.length) return;
+    try { S.state.detachInstrument?.(); } catch (e) { /* already gone */ }
+    S.state.detachInstrument = null;
+    S.state.idx = next;
+    showTask();
+  };
+  const prev = document.getElementById('preview-prev');
+  const next = document.getElementById('preview-next');
+  if (prev) prev.onclick = () => go(-1);
+  if (next) next.onclick = () => go(1);
+}
+
 function adminNavHtml() {
   if (!S.state.adminReview) return '';
   const queue = Array.isArray(S.state.queue) ? S.state.queue : [];
@@ -4189,7 +4596,22 @@ function postSurveyEmbedUrl(url) {
   return `${url}${url.includes('?') ? '&' : '?'}embedded=true`;
 }
 
-/** Find V2 ends inside its own study instead of embedding V1's post-study form. */
+/**
+ * The Find V2 questionnaire, asked once at the very end.
+ *
+ * ITS OWN FORM, not V1's. The two studies ask different things and their responses go to different
+ * sheets; pointing V2 at V1's form would mix them with nothing in either to say which study a row
+ * came from. Overridable from app/find_v2_config.js for a deployment that needs a different one.
+ *
+ * THE LONG URL, NOT THE forms.gle SHORT LINK it was given as. The short link is a 302 to exactly
+ * this address, and a redirect does not carry a query string forward — so `?embedded=true` appended
+ * to the short form would be dropped and the frame would render with Google's full page chrome
+ * inside it. Resolved once, here, rather than at load in every participant's browser.
+ */
+const FIND_V2_SURVEY_URL = window.FIND_V2_CONFIG?.POST_SURVEY_URL
+  || 'https://docs.google.com/forms/d/e/1FAIpQLSejro1c_gTdmCpBgjeDosaAilNviUkxVXlOW8l_2dW9CwuN5w/viewform';
+
+/** Find V2's own ending: the same two panes, with the questionnaire where the material was. */
 function finishFindV2({ preview = false } = {}) {
   const pending = preview ? 0 : pendingResultCount();
   const answered = preview
@@ -4197,24 +4619,49 @@ function finishFindV2({ preview = false } = {}) {
     : S.state.results.length;
   const dry = !!S.state.dryRun;
 
-  stimulusPane.innerHTML = `
-    <div class="q-survey-stage find-v2-finish">
-      <header class="q-survey-head">
-        <p class="welcome-eyebrow">PageGuide · Find V2</p>
-        <h1 class="q-survey-title">✅ Find V2 complete</h1>
-        <p class="q-survey-lead">You checked ${answered} agent claim${answered === 1 ? '' : 's'}.
-          Thank you for taking part.</p>
-      </header>
-      <div class="tv-done">${dry
-        ? 'This was a test run. No session or result was written to Supabase.'
-        : 'Your judgments were saved after each claim. You may close this tab.'}</div>
-    </div>`;
+  // A REHEARSAL MUST NOT BE ABLE TO SUBMIT THE REAL FORM. The questionnaire is live, and a response
+  // sent from a test run, a review walk or a preview of this screen is a row in the sheet that
+  // nothing marks as not-a-participant — and it cannot be told apart afterwards. Those three get the
+  // LINK, so the form can still be read, and no frame to submit from. This is the same rule V1's
+  // finish() follows, for the same reason.
+  const review = !preview && (!!S.state.adminReview || dry);
+  const linkOnly = preview || review;
+
+  const surveyHead = `
+    ${preview ? `<p class="q-survey-preview">Preview of the final screen — the form linked below is
+      the REAL questionnaire. Read it, do not submit it.</p>` : ''}
+    ${review ? `<p class="q-survey-preview">${dry
+      ? 'Test run — nothing you answered was saved. The questionnaire below is the real one: do not submit it.'
+      : 'Review mode — the questionnaire below is the real one: do not submit it.'}</p>` : ''}
+    <header class="q-survey-head">
+      <p class="welcome-eyebrow">PageGuide · Find V2</p>
+      <h1 class="q-survey-title">✅ Last step — a short survey</h1>
+      <p class="q-survey-lead">You checked ${answered} agent claim${answered === 1 ? '' : 's'}. Thank
+        you. Please fill in the questionnaire ${linkOnly ? 'linked below' : 'below'} to complete the
+        study — it is the last thing we need from you.</p>
+      <a class="q-btn q-btn-primary q-btn-link q-survey-open" href="${esc(FIND_V2_SURVEY_URL)}"
+        target="_blank" rel="noopener noreferrer">Open the survey in a new tab ↗</a>
+    </header>`;
+
+  stimulusPane.innerHTML = linkOnly
+    ? `<div class="q-survey-stage find-v2-finish">${surveyHead}
+        <div class="tv-done">${dry
+          ? 'Test run: nothing from it was saved, and the survey is not embedded so this screen cannot leave a real response. Use the button above to read it.'
+          : 'The survey is not embedded here, so checking this screen cannot leave a real response. Use the button above to read it.'}</div>
+      </div>`
+    : `<div class="q-survey-stage">${surveyHead}
+        <iframe class="q-survey" title="Post-study questionnaire"
+          src="${esc(postSurveyEmbedUrl(FIND_V2_SURVEY_URL))}"></iframe>
+      </div>`;
 
   questionPane.innerHTML = `
     <div class="q-head"><span class="q-title">✅ All done</span></div>
     <div class="q-body">
       ${pending ? `<p class="q-error-msg">${pending} result${pending === 1 ? '' : 's'} did not reach
         Supabase. Download the backup below and send it to the researcher.</p>` : ''}
+      <p class="q-sub">${linkOnly
+        ? 'Participants see the questionnaire in the left pane.'
+        : 'Your judgments were saved after each claim. Once you have submitted the form on the left you can close this tab.'}</p>
       <p class="q-sub">Find V2 is stored separately from the original PageGuide study.</p>
       <div class="q-actions">
         <button class="q-btn" id="q-download">⬇ Download my Find V2 responses</button>

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PageGuide User Study — layout preview</title>
-  <link rel="stylesheet" href="styles/stimulus.css">
+  <link rel="stylesheet" href="styles/stimulus.css?v=find-v2-20260902o">
   <link rel="stylesheet" href="styles/site.css">
 </head>
 <body>
@@ -87,13 +87,20 @@
       },
     };
 
-    const armName = new URLSearchParams(location.search).get('arm') === 'nongrounding'
-      ? 'nongrounding' : 'grounding';
+    const params = new URLSearchParams(location.search);
+    const armName = params.get('arm') === 'nongrounding' ? 'nongrounding' : 'grounding';
 
     window.Stimulus.mountStimulus(RECORD, armName, {
       goal: document.getElementById('tv-goal'),
       count: document.getElementById('tv-count'),
       stage: document.getElementById('tv-stage'),
+    }, {
+      // The V2 Guide layout, and the proposed flag on the journey's key steps, both reachable here
+      // without a database: ?layout=v2, ?keysteps=1. Admin -> Session preview drives the same
+      // options against a real trajectory.
+      trailFirst: params.get('layout') === 'v2',
+      journeyCollapsed: params.get('layout') === 'v2',
+      highlightMilestones: params.get('keysteps') === '1',
     });
 
     window.Instrument.mountInstrument({

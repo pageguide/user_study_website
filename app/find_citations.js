@@ -59,16 +59,67 @@
    * reading " , written by" is being shown that something was deleted — which is exactly what this
    * arm must not reveal.
    */
-  function strip(text) {
+  /**
+   * Close the hole a removed marker leaves behind.
+   *
+   * Shared by strip() and removeAt(), because the wreckage is the same either way: taking
+   * "[45:\"El pedante\"]" out of "…is *El pedante* [45:\"El pedante\"], written by…" strands a space
+   * in front of the comma, and " , written by" reads as a typo in the agent's prose rather than as
+   * a marker we removed. One rule, so the two paths cannot drift.
+   */
+  function tidy(text) {
     return String(text || '')
-      .replace(GROUP, '')
-      .replace(ARTIFACT, '')
-      .replace(EVIDENCE, '')
       .replace(/[ \t]+([.,;:!?])/g, '$1')
       .replace(/\(\s*\)/g, '')
       .replace(/[ \t]{2,}/g, ' ')
       .replace(/[ \t]+$/gm, '')
       .trim();
+  }
+
+  function strip(text) {
+    return tidy(String(text || '')
+      .replace(GROUP, '')
+      .replace(ARTIFACT, '')
+      .replace(EVIDENCE, ''));
+  }
+
+  /**
+   * The answer with the Nth citation removed — N counted the way the reader sees it.
+   *
+   * THE DISPLAYED NUMBER IS POSITIONAL, NOT STORED. renderAnswer numbers chips with a running
+   * counter in document order, so the "[3]" on screen is the third citation in the text and has
+   * nothing to do with the 368 inside `[368:"…"]`, which is a page index. That is why deleting one
+   * needs no renumbering pass: remove the marker and every later chip renders one lower by itself.
+   *
+   * A GROUP CAN HOLD SEVERAL. `[281:"approach", 766:"Oxford University"]` is two citations sharing a
+   * bracket, so removing one rebuilds the group from the pairs that remain and drops the brackets
+   * only when nothing is left. Deleting the second of those must not take the first with it.
+   *
+   * Returns the text unchanged if there is no Nth citation, so a stale button cannot quietly rewrite
+   * an answer by deleting whatever now sits at that position.
+   */
+  function removeAt(text, n) {
+    const raw = String(text || '');
+    const target = Number(n);
+    if (!Number.isInteger(target) || target < 1) return raw;
+
+    let seen = 0;
+    let removed = false;
+    const out = raw.replace(GROUP, (group) => {
+      if (removed) return group;
+      const kept = [];
+      let hit = false;
+      group.replace(PAIR, (m, index, quote) => {
+        seen += 1;
+        if (!hit && seen === target) { hit = true; return m; }
+        kept.push(`${index}:"${quote}"`);
+        return m;
+      });
+      if (!hit) return group;
+      removed = true;
+      return kept.length ? `[${kept.join(', ')}]` : '';
+    });
+    return removed ? tidy(out) : raw;
   }
 
   /**
@@ -145,6 +196,6 @@
   }
 
   window.FindCitations = {
-    GROUP, PAIR, ARTIFACT, EVIDENCE, parse, evidenceKeys, strip, artifacts, renderAnswer, esc,
+    GROUP, PAIR, ARTIFACT, EVIDENCE, parse, evidenceKeys, strip, tidy, removeAt, artifacts, renderAnswer, esc,
   };
 }());

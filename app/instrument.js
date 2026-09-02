@@ -93,8 +93,32 @@ function fmtTime(ms) {
  * Shared by both instruments (this one and the Find questions in study.js) through window.TaskTimer
  * so the two cannot drift into different limits.
  */
-const TASK_TIME_LIMIT_MS = 3 * 60 * 1000;
+// TWO MINUTES BY DEFAULT, and settable — Admin → Study settings writes it, and a run reads it once
+// at start (StudySession.state.flags.taskLimitSeconds). Mutable module state rather than a constant
+// because both instruments share this one clock through window.TaskTimer; a second copy of the
+// number is a second thing that can be stale, and the Find and Guide halves would silently disagree
+// about when a task ran out.
+let TASK_TIME_LIMIT_MS = 2 * 60 * 1000;
 const TASK_TIME_LOW_MS = 30 * 1000;
+
+const TASK_LIMIT_MIN_MS = 30 * 1000;
+const TASK_LIMIT_MAX_MS = 15 * 60 * 1000;
+
+/** How the limit is said in prose: "2 min", "90 sec". */
+function taskLimitLabel(ms = TASK_TIME_LIMIT_MS) {
+  return ms % 60000 === 0 ? `${ms / 60000} min` : `${Math.round(ms / 1000)} sec`;
+}
+
+/**
+ * Set the limit for this run. Clamped to the same bounds the settings column enforces, so a bad
+ * value cannot produce a task that ends instantly or never.
+ */
+function setTaskLimit(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return TASK_TIME_LIMIT_MS;
+  TASK_TIME_LIMIT_MS = Math.min(TASK_LIMIT_MAX_MS, Math.max(TASK_LIMIT_MIN_MS, Math.round(value)));
+  return TASK_TIME_LIMIT_MS;
+}
 
 /** Paint the one countdown chip from the task's elapsed time. */
 function paintTaskTimer(root, elapsedMs) {
@@ -108,21 +132,31 @@ function paintTaskTimer(root, elapsedMs) {
   chip?.classList.toggle('is-over', over);
   chip?.classList.toggle('is-low', !over && remaining <= TASK_TIME_LOW_MS);
   const label = scope.querySelector('#q-timer-label');
-  if (label) label.textContent = over ? 'Over 3 min' : 'Time left';
+  if (label) label.textContent = over ? `Over ${taskLimitLabel()}` : 'Time left';
 }
 
 /** The chip's markup, so both instruments open on 03:00 rather than on a stale count-up. */
 function taskTimerHtml() {
   return `
         <div class="q-timers">
-          <div class="q-timer-chip" title="You have 3 minutes for this task. The clock keeps running past it \u2014 nothing is cut off.">
+          <div class="q-timer-chip" title="You have ${taskLimitLabel()} for this task. The clock keeps running past it \u2014 nothing is cut off.">
             <span class="q-timer-label" id="q-timer-label">Time left</span>
             <span class="q-timer" id="q-timer">${fmtTime(TASK_TIME_LIMIT_MS)}</span>
           </div>
         </div>`;
 }
 
-window.TaskTimer = { LIMIT_MS: TASK_TIME_LIMIT_MS, fmtTime, paint: paintTaskTimer, html: taskTimerHtml };
+// LIMIT_MS is a GETTER, not a copied number. study.js reads window.TaskTimer.LIMIT_MS on every tick
+// to decide when the cutoff fires; a plain property captured at load time would keep the old limit
+// for the whole session after setTaskLimit ran.
+window.TaskTimer = {
+  get LIMIT_MS() { return TASK_TIME_LIMIT_MS; },
+  setLimit: setTaskLimit,
+  label: taskLimitLabel,
+  fmtTime,
+  paint: paintTaskTimer,
+  html: taskTimerHtml,
+};
 
 /**
  * Render one task's questions and resolve when the participant submits.

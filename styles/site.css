@@ -42,7 +42,17 @@ body {
   overflow-y: auto;
   background: #fff;
   border-right: 1px solid var(--line);
+  /* A COLUMN, so the thing inside it can fill it.
+     `.tv-main` is `flex: 1 1 auto` and `.find-page` is `height: 100%` — both of which need a parent
+     with a definite height and a flex context, and this pane was neither. `height: 100%` on the frame
+     therefore resolved to auto and fell back to its `min-height: 80vh`, leaving a fifth of the
+     viewport as blank white under every page snapshot. */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
+
+.task-stimulus > .tv-main { flex: 1 1 auto; min-height: 0; }
 
 .task-panel {
   overflow-y: auto;
@@ -375,6 +385,24 @@ body {
 /* Directly beneath it when both are drawn, so the pair is one block rather than two. */
 .q-body > .tv-condition + .tv-group { margin: -8px 0 12px; }
 .q-body > .tv-group { margin: 0 0 12px; }
+
+/* The admin preview's ← →. Set apart from the task's own buttons and stated as scaffolding, because
+   the whole point of walking the study as `admin` is to see what a participant sees — a control they
+   do not have should not read as part of the instrument. */
+.preview-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.preview-nav-label { font-size: 11.5px; color: var(--muted); }
+.preview-nav-buttons { display: flex; gap: 6px; flex: 0 0 auto; }
+.preview-nav-buttons .q-btn { padding: 4px 12px; font-size: 14px; line-height: 1.2; }
 
 .q-post-body { display: flex; flex-direction: column; gap: 14px; }
 .q-post-section {
@@ -992,6 +1020,18 @@ body {
    into a split that was made by a counter. */
 .v2-chip.is-group-a { background: #fdf4ec; border-color: #eccfb0; color: #7a4a17; }
 .v2-chip.is-group-b { background: #eef6fa; border-color: #b7d4e4; color: #1d4c66; }
+/* Why a run is keyed incorrect. Misreported is the item the grounding condition exists to measure,
+   so it is the one that carries colour; the others are neutral. Not a red/green scale — none of
+   these is a better kind of failure, they are different kinds, and shading them by severity would
+   suggest a ranking the study does not have. */
+.v2-chip.is-mode-misreported { background: #fdf0e8; border-color: #edc3a6; color: #8a3c10; }
+.v2-chip.is-mode-incomplete { background: #f5f5f7; border-color: #d8d8de; color: #4a4a52; }
+.v2-chip.is-mode-could_not_complete { background: #f5f5f7; border-color: #d8d8de; color: #4a4a52; }
+.v2-chip.is-mode-unspecified { background: transparent; border-style: dashed; color: var(--muted); }
+/* Nobody opened a reference on this task. Marked, not coloured as a failure: in the non-grounded arm
+   there was nothing to open, and even in the grounded arm judging without checking is a finding
+   rather than a mistake. */
+.v2-chip.is-none-opened { background: transparent; border-style: dashed; color: var(--muted); font-weight: 600; }
 .admin-subtitle { margin: 22px 0 8px; font-size: 14px; font-weight: 800; }
 
 /* ── The reference panel (review mode) ───────────────────────────────────────
@@ -1006,6 +1046,11 @@ body {
   background: var(--card);
 }
 .admin-link-list { margin: 10px 0; padding-left: 0; list-style: none; }
+/* Delete edits the answer participants read, unlike Re-link and Show. Marked as the destructive one
+   without being alarming — it is a normal part of tidying an answer, just the only button here that
+   changes the stimulus. */
+.admin-link-drop { color: #8c2b2b; border-color: #e6c3c3; }
+.admin-link-drop:hover { background: #fdeeee; border-color: #d99a9a; }
 .admin-link-row {
   padding: 8px 0;
   border-top: 1px solid var(--line);
@@ -1105,6 +1150,15 @@ body {
 .guide-board td b { font-size: 17px; font-weight: 800; }
 .guide-board td.is-gap { background: #fdeeee; color: #8c2b2b; }
 .guide-board td.is-gap span { display: block; font-size: 10px; font-weight: 700; }
+/* Structurally empty, not missing — the same distinction renderCharts draws with "not in this
+   design". Muted, so the eye goes to the cells that can actually be filled. */
+.guide-board td.is-none { color: var(--muted); }
+.guide-board td.is-none span { display: block; font-size: 10px; font-weight: 600; }
+/* The INCORRECT row broken down by why. Indented and lighter because these are a reading of the row
+   above, not two more kinds of run — a group can have false successes and still be missing the
+   misreporting kind, and that gap is invisible on the totals alone. */
+.guide-board-sub th { padding-left: 16px; font-weight: 600; color: var(--muted); }
+.guide-board-sub td b { font-size: 14px; }
 .guide-board-total th,
 .guide-board-total td { background: #fafafc; color: var(--muted); }
 .guide-board-total td b { font-size: 14px; color: var(--ink); }
@@ -1963,6 +2017,9 @@ body {
 .find-page {
   width: 100%;
   height: 100%;
+  /* The floor is for the stacked layout below 900px, where the shell's height is content-driven and
+     `height: 100%` has nothing to resolve against. With the pane a flex column at full height, the
+     desktop case takes the pane's own height and this never applies. */
   min-height: 80vh;
   border: 0;
   display: block;
@@ -2398,6 +2455,29 @@ body {
 .tut-kind-what { font-weight: 700; color: var(--ink); }
 .tut-kind-fine { font-size: 12.5px; color: var(--muted); }
 .tut-welcome-actions { flex-direction: column; }
+
+/* Roomier than V1's cards, because V2's carry two short lines rather than a paragraph — at the old
+   padding the text sat closer to the edges than to itself. The head keeps its own inset so the band
+   and the body line up down the left. */
+.tut-kind-head { padding: 11px 16px; }
+.tut-kind-body { padding: 14px 16px 16px; }
+.tut-kind-body p { margin: 0 0 6px; }
+
+/* The skip button lives in the nav bar, where .tut-nav supplies the button's shape. Standing on its
+   own under the Start button it inherited the browser's default grey box, which read as a disabled
+   control rather than as the quiet way out. */
+.tut-welcome-actions .tut-nav-skip {
+  align-self: center;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tut-welcome-actions .tut-nav-skip:hover { color: var(--accent-dark); }
 
 /* ── What we were looking for ────────────────────────────────────────────────── */
 .tut-debrief {
@@ -2971,7 +3051,10 @@ body {
 
 .find-v2-body .welcome-eyebrow { color: #0f6b43; }
 .find-v2-back { margin-top: 20px; text-decoration: none; }
-.find-v2-back + .admin-door { margin-top: 8px; }
+/* The V1 door sits beside "Leave Admin" inside the unlocked shell, so the two exits read as one
+   row rather than as a button and a stray link. */
+.admin-exit-row { align-items: center; gap: 14px; margin-top: 10px; }
+.admin-exit-row .admin-door { margin: 0; }
 
 .find-v2-editor-picker {
   display: grid;
@@ -3678,3 +3761,194 @@ body {
 
 .viz-task-tag.is-new { background: rgba(235, 104, 52, .14); color: #a3421a; }
 .viz-task-tag.is-old { background: rgba(42, 120, 214, .12); color: #1c5cab; }
+
+/* index.html loads styles/stimulus.css so Admin → Session preview can mount the real trajectory
+   viewer. That file is the extension's stylesheet verbatim, and it makes the DOCUMENT a full-height
+   flex column — correct for the task screen it was written for, wrong for a welcome page that
+   scrolls. Undone here for the welcome document only; study.html carries no such class and keeps
+   the flex column it needs. Rather than editing stimulus.css, which is a port and stays one. */
+body.welcome-body { display: block; height: auto; }
+
+/* ── Admin → Session preview ──────────────────────────────────────────────────
+   The Guide task as a participant meets it. The left half is the real stimulus renderer inside a
+   scroll box rather than a viewport-tall pane, so the whole two-pane screen stays on one admin page
+   without either half growing without limit. */
+.preview-flow { margin: 14px 0; }
+
+.preview-stages {
+  list-style: none;
+  margin: 6px 0 14px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.preview-stage {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+/* Which pane the moment happens in, said in the border rather than in more prose. */
+.preview-stage.is-left { border-left: 3px solid var(--accent); }
+.preview-stage.is-right { border-left: 3px solid #b9bed4; }
+
+.preview-stage-n {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.preview-stage-pane {
+  margin-left: 8px;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.42);
+}
+
+.preview-stage p { margin: 4px 0 0; font-size: 13px; line-height: 1.5; }
+
+.preview-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  align-items: start;
+  margin: 14px 0 8px;
+}
+
+/* The inclusion switches are the widest group and the one that changes the stimulus rather than the
+   view of it, so they get a row to themselves wherever the grid has more than one column. */
+.preview-field-wide { grid-column: 1 / -1; }
+
+/* On/off said in the chip as well as in the box: a row of four look-alike toggles is read at a
+   glance, and the glance has to land on which ones are IN. */
+.preview-section.is-in {
+  border-color: var(--accent);
+  background: rgba(120, 87, 255, 0.08);
+  font-weight: 700;
+}
+
+.preview-save .welcome-status { margin: 0; font-size: 12px; align-self: center; }
+
+.preview-field { display: block; min-width: 0; }
+.preview-field .welcome-label { display: block; margin-bottom: 5px; }
+
+.preview-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Not shipped. A switch that changes what participants see has to look different from one that
+   only changes this preview. */
+.preview-toggle.is-proposal {
+  border-color: #f0a020;
+  background: rgba(240, 160, 32, 0.08);
+}
+
+.preview-frame {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0 0;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--panel-bg);
+}
+
+.preview-pane-label {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f6f7fb;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.preview-stimulus,
+.preview-question {
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #fff;
+}
+
+.preview-question { background: var(--panel-bg); border-left: 1px solid var(--line); }
+
+.preview-inert { margin-top: 12px; }
+
+@media (max-width: 900px) {
+  .preview-controls { grid-template-columns: 1fr; }
+  .preview-frame { grid-template-columns: 1fr; }
+  .preview-question { border-left: 0; border-top: 1px solid var(--line); }
+}
+
+/* Which arm the left pane is actually showing — recorded, or derived from the grounded one at
+   render. A researcher reviewing wording needs to know which of the two they are reading. */
+.preview-source { margin: 8px 0 0; }
+.preview-source.is-derived {
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(120, 87, 255, 0.08);
+}
+
+/* ── The Find V2 walkthrough ───────────────────────────────────────────────────
+   Reuses V1's .tut-* vocabulary for the hero, the nav bar and the debrief. These are the pieces
+   this walkthrough adds: the orientation card that sits above the question on a practice task, and
+   the quoted page sentences in the Find debrief. (V1's .tut-evidence expects <li> children and
+   compares what the participant picked; this one only quotes, so it is its own thing.) */
+.tut-orient {
+  border-color: var(--accent);
+  background: rgba(120, 87, 255, 0.05);
+}
+
+.tut-orient-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.tut-orient-list li { margin-bottom: 7px; }
+.tut-orient-list b { color: var(--ink); }
+
+.tut-debrief-answer { margin: 6px 0 10px; font-weight: 700; }
+
+.tut-fact {
+  border-left: 3px solid var(--accent);
+  padding: 4px 0 4px 10px;
+  margin: 10px 0;
+}
+
+.tut-fact-label {
+  font: 800 11px/1.4 inherit;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tut-fact-text { font-size: 13.5px; line-height: 1.5; }
