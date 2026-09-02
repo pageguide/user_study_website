@@ -529,6 +529,15 @@
         body: 'Every action it took, in order. <b>Hover a step</b> to see the page it was looking at when it acted, and click for a full-size view.',
       },
       {
+        // The legend, not a flagged row: it is the thing that explains what the flags mean, and it
+        // is at the top of the list, so a card placed against it does not sit on top of the steps
+        // the participant is being told to look at. Dropped when the flag is off — startTour skips
+        // a step whose target is not on the screen.
+        target: '.tv-key-legend',
+        title: 'The milestones',
+        body: 'Some steps are marked <b>milestone</b> — the ones the agent treated as turning points in the run. Those are the important ones to look at.',
+      },
+      {
         target: '.tv-answer',
         title: 'What it reported back',
         body: 'The claim you are judging. The numbered marks are references — click one to see the step it rests on. An agent can finish, sound certain, and describe something its own steps do not show.',

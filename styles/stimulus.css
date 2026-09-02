@@ -515,14 +515,16 @@ body {
   letter-spacing: 0.03em;
 }
 
+/* Read at the size of the steps it is about, not at footnote size. It is the one line that says
+   what the flags mean, and set smaller than the list below it, it read as a caption to be skipped. */
 .tv-key-legend {
-  margin: 0 0 8px;
-  padding: 8px 10px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
   border-radius: 8px;
   background: rgba(240, 160, 32, 0.08);
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: rgba(0, 0, 0, 0.62);
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: rgba(0, 0, 0, 0.75);
 }
 
 /* ── The before/after thumbnails ──────────────────────────────────────────────
