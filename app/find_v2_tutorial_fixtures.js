@@ -171,9 +171,25 @@
             { n: 3, instruction: "Click the Saturday 07:00 lane swim to book it.", screenshot: shot(3, 2) },
             { n: 4, instruction: 'Confirm the booking and read back the reference.', screenshot: shot(4, 2) },
           ],
-          answer: 'Booked. You have a lane at the 7am Saturday swim, and the booking reference is LK-4417.',
-          answer_evidence: [],
-          answer_segments: [],
+          // THE ANSWER'S REFERENCES, POINTING BACK AT THE STEPS. A real grounded Guide answer carries
+          // [ev:key] markers, which render as the numbered chips beside the answer, and phrases
+          // linked to a step, which render underlined. Without them the practice taught a screen
+          // with no references on it and then dropped a participant into tasks that have them.
+          //
+          // AND THEY ARE WHERE THE RUN COMES APART. Chip 1 opens step 3 — the session it actually
+          // clicked, which is the SUNDAY row. Chip 2 opens step 4, the page it read the reference
+          // off, where no reference appears at all. A participant who opens either one can see the
+          // misreport rather than having to take the trail's word for it.
+          answer: 'Booked. You have a lane at the 7am Saturday swim [ev:sat_session], and the booking reference is LK-4417 [ev:confirmation].',
+          answer_evidence: [
+            { key: 'sat_session', step: 3, note: 'The session it opened at step 3.', screenshot: shot(3, 2) },
+            { key: 'confirmation', step: 4, note: 'The page it read the reference off, at step 4.', screenshot: shot(4, 2) },
+          ],
+          // An underlined phrase resolves to its step's own screenshot — the second way a grounded
+          // answer can be checked, and the one a participant meets by hovering rather than clicking.
+          answer_segments: [
+            { phrase: 'the 7am Saturday swim', step: 3, note: 'Step 3 — the session it actually opened.' },
+          ],
           trail: {
             summary: 'I opened the booking page, compared the weekend sessions and booked the 7am lane swim.',
             milestones: [
@@ -209,7 +225,7 @@
     verdict: 'no',
     answer: 'No — it says it booked a lane, but it did not.',
     why: 'The reference <b>LK-4417</b> appears nowhere in the run.',
-    where: 'Step 3 names the <b>Saturday</b> 07:00 swim; the screenshot highlights the <b>Sunday</b> one.',
+    where: 'Open the first numbered reference in the answer: step 3 names the <b>Saturday</b> 07:00 swim, and the screenshot highlights the <b>Sunday</b> one.',
     closing: 'No covers two cases: it did not finish, or it claims something that did not happen.',
   };
 

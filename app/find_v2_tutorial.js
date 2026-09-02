@@ -531,7 +531,7 @@
       {
         target: '.tv-answer',
         title: 'What it reported back',
-        body: 'The claim you are judging. An agent can finish, sound certain, and describe something its own steps do not show.',
+        body: 'The claim you are judging. The numbered marks are references — click one to see the step it rests on. An agent can finish, sound certain, and describe something its own steps do not show.',
       },
       {
         target: '#q-find-answer',
