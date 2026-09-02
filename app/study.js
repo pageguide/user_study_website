@@ -10,9 +10,13 @@ const S = window.StudySession;
 const IS_FIND_V2 = window.STUDY_VARIANT === 'find-v2';
 
 // Find V2 only. The verdict radios stay disabled for this long after a task opens, so a participant
-// cannot click Yes before the answer they are judging has been read; and once the three-minute limit
-// passes they get this much longer to give one before the task is submitted with none.
-const ANSWER_LOCK_MS = 10 * 1000;
+// cannot click Yes before the answer they are judging has been read; and once the task limit passes
+// they get this much longer to give one before the task is submitted with none.
+//
+// FIVE SECONDS, DOWN FROM TEN. It only has to outlast the reflex to answer before reading — ten was
+// long enough to be waited out rather than read through, and on a two-minute task it spent a
+// twelfth of the clock on a disabled control.
+const ANSWER_LOCK_MS = 5 * 1000;
 // How long a preview must be held before it counts as having been looked at. NAMED APART from
 // app/stimulus.js's REFERENCE_DWELL_MS, which owns the value: classic <script> tags share one global
 // lexical scope, and a second top-level `const` of that name is a parse error that kills this entire
@@ -828,10 +832,10 @@ function verdictOptionsHtml(options, labelFor) {
  * VERDICT_GRACE_MS to give one; a task that runs those out is submitted with no verdict at all,
  * which is a third outcome and is stored as one.
  *
- * AND THE VERDICT IS LOCKED FOR THE FIRST TEN SECONDS. Yes/No is one click away from the moment the
- * task opens, and a participant who wants to be finished can answer before the page has finished
- * rendering — producing a row that looks like a judgment and is a coin flip. The lock costs an
- * honest participant ten seconds they were going to spend reading anyway.
+ * AND THE VERDICT IS LOCKED FOR THE FIRST FEW SECONDS (ANSWER_LOCK_MS). Yes/No is one click away
+ * from the moment the task opens, and a participant who wants to be finished can answer before the
+ * page has finished rendering — producing a row that looks like a judgment and is a coin flip. The
+ * lock costs an honest participant seconds they were going to spend reading anyway.
  */
 function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   const { idx, queue } = S.state;
