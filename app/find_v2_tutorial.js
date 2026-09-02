@@ -278,7 +278,7 @@
   // Markup in it renders as the tags themselves.
   const GUIDE_POINTS = [
     ['Open View Journey', 'Every step it took. Hover one to see the page behind it.'],
-    ['A “No” answer covers two cases', 'It did not finish, or its answer claims something that did not happen.'],
+    ['“No” covers two cases', 'It did not finish, or it claims something that did not happen.'],
   ];
 
   function orientationHtml(task) {
@@ -545,7 +545,7 @@
       {
         target: '#q-find-answer',
         title: 'Your verdict',
-        body: 'Did it complete the task? <b>No</b> covers two cases: it did not finish, <b>or</b> its answer claims something that did not happen.',
+        body: 'Did it complete the task? <b>“No”</b> covers two cases: it did not finish, <b>or</b> it claims something that did not happen.',
       },
     ];
   }

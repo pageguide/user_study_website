@@ -226,7 +226,7 @@
     answer: 'No — it says it booked a lane, but it did not.',
     why: 'The reference <b>LK-4417</b> appears nowhere in the run.',
     where: 'Open the first numbered reference in the answer: step 3 names the <b>Saturday</b> 07:00 swim, and the screenshot highlights the <b>Sunday</b> one.',
-    closing: 'No covers two cases: it did not finish, or it claims something that did not happen.',
+    closing: '“No” covers two cases: it did not finish, or it claims something that did not happen.',
   };
 
 
