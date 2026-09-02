@@ -20,6 +20,13 @@
 //
 // SKIPPABLE FROM ANYWHERE. Someone who has done this before should not be made to sit through it,
 // and someone lost partway through should not have to finish to escape.
+//
+// THE INTRO SAYS ALMOST NOTHING, on purpose. It used to carry three more lines — the answer lock and
+// the time limit, that some tasks deliberately show no evidence, and that nothing is scored. Every
+// one of those is said again where it applies and can be acted on: the two clocks are on screen
+// during the task, the condition banner names the arm and explains it behind its ⓘ, and each
+// debrief closes by saying the real tasks never tell you whether you were right. A screen a
+// participant reads once, before any of it means anything, is the worst place to say them.
 
 (function () {
   // Its own key. V1's walkthrough teaches a different instrument — an error taxonomy this study does
@@ -89,13 +96,8 @@
       <div class="tut-hero">
         <p class="tut-eyebrow">Before you start</p>
         <h1 class="tut-title">A quick walkthrough</h1>
-        <p class="tut-lead">Two practice tasks. Nothing here is recorded, and neither is one of your
-          four.</p>
+        <p class="tut-lead">Two practice tasks. Nothing here is recorded.</p>
 
-        <!-- GIVEN / TASK, on both cards. The two kinds hand a participant different material and
-             ask them for different things, and a card that only names the material leaves them to
-             infer the job from it. Said in the same two lines each time, so the difference between
-             the kinds is the only thing that reads as different. -->
         <div class="tut-kinds">
           <div class="tut-kind">
             <div class="tut-kind-head">FIND</div>
@@ -115,12 +117,6 @@
             </div>
           </div>
         </div>
-
-        <ol class="tut-list">
-          <li>There is a short wait before you can answer, and a time limit.</li>
-          <li>Some tasks show no evidence at all — no highlights, no screenshots. That is by design.</li>
-          <li>There is no score. The practice tells you the answer; the real tasks never will.</li>
-        </ol>
 
         <div class="tut-welcome-actions">
           <button class="welcome-btn" id="tut-v2-start">Start the walkthrough →</button>
