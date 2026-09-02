@@ -332,10 +332,11 @@ function render() {
   // the trail in their head and matching numbers by eye. Flagging them turns that lookup into a
   // glance.
   //
-  // OFF BY DEFAULT, AND A STUDY VARIABLE. It changes where a participant looks first, so it is a
-  // manipulation and not a nicety — and it points at the steps the agent CHOSE to narrate, which for
-  // a misreported run is exactly where the discrepancy is not. Turning it on for everyone would add
-  // a second uncontrolled difference to a design that already varies grounding.
+  // A STUDY VARIABLE, NOT A NICETY, and now a strong one: the legend tells a participant they can
+  // check the marked steps INSTEAD OF the whole journey. That is licence to stop reading, and the
+  // steps it licenses stopping at are the ones the agent CHOSE to narrate — which for a misreported
+  // run is exactly where the discrepancy is not. Switchable per study (flag_milestones) so a
+  // condition can be run without it; see supabase_v2_milestone_flag.sql.
   const keySteps = new Set(milestones.map(m => Number(m.step)).filter(n => Number.isFinite(n)));
   const marking = layout.highlightMilestones && keySteps.size > 0;
 
@@ -349,10 +350,7 @@ function render() {
           ? ` <span class="tv-key-count">${keySteps.size} milestones</span>` : ''}</summary>
         <div class="tv-journey-list">
           ${marking ? `<p class="tv-key-legend">The steps marked <span class="tv-key-flag">milestone</span>
-            are the ones ${layout.sections.trail
-              ? 'the reasoning trail above accounts for'
-              : 'the agent treated as turning points in the run'} — they are the important ones to
-            look at.</p>` : ''}
+            are the important steps. You can check <b>these</b> rather than viewing the entire journey.</p>` : ''}
           ${steps.map(step => {
             const live = showShots && !!step.screenshot;
             const key = marking && keySteps.has(Number(step.n));

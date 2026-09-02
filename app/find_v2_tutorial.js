@@ -535,7 +535,7 @@
         // a step whose target is not on the screen.
         target: '.tv-key-legend',
         title: 'The milestones',
-        body: 'Some steps are marked <b>milestone</b> — the ones the agent treated as turning points in the run. Those are the important ones to look at.',
+        body: 'Some steps are marked <b>milestone</b>. Those are the important steps — you can check those rather than reading the whole journey.',
       },
       {
         target: '.tv-answer',
