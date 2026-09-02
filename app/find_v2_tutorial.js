@@ -278,7 +278,7 @@
   // Markup in it renders as the tags themselves.
   const GUIDE_POINTS = [
     ['Open View Journey', 'Every step it took. Hover one to see the page behind it.'],
-    ['No covers two cases', 'It did not finish, or its answer claims something that did not happen.'],
+    ['A “No” answer covers two cases', 'It did not finish, or its answer claims something that did not happen.'],
   ];
 
   function orientationHtml(task) {

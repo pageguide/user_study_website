@@ -181,13 +181,23 @@ function bindStates() {
  * looked for a run that predated the bookends — indistinguishable from the feature not existing.
  */
 function statesSection() {
+  // A THUMBNAIL, NOT JUST A LABEL. "Click to view" describes a picture without showing that there
+  // is one, and a card that looks like a heading gets read as a heading — the two state shots are
+  // the fastest way to see whether the job got done, and they were the least-opened thing on the
+  // screen. The thumbnail is the same JPEG the lightbox opens, drawn small; nothing extra is
+  // fetched, since the whole trajectory is already in memory by the time this renders.
   const cell = (state, kicker, caption, key) => {
     const has = !!state?.screenshot;
     return `
       <button type="button" class="tv-state-btn${has ? '' : ' is-empty'}" data-state="${key}"${has ? '' : ' disabled'}>
-        <span class="tv-state-kicker">${esc(kicker)}</span>
-        <span class="tv-state-cap">${esc(caption)}</span>
-        <span class="tv-state-hint">${has ? 'Click to view' : 'Not recorded for this run'}</span>
+        ${has ? `<span class="tv-state-thumb">
+          <img src="data:image/jpeg;base64,${state.screenshot}" alt="" loading="lazy">
+        </span>` : ''}
+        <span class="tv-state-text">
+          <span class="tv-state-kicker">${esc(kicker)}</span>
+          <span class="tv-state-cap">${esc(caption)}</span>
+          <span class="tv-state-hint">${has ? 'Click to enlarge' : 'Not recorded for this run'}</span>
+        </span>
       </button>`;
   };
   return `
