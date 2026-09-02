@@ -351,7 +351,8 @@ function render() {
           ${marking ? `<p class="tv-key-legend">The steps marked <span class="tv-key-flag">milestone</span>
             are the ones ${layout.sections.trail
               ? 'the reasoning trail above accounts for'
-              : 'the agent treated as milestones'}. Start there — the rest are still yours to read.</p>` : ''}
+              : 'the agent treated as turning points in the run'} — they are the important ones to
+            look at.</p>` : ''}
           ${steps.map(step => {
             const live = showShots && !!step.screenshot;
             const key = marking && keySteps.has(Number(step.n));
