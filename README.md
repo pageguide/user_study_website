@@ -144,6 +144,28 @@ recorded in `variant_key`, not against a fixed property of the claim row.
 
 4. Serve the repo and open `http://localhost:8000/` — Find V2 is the default page.
 
+## Deploying
+
+`.github/workflows/deploy.yml` publishes the site to GitHub Pages on every push to `main`. It writes
+both config files at deploy time, because both are gitignored — they hold credentials and must not
+live in the repo. Four repository secrets are required (Settings → Secrets and variables → Actions),
+and the deploy fails loudly without them rather than publishing a site that reaches no database:
+
+| Secret | What it is |
+| --- | --- |
+| `SUPABASE_URL` | the V1 project's Project URL |
+| `SUPABASE_ANON_KEY` | the V1 project's anon / publishable key |
+| `FIND_V2_SUPABASE_URL` | the **Find V2** project's Project URL |
+| `FIND_V2_SUPABASE_ANON_KEY` | the Find V2 project's anon / publishable key |
+
+The V2 pair is the one the front door needs: `index.html` is Find V2, and a deploy without it shows
+"Find V2 is waiting for its new Supabase project" with a Start button nobody can press. There is
+deliberately no fallback to the V1 secrets — a site pointed at the wrong project does not fail, it
+runs, reads no claims, and writes results where nobody will look for them.
+
+Anon keys only. The secret key belongs in `.env` on the researcher's machine, read by
+`scripts/publish.mjs`; Supabase refuses it from a browser anyway.
+
 The Guide half of V2 was added after the Find half, in one idempotent SQL file per change. On a
 project that has only ever run `supabase_find_v2.sql`, run these in order in the same SQL editor:
 
