@@ -1,65 +1,65 @@
 facet,measure,condition,n,mean,sd,se,median,q1,q3
-Find × Text,accuracy,Non-grounded,31,1.0000,0.0000,0.0000,1.0000,1.0000,1.0000
-Find × Text,localization F1,Non-grounded,31,0.6613,0.3509,0.0630,0.5000,0.5000,1.0000
-Find × Text,F1 · Part 1 · passage,Non-grounded,31,0.4516,0.5059,0.0909,0.0000,0.0000,1.0000
-Find × Text,F1 · Part 2 · passage,Non-grounded,31,0.8710,0.3408,0.0612,1.0000,1.0000,1.0000
-Find × Text,judge time (s),Non-grounded,31,195.3594,163.8252,29.4239,183.2490,67.0815,262.9095
-Find × Text,locate time (s),Non-grounded,31,88.7012,148.1963,26.6168,42.6370,28.5850,86.9515
-Find × Text,"total time (s), all rows",Non-grounded,31,284.0606,224.9933,40.4100,213.2900,150.1205,329.6010
-Find × Text,"total time (s), correct only",Non-grounded,31,284.0606,224.9933,40.4100,213.2900,150.1205,329.6010
-Find × Text,accuracy,Grounded,34,1.0000,0.0000,0.0000,1.0000,1.0000,1.0000
-Find × Text,localization F1,Grounded,34,0.8529,0.2620,0.0449,1.0000,0.6250,1.0000
-Find × Text,F1 · Part 1 · passage,Grounded,34,0.7353,0.4478,0.0768,1.0000,0.2500,1.0000
-Find × Text,F1 · Part 2 · passage,Grounded,34,0.9706,0.1715,0.0294,1.0000,1.0000,1.0000
-Find × Text,judge time (s),Grounded,34,159.4796,146.4408,25.1144,135.3445,47.4053,195.8725
-Find × Text,locate time (s),Grounded,34,56.9180,39.9931,6.8588,51.4460,27.8845,66.8498
-Find × Text,"total time (s), all rows",Grounded,34,216.3975,154.7562,26.5405,195.9265,94.4317,280.1333
-Find × Text,"total time (s), correct only",Grounded,34,216.3975,154.7562,26.5405,195.9265,94.4317,280.1333
-Find × Visual,accuracy,Non-grounded,24,0.7917,0.4149,0.0847,1.0000,1.0000,1.0000
-Find × Visual,localization F1,Non-grounded,24,0.2500,0.3901,0.0796,0.0000,0.0000,0.5000
-Find × Visual,F1 · Part 1 · passage,Non-grounded,24,0.2917,0.4643,0.0948,0.0000,0.0000,1.0000
-Find × Visual,F1 · Part 2 · image,Non-grounded,24,0.2083,0.4149,0.0847,0.0000,0.0000,0.0000
-Find × Visual,judge time (s),Non-grounded,24,155.0752,211.7866,43.2308,81.1165,54.5740,127.5470
-Find × Visual,locate time (s),Non-grounded,24,121.6170,152.0807,31.0433,61.7560,33.2188,119.4667
-Find × Visual,"total time (s), all rows",Non-grounded,24,276.6922,313.4489,63.9825,152.4545,129.4547,214.9610
-Find × Visual,"total time (s), correct only",Non-grounded,19,259.0719,296.1573,67.9431,154.0040,129.2425,196.6375
-Find × Visual,accuracy,Grounded,21,0.8571,0.3586,0.0782,1.0000,1.0000,1.0000
-Find × Visual,localization F1,Grounded,21,0.2857,0.2988,0.0652,0.5000,0.0000,0.5000
-Find × Visual,F1 · Part 1 · passage,Grounded,21,0.3333,0.4830,0.1054,0.0000,0.0000,1.0000
-Find × Visual,F1 · Part 2 · image,Grounded,21,0.2381,0.4364,0.0952,0.0000,0.0000,0.0000
-Find × Visual,judge time (s),Grounded,21,75.5373,48.1924,10.5164,82.6590,40.0640,107.5430
-Find × Visual,locate time (s),Grounded,21,41.1854,24.4784,5.3416,33.4630,23.5760,48.7360
-Find × Visual,"total time (s), all rows",Grounded,21,116.7228,54.5759,11.9094,112.9280,86.5300,148.4520
-Find × Visual,"total time (s), correct only",Grounded,18,121.7835,53.9719,12.7213,113.3170,91.5228,156.1890
-Guide × Text,accuracy,Non-grounded,20,0.5500,0.5104,0.1141,1.0000,0.0000,1.0000
-Guide × Text,localization F1,Non-grounded,20,0.1254,0.3099,0.0693,0.0000,0.0000,0.0000
-Guide × Text,F1 · Error type F1,Non-grounded,20,0.1500,0.3663,0.0819,0.0000,0.0000,0.0000
-Guide × Text,F1 · Step F1,Non-grounded,20,0.1008,0.2637,0.0590,0.0000,0.0000,0.0000
-Guide × Text,judge time (s),Non-grounded,20,58.1921,40.0805,8.9623,51.9405,25.7142,82.8958
-Guide × Text,locate time (s),Non-grounded,20,27.6719,39.0793,8.7384,12.2135,4.8580,33.3770
-Guide × Text,"total time (s), all rows",Non-grounded,20,85.8640,61.5278,13.7580,76.7655,48.3588,100.8642
-Guide × Text,"total time (s), correct only",Non-grounded,11,97.8160,70.8787,21.3707,84.3470,57.0230,101.2145
-Guide × Text,accuracy,Grounded,29,0.6552,0.4837,0.0898,1.0000,0.0000,1.0000
-Guide × Text,localization F1,Grounded,29,0.1805,0.3445,0.0640,0.0000,0.0000,0.0000
-Guide × Text,F1 · Error type F1,Grounded,29,0.2011,0.3763,0.0699,0.0000,0.0000,0.0000
-Guide × Text,F1 · Step F1,Grounded,29,0.1598,0.3413,0.0634,0.0000,0.0000,0.0000
-Guide × Text,judge time (s),Grounded,29,118.5668,117.8962,21.8928,95.5000,48.2740,145.6630
-Guide × Text,locate time (s),Grounded,29,38.9996,47.6061,8.8402,18.3420,7.8140,50.9780
-Guide × Text,"total time (s), all rows",Grounded,29,157.5663,120.8024,22.4324,146.3700,64.4290,205.2240
-Guide × Text,"total time (s), correct only",Grounded,19,163.3634,132.9630,30.5038,129.8910,65.1020,209.6425
-Guide × Visual,accuracy,Non-grounded,27,0.8148,0.3958,0.0762,1.0000,1.0000,1.0000
-Guide × Visual,localization F1,Non-grounded,27,0.2744,0.3382,0.0651,0.0000,0.0000,0.5833
-Guide × Visual,F1 · Error type F1,Non-grounded,27,0.3827,0.4501,0.0866,0.0000,0.0000,0.8333
-Guide × Visual,F1 · Step F1,Non-grounded,27,0.1661,0.2887,0.0556,0.0000,0.0000,0.3095
-Guide × Visual,judge time (s),Non-grounded,27,69.7865,93.7095,18.0344,36.8510,22.9250,73.9515
-Guide × Visual,locate time (s),Non-grounded,27,19.5939,22.4644,4.3233,15.2850,3.5245,22.6725
-Guide × Visual,"total time (s), all rows",Non-grounded,27,89.3804,111.5155,21.4612,65.2030,36.3805,84.3595
-Guide × Visual,"total time (s), correct only",Non-grounded,22,79.9674,100.2551,21.3745,65.5255,36.2283,79.9398
-Guide × Visual,accuracy,Grounded,31,0.9677,0.1796,0.0323,1.0000,1.0000,1.0000
-Guide × Visual,localization F1,Grounded,31,0.3547,0.3938,0.0707,0.0000,0.0000,0.7333
-Guide × Visual,F1 · Error type F1,Grounded,31,0.4624,0.4920,0.0884,0.0000,0.0000,1.0000
-Guide × Visual,F1 · Step F1,Grounded,31,0.2470,0.3444,0.0619,0.0000,0.0000,0.6000
-Guide × Visual,judge time (s),Grounded,31,125.0253,165.9411,29.8039,72.7600,41.4200,152.3930
-Guide × Visual,locate time (s),Grounded,31,33.4060,41.3282,7.4228,22.4720,3.9320,44.9325
-Guide × Visual,"total time (s), all rows",Grounded,31,158.4313,171.3345,30.7726,112.0600,52.9310,204.7310
-Guide × Visual,"total time (s), correct only",Grounded,30,162.2180,172.9391,31.5742,120.2035,55.6750,213.4780
+Find × Text,accuracy,Non-grounded,40,0.9500,0.2207,0.0349,1.0000,1.0000,1.0000
+Find × Text,localization F1,Non-grounded,40,0.8375,0.3078,0.0487,1.0000,0.8750,1.0000
+Find × Text,F1 · Part 1 · passage,Non-grounded,40,0.7750,0.4229,0.0669,1.0000,1.0000,1.0000
+Find × Text,F1 · Part 2 · passage,Non-grounded,40,0.9000,0.3038,0.0480,1.0000,1.0000,1.0000
+Find × Text,judge time (s),Non-grounded,40,182.5320,152.6340,24.1335,168.1885,66.6560,239.3843
+Find × Text,locate time (s),Non-grounded,40,144.4831,431.4257,68.2144,43.2095,29.3130,73.5920
+Find × Text,"total time (s), all rows",Non-grounded,40,327.0151,462.5147,73.1300,213.2250,134.9155,319.2475
+Find × Text,"total time (s), correct only",Non-grounded,38,262.1473,212.5478,34.4798,207.5510,134.2005,305.5808
+Find × Text,accuracy,Grounded,44,1.0000,0.0000,0.0000,1.0000,1.0000,1.0000
+Find × Text,localization F1,Grounded,44,0.9432,0.1934,0.0292,1.0000,1.0000,1.0000
+Find × Text,F1 · Part 1 · passage,Grounded,44,0.9318,0.2550,0.0384,1.0000,1.0000,1.0000
+Find × Text,F1 · Part 2 · passage,Grounded,44,0.9545,0.2107,0.0318,1.0000,1.0000,1.0000
+Find × Text,judge time (s),Grounded,44,170.2262,155.0893,23.3806,135.3445,62.9220,212.1665
+Find × Text,locate time (s),Grounded,44,55.1924,38.7428,5.8407,49.1320,27.3293,65.3372
+Find × Text,"total time (s), all rows",Grounded,44,225.4186,163.9081,24.7101,195.9265,109.0110,300.1945
+Find × Text,"total time (s), correct only",Grounded,44,225.4186,163.9081,24.7101,195.9265,109.0110,300.1945
+Find × Visual,accuracy,Non-grounded,41,0.8537,0.3578,0.0559,1.0000,1.0000,1.0000
+Find × Visual,localization F1,Non-grounded,41,0.5976,0.2788,0.0435,0.5000,0.5000,1.0000
+Find × Visual,F1 · Part 1 · passage,Non-grounded,41,0.2927,0.4606,0.0719,0.0000,0.0000,1.0000
+Find × Visual,F1 · Part 2 · image,Non-grounded,41,0.9024,0.3004,0.0469,1.0000,1.0000,1.0000
+Find × Visual,judge time (s),Non-grounded,41,129.3892,167.9131,26.2236,79.1370,52.7860,126.1030
+Find × Visual,locate time (s),Non-grounded,41,85.8995,124.1344,19.3865,45.5950,22.5800,72.2870
+Find × Visual,"total time (s), all rows",Non-grounded,41,215.2887,251.5429,39.2844,146.3290,106.5150,193.4600
+Find × Visual,"total time (s), correct only",Non-grounded,35,199.5233,228.7495,38.6657,150.9050,105.9340,191.6445
+Find × Visual,accuracy,Grounded,36,0.9167,0.2803,0.0467,1.0000,1.0000,1.0000
+Find × Visual,localization F1,Grounded,36,0.6667,0.2673,0.0445,0.5000,0.5000,1.0000
+Find × Visual,F1 · Part 1 · passage,Grounded,36,0.3611,0.4871,0.0812,0.0000,0.0000,1.0000
+Find × Visual,F1 · Part 2 · image,Grounded,36,0.9722,0.1667,0.0278,1.0000,1.0000,1.0000
+Find × Visual,judge time (s),Grounded,36,87.4306,62.3172,10.3862,81.6900,41.4357,112.5545
+Find × Visual,locate time (s),Grounded,36,77.2605,237.9736,39.6623,33.1585,19.3863,50.8965
+Find × Visual,"total time (s), all rows",Grounded,36,164.6911,235.7353,39.2892,114.5070,93.5095,160.7655
+Find × Visual,"total time (s), correct only",Grounded,33,171.8122,244.8268,42.6189,115.3080,95.8360,166.7580
+Guide × Text,accuracy,Non-grounded,33,0.5455,0.5056,0.0880,1.0000,0.0000,1.0000
+Guide × Text,localization F1,Non-grounded,33,0.1399,0.2891,0.0503,0.0000,0.0000,0.0000
+Guide × Text,F1 · Error type F1,Non-grounded,33,0.1717,0.3448,0.0600,0.0000,0.0000,0.0000
+Guide × Text,F1 · Step F1,Non-grounded,33,0.1081,0.2513,0.0437,0.0000,0.0000,0.0000
+Guide × Text,judge time (s),Non-grounded,33,77.7633,78.1330,13.6012,67.0370,28.0030,87.9740
+Guide × Text,locate time (s),Non-grounded,33,27.2872,34.0966,5.9355,11.1090,4.9050,34.6160
+Guide × Text,"total time (s), all rows",Non-grounded,33,105.0506,86.9836,15.1419,84.3470,59.7530,123.8370
+Guide × Text,"total time (s), correct only",Non-grounded,18,118.2643,99.5181,23.4566,82.7580,69.5940,117.0553
+Guide × Text,accuracy,Grounded,40,0.6750,0.4743,0.0750,1.0000,0.0000,1.0000
+Guide × Text,localization F1,Grounded,40,0.1767,0.3477,0.0550,0.0000,0.0000,0.0000
+Guide × Text,F1 · Error type F1,Grounded,40,0.1958,0.3791,0.0599,0.0000,0.0000,0.0000
+Guide × Text,F1 · Step F1,Grounded,40,0.1575,0.3379,0.0534,0.0000,0.0000,0.0000
+Guide × Text,judge time (s),Grounded,40,114.9889,106.4239,16.8271,89.6050,48.0538,142.0953
+Guide × Text,locate time (s),Grounded,40,42.6091,55.5801,8.7880,22.8845,8.1267,51.3375
+Guide × Text,"total time (s), all rows",Grounded,40,157.5981,114.2258,18.0607,138.1305,73.3820,205.4952
+Guide × Text,"total time (s), correct only",Grounded,27,165.1765,125.8400,24.2179,129.8910,71.7810,223.9495
+Guide × Visual,accuracy,Non-grounded,44,0.8409,0.3700,0.0558,1.0000,1.0000,1.0000
+Guide × Visual,localization F1,Non-grounded,44,0.3160,0.3212,0.0484,0.3333,0.0000,0.6417
+Guide × Visual,F1 · Error type F1,Non-grounded,44,0.4242,0.4090,0.0617,0.6667,0.0000,0.6667
+Guide × Visual,F1 · Step F1,Non-grounded,44,0.2077,0.3131,0.0472,0.0000,0.0000,0.4893
+Guide × Visual,judge time (s),Non-grounded,44,64.7954,79.8698,12.0408,37.5620,23.9920,73.9315
+Guide × Visual,locate time (s),Non-grounded,44,29.8965,44.4793,6.7055,17.4615,3.5343,33.8555
+Guide × Visual,"total time (s), all rows",Non-grounded,44,94.6919,108.8830,16.4147,66.9555,39.0003,92.7668
+Guide × Visual,"total time (s), correct only",Non-grounded,37,93.6761,104.1545,17.1229,69.9150,39.7720,91.8360
+Guide × Visual,accuracy,Grounded,44,0.9318,0.2550,0.0384,1.0000,1.0000,1.0000
+Guide × Visual,localization F1,Grounded,44,0.3908,0.3854,0.0581,0.4547,0.0000,0.8000
+Guide × Visual,F1 · Error type F1,Grounded,44,0.5000,0.4741,0.0715,0.6667,0.0000,1.0000
+Guide × Visual,F1 · Step F1,Grounded,44,0.2816,0.3380,0.0510,0.0000,0.0000,0.6000
+Guide × Visual,judge time (s),Grounded,44,105.1394,143.1673,21.5833,71.6670,39.2610,108.1688
+Guide × Visual,locate time (s),Grounded,44,33.4610,37.6415,5.6747,23.3295,4.6165,49.1208
+Guide × Visual,"total time (s), all rows",Grounded,44,138.6004,149.1094,22.4791,98.8500,53.2525,172.6070
+Guide × Visual,"total time (s), correct only",Grounded,41,147.1422,150.9451,23.5737,105.1730,62.3050,175.3400

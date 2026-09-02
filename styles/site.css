@@ -118,6 +118,31 @@ body {
 }
 .tv-condition-hint[hidden] { display: none; }
 
+/* The counterbalancing group, deliberately QUIETER than the condition above it. The condition
+   changes between tasks and is something the participant has to act on; the group is fixed for the
+   whole sitting and is there so a session can be identified — mostly by whoever is running it. Same
+   pill geometry so the two read as one row of metadata, but outline-only and in the muted ink, so
+   it never competes with the chip that carries meaning. */
+.tv-group {
+  display: flex;
+  align-items: baseline;
+  gap: 6px 8px;
+  margin-top: 6px;
+}
+.tv-group-badge {
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font: 700 10.5px/1.5 inherit;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tv-group-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* ── The question pane ───────────────────────────────────────────────────────── */
 .q-head {
   padding: 14px 16px;
@@ -137,9 +162,91 @@ body {
   background: var(--card);
   border-bottom: 1px solid var(--line);
 }
+/* A TEST RUN IS OTHERWISE INDISTINGUISHABLE FROM A REAL ONE. Same tasks, same screens, same answers,
+   and saveStudyResult writes none of them on purpose — so the only thing standing between a
+   researcher and a whole rehearsal mistaken for data is this band. Amber, matching .q-sub.is-warn and
+   the .q-timer-chip.is-low chip: nothing has gone wrong, but nothing is being recorded either. */
+.q-progress.is-dry-run {
+  color: #8a5300;
+  background: #fff8e8;
+  border-bottom-color: rgba(214, 138, 0, 0.55);
+}
 
 .q-body { padding: 16px; }
 .q-loading { padding: 24px 16px; color: var(--muted); }
+
+.q-task-label {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 7px;
+}
+
+/* The term that carries from one part of the question to the next.
+   Bold only. It briefly carried a purple underlay as well, on the theory that bold inside an
+   already-bold card would read as generic emphasis rather than "this exact phrase again" — but the
+   card's own tint is purple, so the underlay had almost no contrast against it and added noise
+   without adding the distinction it was there for. Weight alone does the job on this background. */
+.q-hinge {
+  font-weight: 800;
+  color: var(--ink);
+}
+
+/* A two-hop question, as two numbered steps. The two halves are answered from different places —
+   one from the prose, one from the picture it points at — and running them together as a paragraph
+   made finding the seam the participant's first job, on the clock. */
+/* THE STEPS ARE A CHAIN, AND THE CHAIN IS DRAWN.
+   A plain ordered list numbers the parts but says nothing about how they relate — three numbered
+   sentences read as three independent instructions you could tackle in any order, when in fact part
+   2 cannot be started until part 1 has produced something and part 3 needs both. The connector says
+   "this feeds the next one" before a word is read.
+
+   Same construction as the journey timeline in styles/stimulus.css: a numbered marker with a rule
+   running from it to the one below, and no rule under the last. Reusing the shape rather than
+   inventing a second kind of step list keeps one visual language across the two panes. */
+.q-task-parts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: q-part;
+}
+.q-task-parts li {
+  position: relative;
+  counter-increment: q-part;
+  padding: 0 0 14px 30px;
+}
+.q-task-parts li:last-child { padding-bottom: 0; }
+
+/* The numbered marker. */
+.q-task-parts li::before {
+  content: counter(q-part);
+  position: absolute;
+  left: 0;
+  top: -1px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--accent, #7857ff);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 800;
+  line-height: 20px;
+  text-align: center;
+  z-index: 1;
+}
+
+/* The trail to the next step. Stops at the last one, because there is nothing after it to lead to. */
+.q-task-parts li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 22px;
+  bottom: 2px;
+  width: 2px;
+  background: rgba(120, 87, 255, 0.32);
+}
 
 .q-task-card {
   background: #efe9ff;
@@ -151,7 +258,8 @@ body {
   position: relative;
 }
 
-/* One active phase timer. The label changes when the task moves from deciding to checking evidence. */
+/* One countdown for the whole task: 3:00 down to 00:00, then the overrun in red. A soft limit shown
+   this way paces the task without ever cutting an answer off — see window.TaskTimer. */
 .q-timers { position: absolute; top: -11px; right: 12px; display: flex; gap: 6px; }
 .q-timer-chip {
   display: inline-flex;
@@ -170,6 +278,22 @@ body {
   color: var(--accent-dark);
   font-variant-numeric: tabular-nums;   /* so the seconds do not shift the label as they tick */
 }
+
+/* Last 30 seconds: amber, still just information. */
+.q-timer-chip.is-low {
+  border-color: rgba(214, 138, 0, 0.55);
+  background: #fff8e8;
+}
+.q-timer-chip.is-low .q-timer { color: #a35c00; }
+.q-timer-chip.is-low .q-timer-label { color: #a35c00; }
+
+/* Past three minutes: red, counting the overrun up. Nothing is blocked. */
+.q-timer-chip.is-over {
+  border-color: rgba(198, 40, 40, 0.55);
+  background: #fdecec;
+}
+.q-timer-chip.is-over .q-timer { color: #b3261e; }
+.q-timer-chip.is-over .q-timer-label { color: #b3261e; }
 
 .q-card {
   background: var(--card);
@@ -224,6 +348,33 @@ body {
 .q-opt-body { display: flex; flex-direction: column; gap: 2px; }
 .q-opt-name { font-weight: 700; }
 .q-opt-detail { font-size: 12px; color: var(--muted); }
+
+/* ── The opening lock on the verdict ──────────────────────────────────────────
+   Yes/No is one click away from the moment a task opens, and a participant in a hurry can answer
+   before the answer they are judging has rendered. The radios are disabled for the first ten
+   seconds; this says so, and says how much longer, because a control that is dead with no
+   explanation reads as a broken page and gets clicked harder. */
+.q-answer-lock {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+.q-answer-lock b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.q-options.is-locked .q-opt {
+  opacity: 0.55;
+  cursor: default;
+  background: #f4f4f7;
+}
+.q-options.is-locked .q-opt:hover { border-color: var(--line); }
+
+/* The condition chip sits in the question pane in V2, directly under the task card, where it used
+   to sit under the goal in the left pane. Only the spacing differs. */
+.q-body > .tv-condition { margin: 0 0 12px; }
+/* Directly beneath it when both are drawn, so the pair is one block rather than two. */
+.q-body > .tv-condition + .tv-group { margin: -8px 0 12px; }
+.q-body > .tv-group { margin: 0 0 12px; }
 
 .q-post-body { display: flex; flex-direction: column; gap: 14px; }
 .q-post-section {
@@ -819,6 +970,306 @@ body {
   margin-left: 6px;
 }
 .admin-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.admin-settings { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 14px; }
+/* The two axes of the design, in the results table. Neutral fills on purpose — these are conditions,
+   not scores, and a green "correct" against a red "incorrect" would read as good vs bad when it means
+   "the answer shown was true" vs "the answer shown was false". */
+.v2-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.v2-chip.is-correct { background: #eef3ff; border-color: #b9c9f2; color: #23407e; }
+.v2-chip.is-incorrect { background: #f7eef8; border-color: #dfc0e4; color: #6b2a72; }
+.v2-chip.is-grounded { background: #eef7f0; border-color: #b6d9be; color: #1f5c31; }
+.v2-chip.is-nongrounded { background: #f5f5f7; border-color: #d8d8de; color: #4a4a52; }
+/* The counterbalancing half. Two hues that read as "different", not as "better" — the group is an
+   assignment, and a dashboard where one group looks like the good one invites reading a difference
+   into a split that was made by a counter. */
+.v2-chip.is-group-a { background: #fdf4ec; border-color: #eccfb0; color: #7a4a17; }
+.v2-chip.is-group-b { background: #eef6fa; border-color: #b7d4e4; color: #1d4c66; }
+.admin-subtitle { margin: 22px 0 8px; font-size: 14px; font-weight: 800; }
+
+/* ── The reference panel (review mode) ───────────────────────────────────────
+   Every citation, how it currently resolves, and one click to re-link it. The tier chips are
+   deliberately not a red/green pass-fail: "By text" is not broken, it is merely weaker than "Exact",
+   and colouring it as a failure would send someone re-picking references that work. */
+.admin-links {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+.admin-link-list { margin: 10px 0; padding-left: 0; list-style: none; }
+.admin-link-row {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.admin-link-main { display: flex; gap: 8px; align-items: baseline; }
+.admin-link-n { font-weight: 800; color: var(--muted); flex: none; }
+.admin-link-quote { font-size: 13px; line-height: 1.45; }
+.admin-link-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.admin-link-tier {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 700;
+}
+.admin-link-tier.is-exact { background: #eef7f0; border-color: #b6d9be; color: #1f5c31; }
+.admin-link-tier.is-moved { background: #eef3ff; border-color: #b9c9f2; color: #23407e; }
+.admin-link-tier.is-text { background: #f5f5f7; border-color: #d8d8de; color: #4a4a52; }
+.admin-link-tier.is-search { background: #fff8e8; border-color: rgba(214,138,0,.55); color: #8a5300; }
+.admin-link-tier.is-none { background: #fdeeee; border-color: #e7bcbc; color: #8c2b2b; }
+.admin-link-pick.is-picking { background: var(--accent); border-color: var(--accent); color: #fff; }
+.admin-link-orphans {
+  margin: 8px 0 0;
+  padding: 9px 11px;
+  background: #fff8e8;
+  border-left: 2px solid rgba(214, 138, 0, .55);
+  border-radius: 0 8px 8px 0;
+  font-size: 12.5px;
+  color: #8a5300;
+}
+
+/* The variant preview, under the box it previews. It renders through the player's own renderer, so
+   what an author checks here is literally what a participant reads. */
+.v2-preview {
+  margin: 10px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  overflow: hidden;
+}
+.v2-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #fafafc;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.v2-preview-body { padding: 12px; font-size: 13.5px; line-height: 1.6; }
+.v2-preview-warn {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(214, 138, 0, 0.45);
+  background: #fff8e8;
+  color: #8a5300;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.v2-preview-warn ul { margin: 6px 0 0; padding-left: 18px; }
+.v2-preview-warn code { background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 0 4px; }
+
+/* The 2x2 study set. A zero is styled as a gap rather than left as a quiet 0: an empty cell means
+   the rotation for that group cannot deal that kind of run, which is a blocked condition, not a
+   small count. */
+.guide-board {
+  border-collapse: collapse;
+  margin: 10px 0 14px;
+  font-size: 12.5px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.guide-board th,
+.guide-board td {
+  border: 1px solid var(--line);
+  padding: 8px 14px;
+  text-align: center;
+}
+.guide-board thead th { background: #fafafc; font-size: 11.5px; }
+.guide-board tbody th { text-align: left; font-size: 11.5px; white-space: nowrap; }
+.guide-board th span {
+  display: block;
+  font-weight: 600;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.guide-board td b { font-size: 17px; font-weight: 800; }
+.guide-board td.is-gap { background: #fdeeee; color: #8c2b2b; }
+.guide-board td.is-gap span { display: block; font-size: 10px; font-weight: 700; }
+.guide-board-total th,
+.guide-board-total td { background: #fafafc; color: var(--muted); }
+.guide-board-total td b { font-size: 14px; color: var(--ink); }
+
+.admin-guide-list { display: flex; flex-direction: column; gap: 10px; margin: 10px 0 14px; }
+.admin-guide-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--card);
+}
+.admin-guide-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.admin-guide-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.admin-guide-rest { margin-top: 12px; }
+.admin-guide-rest .admin-guide-card { opacity: 0.82; }
+.admin-guide-card select,
+.admin-guide-card input[type="number"] { margin-left: 4px; }
+.admin-guide-trail {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-left: 2px solid rgba(120, 87, 255, 0.45);
+  background: rgba(120, 87, 255, 0.06);
+  border-radius: 0 8px 8px 0;
+}
+.admin-guide-summary { margin: 0 0 8px; font-size: 13px; line-height: 1.55; }
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  margin: 6px 0 16px;
+}
+.viz-fig { margin: 0; }
+.viz-fig-title {
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.viz-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.viz-empty {
+  padding: 22px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+.viz-legend {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0 10px;
+}
+.viz-legend i {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+.viz-legend-note { flex: 1 1 260px; }
+.viz-power {
+  border-left: 2px solid rgba(214, 138, 0, 0.55);
+  background: #fff8e8;
+  padding: 9px 12px;
+  border-radius: 0 8px 8px 0;
+  color: #8a5300;
+}
+.viz-blocked { color: var(--muted); font-style: italic; }
+
+.admin-inspect { font-size: 13px; }
+.admin-inspect-keyrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.admin-inspect-h {
+  margin: 14px 0 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.admin-inspect-h .q-sub { text-transform: none; letter-spacing: 0; font-weight: 600; }
+.admin-inspect-answer {
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  line-height: 1.6;
+}
+.admin-inspect-ms { padding: 3px 0 3px 4px; }
+.admin-evidence {
+  margin: 10px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.admin-evidence-head {
+  padding: 7px 12px;
+  background: #fafafc;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.admin-evidence-row {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.admin-evidence-row:last-child { border-bottom: 0; }
+.admin-evidence-row.is-on { background: rgba(120, 87, 255, 0.10); }
+.admin-evidence-n { font-weight: 800; color: var(--accent-dark, #5b3fd6); }
+.admin-evidence-row .admin-chip { margin-top: 6px; }
+/* The 📎 chips are buttons in the inspector too, not decoration. */
+.admin-inspect-answer .find-ev { cursor: pointer; }
+.admin-journey-row.is-on {
+  background: rgba(120, 87, 255, 0.10);
+  border-radius: 8px;
+  outline: 2px solid rgba(120, 87, 255, 0.45);
+  outline-offset: 3px;
+}
+
+.admin-journey { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.admin-journey-row { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
+.admin-journey-shot {
+  display: block;
+  max-width: 100%;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.admin-setting small { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.admin-setting code {
+  font-size: 11.5px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
+  padding: 0 3px;
+}
 .admin-chip {
   border: 1px solid var(--line);
   background: #fff;
@@ -830,6 +1281,75 @@ body {
 }
 .admin-chip:hover { border-color: var(--accent); color: var(--accent-dark); }
 .admin-chip-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.admin-chip:disabled { opacity: .45; cursor: default; }
+
+/* ── The review queue, and which pool each task came from ──────────────────────
+   A held-out task looks exactly like a live one once the walkthrough starts, so the distinction is
+   carried by a tag rather than by colour alone — a reviewer checking wording on a task nobody was
+   ever dealt should not have to remember which list they picked. */
+.admin-review-note {
+  margin: 2px 0 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.admin-review-empty {
+  margin: 4px 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.admin-review-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.admin-review-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 11.5px;
+}
+
+.admin-review-list li:nth-child(odd) { background: rgba(0, 0, 0, .025); }
+.admin-review-list code { font-weight: 700; }
+.admin-review-style { margin-left: auto; color: var(--muted); font-size: 10.5px; }
+
+.admin-pool-tag {
+  flex: none;
+  min-width: 62px;
+  text-align: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .07);
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+.admin-pool-tag.is-in { background: rgba(120, 87, 255, .12); color: var(--accent-dark); }
+
+/* Shown on the task screen itself, where there is no list to read the pool off. */
+.admin-held-out {
+  margin: 0 0 8px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, .05);
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
 .admin-exit {
   display: block;
   margin: 10px auto 0;
@@ -1188,6 +1708,43 @@ body {
 
 .likert-legend-num {
   font: 900 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  fill: rgba(0, 0, 0, .82);
+}
+
+.poststudy-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(0, 0, 0, .08);
+}
+
+.poststudy-subhead h5 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.poststudy-controls-inline {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+}
+
+.likert-stack-title {
+  font: 800 20px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  fill: #2f3439;
+}
+
+.likert-stack-subtitle {
+  font: 600 14px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  fill: rgba(0, 0, 0, .45);
+}
+
+.likert-stack-label {
+  font: 700 13px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   fill: rgba(0, 0, 0, .82);
 }
 
@@ -1689,6 +2246,65 @@ body {
 
 .tut-tip-actions .tut-tip-next:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
 
+/* The two ways of getting the walkthrough out of the way without ending it, on a row of their own:
+   they are neither the way forward nor the way out, and putting them beside Next on a 330px card
+   made four buttons of equal weight out of one that matters. */
+.tut-tip-tools {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tut-tip-tools button {
+  flex: 1;
+  border: 1px dashed var(--line);
+  background: rgba(120, 87, 255, 0.05);
+  border-radius: 9px;
+  padding: 6px 8px;
+  font: 700 12px/1.2 inherit;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tut-tip-tools button:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+/* THE PEEK: the dim and the rings go, the card stays. Visibility rather than removal, so the mask
+   keeps being sized and the holes keep being cut — pressing the button again has to put the
+   spotlight back on this step instantly, without waiting for the next rAF tick to find the target.
+
+   `!important` on the ring because the tracking loop sets its opacity inline every frame — an
+   inline style wins over a plain class rule, and that loop keeps running during a peek. */
+.tut-layer.is-peek .tut-mask { opacity: 0; }
+.tut-layer.is-peek .tut-ring { opacity: 0 !important; }
+
+.tut-layer.is-peek .tut-tip { box-shadow: 0 18px 48px rgba(20, 16, 60, 0.42); }
+
+/* THE PAUSE: everything above is gone, and this is the way back to the step that was open. Sits
+   above the coachmark layer and clear of the walkthrough's own bar, which is centred at the
+   bottom. */
+.tut-resume {
+  position: fixed;
+  right: 16px;
+  bottom: 14px;
+  z-index: 2147483100;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  padding: 9px 15px;
+  font: 800 12.5px/1.2 inherit;
+  box-shadow: 0 10px 30px rgba(120, 87, 255, 0.35);
+  cursor: pointer;
+}
+
+.tut-resume:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+
 /* Deliberately the quietest thing on the card, and deliberately always there. */
 .tut-tip-actions .tut-tip-skip {
   border-color: transparent;
@@ -1726,6 +2342,61 @@ body {
 
 .tut-list li { margin-bottom: 8px; }
 .tut-fine { font-size: 13px; color: var(--muted); margin: 0; }
+
+/* The two kinds of task, side by side on the walkthrough's welcome screen. Same shape as the card
+   that opens a real task — a labelled header strip over a body — but in the site's own light
+   palette rather than the panel's dark one. Both cards carry the accent: the kinds are different
+   work, not better and worse work, so neither is coloured as the good one. */
+.tut-kinds-lead {
+  margin: 0 0 10px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.tut-kinds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 20px;
+}
+
+/* Below the two-column point the cards are narrower than their own sentences. Stack them. */
+@media (max-width: 620px) {
+  .tut-kinds { grid-template-columns: 1fr; }
+}
+
+.tut-kind {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  overflow: hidden;
+}
+
+.tut-kind-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  font: 800 11.5px/1.3 inherit;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--accent-dark);
+  background: rgba(120, 87, 255, 0.09);
+  border-bottom: 1px solid rgba(120, 87, 255, 0.18);
+}
+
+.tut-kind-body {
+  padding: 11px 12px 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.tut-kind-body p { margin: 0 0 8px; }
+.tut-kind-body p:last-child { margin-bottom: 0; }
+.tut-kind-what { font-weight: 700; color: var(--ink); }
+.tut-kind-fine { font-size: 12.5px; color: var(--muted); }
 .tut-welcome-actions { flex-direction: column; }
 
 /* ── What we were looking for ────────────────────────────────────────────────── */
@@ -1875,6 +2546,54 @@ body {
   text-decoration: underline;
 }
 
+/* ── The test-run bar ────────────────────────────────────────────────────────────
+   A run started as `test` looks exactly like a real one — that is the point of it — so the one
+   thing on screen that says otherwise has to be impossible to miss and impossible to mistake for
+   part of the study. Amber rather than the study's purple, bottom-LEFT so it clears the
+   walkthrough's own centred bar, and above the coachmark layer so it stays legible during it. */
+.dry-nav {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 2147483100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid rgba(176, 108, 0, 0.45);
+  border-radius: 999px;
+  background: #fff8e9;
+  box-shadow: 0 10px 30px rgba(20, 16, 60, 0.18);
+}
+
+.dry-nav-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d08700;
+}
+
+.dry-nav-label {
+  font: 800 11.5px/1.2 inherit;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #8a5a00;
+}
+
+.dry-nav-btn {
+  border: 1px solid rgba(176, 108, 0, 0.35);
+  background: #fff;
+  border-radius: 999px;
+  width: 28px;
+  height: 26px;
+  font: 800 15px/1 inherit;
+  color: #8a5a00;
+  cursor: pointer;
+}
+
+.dry-nav-btn:hover:not(:disabled) { border-color: #d08700; background: #fff2d6; }
+.dry-nav-btn:disabled { opacity: .35; cursor: default; }
+
 /* ── Required, and what is still missing ─────────────────────────────────────────
    The asterisk sets the expectation before the button is pressed; the highlight answers the
    question the error message raises — which one? Both are removed the moment the question is
@@ -2022,6 +2741,49 @@ body {
 }
 
 .viz-answer-stat b { font-size: 13px; }
+
+/* The Guide timing the study's exported figure uses: only trials whose verdict was correct. Kept in
+   a tinted inset so it cannot be confused with the all-answer outcome row immediately below it. */
+.viz-answer-correct-time {
+  margin: 8px 0 10px;
+  padding: 8px 10px 9px;
+  border: 1px solid rgba(94, 59, 214, .2);
+  border-radius: 9px;
+  background: rgba(94, 59, 214, .045);
+}
+
+.viz-answer-correct-time > p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 7px;
+  margin: 0 0 6px;
+}
+
+.viz-answer-correct-time > p strong {
+  font-size: 11px;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+  color: var(--accent-dark);
+}
+
+.viz-answer-correct-time > p span,
+.viz-answer-all-label {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.viz-answer-correct-time .viz-answer-stats {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.viz-answer-all-label {
+  margin: 0 0 4px;
+  font-weight: 800;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
 
 /* ── Trajectory editor ─────────────────────────────────────────────────────── */
 .edit-head {
@@ -2197,6 +2959,134 @@ body {
 
 .findtask-ev { margin-bottom: 10px; }
 
+/* ── Find V2 ────────────────────────────────────────────────────────────────
+   Separate study, shared visual language. The editor is wider than the
+   participant card because a claim, its answer key, and its snapshot metadata
+   need to be reviewable together. */
+.find-v2-body {
+  background:
+    radial-gradient(900px 420px at 50% -180px, rgba(22, 143, 90, 0.15), transparent 70%),
+    var(--panel-bg);
+}
+
+.find-v2-body .welcome-eyebrow { color: #0f6b43; }
+.find-v2-back { margin-top: 20px; text-decoration: none; }
+.find-v2-back + .admin-door { margin-top: 8px; }
+
+.find-v2-editor-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.find-v2-editor-picker .welcome-label { grid-column: 1 / -1; margin-bottom: -2px; }
+.find-v2-editor-picker .admin-chip { min-height: 42px; }
+
+.find-v2-edit-head { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.find-v2-truth-badge {
+  display: inline-flex;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font: 800 10.5px/1.5 inherit;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+.find-v2-truth-badge.is-correct { color: #0f6b43; background: rgba(22, 143, 90, .12); }
+.find-v2-truth-badge.is-incorrect { color: var(--bad); background: rgba(190, 60, 50, .11); }
+
+.find-v2-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+.find-v2-form-grid label { min-width: 0; }
+
+.find-v2-verdict-key {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px 10px;
+  margin: 16px 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.find-v2-verdict-key legend { padding: 0 5px; margin: 0; }
+.find-v2-verdict-key .q-opt { align-items: flex-start; }
+.find-v2-verdict-key .q-opt span { display: flex; flex-direction: column; gap: 2px; }
+.find-v2-verdict-key small,
+.q-opt-body small { display: block; color: var(--muted); font-size: 11.5px; font-weight: 500; }
+
+.find-v2-answer-editor,
+.v2-json { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); line-height: 1.55; }
+
+.find-v2-page-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 16px 0 8px;
+  padding: 12px;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  background: rgba(120, 87, 255, .035);
+}
+.find-v2-page-upload .welcome-label { width: 100%; margin: 0; }
+.find-v2-page-upload input { flex: 1; min-width: 220px; }
+.find-v2-page-upload span { color: var(--muted); font-size: 12px; }
+.find-v2-advanced { margin: 16px 0; }
+
+/* The four authored answers. The tab strip doubles as the authoring checklist:
+   a hollow dot is a cell that has not been written, and a live claim cannot be
+   saved while one of the cells it can be dealt is still hollow. */
+.find-v2-variant-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 16px 0 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.find-v2-variant-tabs .admin-tab.is-blank {
+  color: var(--muted);
+  border-style: dashed;
+}
+.find-v2-variant-tabs .admin-tab.admin-tab-on.is-blank { color: inherit; }
+.find-v2-variant-panes { padding-top: 4px; }
+.find-v2-variant-pane .viz-note { margin-top: 10px; }
+.find-v2-variant-pane .find-v2-advanced { margin: 10px 0 4px; }
+
+.find-v2-result-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+.find-v2-result-summary > div {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(120, 87, 255, .035);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.find-v2-result-summary b { font-size: 21px; }
+.find-v2-result-summary span { color: var(--muted); font-size: 11.5px; }
+.find-v2-results-table .is-good { color: #0f6b43; font-weight: 800; }
+.find-v2-results-table .is-bad { color: var(--bad); font-weight: 800; }
+
+.find-v2-finish { justify-content: center; padding: 32px; }
+.find-v2-finish .q-survey-head { border: 1px solid var(--line); border-radius: 14px 14px 0 0; }
+.find-v2-finish .tv-done { border-radius: 0 0 14px 14px; }
+
+@media (max-width: 720px) {
+  .find-v2-form-grid,
+  .find-v2-verdict-key,
+  .find-v2-result-summary { grid-template-columns: 1fr; }
+  .find-v2-editor-picker { grid-template-columns: 1fr; }
+}
+
 /* Provenance for the whole pane: what was read, and when. */
 .viz-freshness {
   display: flex;
@@ -2255,6 +3145,32 @@ body {
 .viz-answer-stat small .viz-v-ng { color: var(--muted); }
 .viz-answer-stat small .viz-v-g { color: var(--accent-dark); }
 .viz-answer-stat small .viz-v-arrow { font-size: 10px; }
+
+/* The significance verdict, said in a word rather than left as a number to be interpreted. Green
+   and grey rather than green and red: "not significant" is not a failure, it is the honest reading
+   of a cell this size, and colouring it as an error would push a reader to hunt for a subgroup
+   where the red goes away. */
+.viz-answer-stat small .viz-sig {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+  border-radius: 999px;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.viz-answer-stat small .viz-sig.is-sig { color: #14663d; background: rgba(20, 150, 90, 0.14); }
+.viz-answer-stat small .viz-sig.is-ns { color: var(--muted); background: rgba(120, 120, 140, 0.12); }
+
+/* Which test and which threshold, kept off the verdict itself so the eye lands on the word first. */
+.viz-answer-stat small .viz-sig-note {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
 
 .viz-answer-thin {
   margin: 10px 0 0;
@@ -2472,6 +3388,192 @@ body {
   line-height: 1.4;
 }
 
+/* ── The trials behind the averages ────────────────────────────────────────────
+   Collapsed by default and set quieter than the stats above it: this is what you open when a number
+   looks wrong, not something to read past on the way to one. The two arms sit side by side in the
+   same order and the same colours as every pair on the card, because a reader who loses track of
+   which column is which inverts the finding here exactly as they would up there. */
+/* THE SITTINGS BEHIND THE HEADER'S COUNTS, one line each. It sits above the trial drill-down and
+   is styled as its quieter sibling: the same summary, but rows that are one line rather than a
+   card, because the question here is "who is in this cell" and not "what did they do". A paired
+   sitting is tinted so the both-arms count in the note above can be scanned rather than trusted. */
+.viz-sessions { margin: 12px 0 0; border-top: 1px solid var(--line); padding-top: 8px; }
+
+.viz-sessions > summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  color: var(--muted);
+}
+
+.viz-sessions[open] > summary { margin-bottom: 8px; }
+
+.viz-session-note { margin: 0 0 8px; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.viz-session-note code { font-size: 10.5px; }
+
+.viz-session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.viz-session {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 8px;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Green for a sitting that worked both arms — the rows the paired comparison actually rests on. */
+.viz-session.is-paired { background: rgba(0, 99, 0, .05); border-color: rgba(0, 99, 0, .18); }
+
+.viz-session-id { font-size: 10.5px; font-weight: 700; }
+.viz-session-pid { font-size: 10.5px; color: var(--muted); }
+.viz-session-arms { font-variant-numeric: tabular-nums; }
+.viz-session-badge { font-size: 10.5px; color: var(--muted); }
+.viz-session-tasks { margin-left: auto; font-size: 10.5px; color: var(--muted); text-align: right; }
+
+.viz-trials { margin: 12px 0 0; border-top: 1px solid var(--line); padding-top: 8px; }
+
+.viz-trials > summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  color: var(--muted);
+}
+
+.viz-trials[open] > summary { margin-bottom: 8px; }
+
+/* The one line that turns "this task scores 0" from a fact about people into a question about the
+   annotation. Loud on purpose — it is a claim that the data may be wrong. */
+.viz-trial-warn {
+  margin: 0 0 10px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: rgba(165, 32, 32, .07);
+  border: 1px solid rgba(165, 32, 32, .2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--bad);
+}
+
+.viz-trial-warn code { font-weight: 700; }
+.viz-trial-warn span { font-style: italic; }
+
+.viz-trial-arms { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+@media (max-width: 900px) {
+  .viz-trial-arms { grid-template-columns: 1fr; }
+}
+
+.viz-trial-arm h5 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.viz-trial-arm h5 span { font-weight: 500; color: var(--muted); text-transform: none; letter-spacing: 0; }
+
+.viz-trial-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.viz-trial {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.viz-trial-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-bottom: 4px;
+}
+
+.viz-trial-head code { font-size: 10.5px; font-weight: 700; }
+.viz-trial-task { color: var(--accent-dark); }
+.viz-trial-time { margin-left: auto; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* "key?" beside a task id, not a whole banner per row — the explanation is at the top of the block
+   and repeating it on twenty rows would drown the picks it is asking you to compare. */
+.viz-trial-flag {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(165, 32, 32, .1);
+  color: var(--bad);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+.viz-trial-answer, .viz-trial-verdict {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.viz-trial-hit > .viz-trial-verdict, .viz-trial-answer.viz-trial-hit { color: var(--ok); }
+.viz-trial-miss > .viz-trial-verdict, .viz-trial-answer.viz-trial-miss { color: var(--bad); }
+.viz-trial-none > .viz-trial-verdict, .viz-trial-answer.viz-trial-none { color: var(--muted); }
+
+.viz-trial-chose, .viz-trial-hop { margin-top: 4px; }
+
+.viz-trial-chose > span, .viz-trial-hop-tag, .viz-trial-key > span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+/* A miss is marked by a rule down its left edge as well as by the word, so a scan for "which of
+   these went wrong" does not depend on reading twenty small labels. */
+.viz-trial-hop { padding-left: 7px; border-left: 2px solid var(--line); }
+.viz-trial-hop.viz-trial-miss { border-left-color: rgba(165, 32, 32, .45); }
+.viz-trial-hop.viz-trial-hit { border-left-color: rgba(15, 107, 67, .35); }
+
+.viz-trial-pick { display: block; color: inherit; }
+
+/* The accepted span, printed only where the pick missed it. Indented under the pick so the two read
+   as a comparison rather than as two more facts about the trial. */
+.viz-trial-key {
+  margin-top: 3px;
+  padding-left: 8px;
+  border-left: 1px dashed var(--line);
+  color: var(--muted);
+}
+
+.viz-trial-key q { display: block; }
+.viz-trial-said { margin-top: 4px; font-size: 10.5px; color: var(--muted); }
+.viz-trial-more { margin: 6px 0 0; font-size: 10.5px; color: var(--muted); }
+
+.viz-trial-toggle {
+  margin-top: 10px;
+  border: 0; background: none; padding: 0;
+  font: inherit; font-size: 11.5px; font-weight: 700;
+  color: var(--accent-dark);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ── Which side of a pair is which ─────────────────────────────────────────────
    "14.5 → 11.6" carries no clue about the order, and a reader who guesses wrong inverts every
    finding on the card. Told apart three ways — position, weight and colour — so it survives being
@@ -2547,3 +3649,32 @@ body {
 .viz-breakdown-list li.is-thin { opacity: .6; }
 
 .viz-breakdown-n { color: var(--muted); font-size: 12px; }
+
+/* The full-session button on the plots card. Same chip + sentence as the pane-wide drop-off
+   filter, but it narrows only the selected result the current plots are generated from, so it is
+   boxed off to make clear it is a second, smaller filter and not a duplicate of the one above. */
+.selection-complete-toggle {
+  margin: 2px 0 10px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px 10px;
+}
+
+/* NEW / OLD on a Guide run in the task picker: whether the trajectory has a planted error in it.
+   Two copies of one goal — a clean recording and a re-recording with a mistake — ask the
+   participant opposite questions, and nothing in their ids says which is which. Coloured as a
+   contrast pair rather than good/bad: neither kind is the wrong task to count, they are two
+   different questions. */
+.viz-task-tag {
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.viz-task-tag.is-new { background: rgba(235, 104, 52, .14); color: #a3421a; }
+.viz-task-tag.is-old { background: rgba(42, 120, 214, .12); color: #1c5cab; }

@@ -420,6 +420,39 @@ const ADMIN_TASKS = {
     takesSelection: true,
     selectionFor: 'scripts/figures.mjs',
   },
+  'figures-code': {
+    // The CSVs are rebuilt from the live selection before they are shipped, for the same reason
+    // the Hugging Face job rebuilds them: publishing the plotting code beside the last person's
+    // data would produce figures that are internally consistent and quietly about another study.
+    scripts: ['scripts/figures.mjs', 'scripts/breakdonw_participants.mjs',
+      'scripts/figures_code.mjs'],
+    label: 'publish the matplotlib figure code',
+    takesSelection: true,
+    selectionFor: ['scripts/figures.mjs', 'scripts/breakdonw_participants.mjs'],
+  },
+  // THE WHOLE TRIP FOR THE PAPER'S TABLE, in one press: rebuild the CSVs from the live selection,
+  // write the finalized results sheet from the same rows, then publish the code, the data and the
+  // redrawn figures. The table and the figures therefore always describe one selection — a sheet
+  // filled from one run of the numbers and figures drawn from another is the failure this ordering
+  // exists to prevent, and it would be invisible in both documents.
+  'results-table': {
+    scripts: ['scripts/figures.mjs', 'scripts/results_table.mjs',
+      'scripts/breakdonw_participants.mjs', 'scripts/figures_code.mjs'],
+    label: 'fill the results table and publish the figures and their code',
+    takesSelection: true,
+    selectionFor: ['scripts/figures.mjs', 'scripts/results_table.mjs',
+      'scripts/breakdonw_participants.mjs'],
+  },
+  // WHO IS BEHIND THE n, published the same way and from the same rows. It rides along with every
+  // job above rather than only this one, because a folder holding a breakdown of one selection and
+  // figures of another would be worse than a folder holding no breakdown at all.
+  'breakdown-participants': {
+    scripts: ['scripts/figures.mjs', 'scripts/breakdonw_participants.mjs',
+      'scripts/figures_code.mjs'],
+    label: 'publish the participant breakdown',
+    takesSelection: true,
+    selectionFor: ['scripts/figures.mjs', 'scripts/breakdonw_participants.mjs'],
+  },
   'publish-rows': {
     scripts: ['scripts/publish_rows.mjs'],
     label: 'publish rows to Hugging Face',
@@ -494,7 +527,11 @@ async function runAdminTask(name, payload = {}) {
   return (async () => {
     let output = '';
     for (const script of task.scripts) {
-      const args = extra.filter(e => !e.only || e.only === script).map(e => e.flag);
+      // `only` is one script or several: the selection goes to every script that reads rows, and
+      // to no script that only copies what those wrote.
+      const args = extra
+        .filter(e => !e.only || (Array.isArray(e.only) ? e.only.includes(script) : e.only === script))
+        .map(e => e.flag);
       const out = await runScript(script, args);
       output += out.output;
       if (out.code !== 0) {

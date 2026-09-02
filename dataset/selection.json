@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-08-20T18:52:21.506Z",
+  "all_tasks": false,
+  "facets": {
+    "find_text": {
+      "label": "Find × Text",
+      "task_type": "find",
+      "task_style": "text",
+      "source": "the dashboard, as it stood at publish time",
+      "task_ids": [
+        "EDU-v1",
+        "HARRY-v1",
+        "MUFC-V1-TEXT",
+        "NVIDA-V1"
+      ]
+    },
+    "find_visual": {
+      "label": "Find × Visual",
+      "task_type": "find",
+      "task_style": "visual",
+      "source": "the dashboard, as it stood at publish time",
+      "task_ids": [
+        "MUFC-V1",
+        "SVSF-V1",
+        "TESLA-V1",
+        "TREE-V1"
+      ]
+    },
+    "guide_text": {
+      "label": "Guide × Text",
+      "task_type": "guide",
+      "task_style": "text",
+      "source": "the dashboard, as it stood at publish time",
+      "task_ids": [
+        "gv2-ed05972e-i5fi3b",
+        "gv2-ed05a7b6-kk24zp",
+        "gv2-ed35d549-ct71ub",
+        "gv2-ms9hwloh-15fuvy",
+        "gv2-ms9j3200-u0i9nm"
+      ]
+    },
+    "guide_visual": {
+      "label": "Guide × Visual",
+      "task_type": "guide",
+      "task_style": "visual",
+      "source": "the dashboard, as it stood at publish time",
+      "task_ids": [
+        "gv2-msf0i7ll-hffde9",
+        "gv2-msf0vpxs-qucehj",
+        "gv2-msf1kfhv-o9o8n8",
+        "gv2-msf1pyqv-omt0hz",
+        "gv2-msf28nd3-gig8aj"
+      ]
+    }
+  }
+}

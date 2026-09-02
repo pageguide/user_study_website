@@ -3,122 +3,95 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PageGuide User Study</title>
-  <link rel="stylesheet" href="styles/site.css?v=tuned-publish-20260814">
+  <title>PageGuide Find V2</title>
+  <link rel="stylesheet" href="styles/site.css?v=find-v2-20260915">
 </head>
-<body class="welcome-body">
-  <!--
-    The welcome screen. Everything a participant needs to decide to start and nothing they will have
-    forgotten by the first task: what they will be doing, how long it takes, and what is recorded.
-    The instructions that matter *during* a task live beside the material, on the task screen.
-  -->
+<body class="welcome-body find-v2-body">
   <main class="welcome">
     <div class="welcome-card">
       <header class="welcome-hero">
-        <p class="welcome-eyebrow">Research study · Reviewing the work of web agents</p>
-        <h1 class="welcome-title">PageGuide User Study</h1>
+        <p class="welcome-eyebrow">Research study · Find V2</p>
+        <h1 class="welcome-title">Check an agent’s claims</h1>
         <p class="welcome-lead">
-          You will review a series of tasks completed by a web agent. For each task, you will see
-          what the agent did and the answer it gave. Then you will decide whether the agent got it
-          right, and where it went wrong if there was a problem.
+          You will read a question, inspect the answer a web agent gave, and decide whether that
+          answer is correct. Some answers are correct and some are not.
         </p>
         <ul class="welcome-meta">
-          <li class="welcome-chip"><span class="welcome-chip-k">8</span> tasks</li>
-          <li class="welcome-chip"><span class="welcome-chip-k">~16</span> minutes</li>
-          <li class="welcome-chip"><span class="welcome-chip-k">No</span> setup or install</li>
+          <li class="welcome-chip"><span class="welcome-chip-k" id="find-v2-task-count">—</span> tasks</li>
+          <li class="welcome-chip"><span class="welcome-chip-k">Yes/No</span> judgment</li>
+          <li class="welcome-chip"><span class="welcome-chip-k">3</span> min per claim</li>
+          <li class="welcome-chip"><span class="welcome-chip-k">No</span> setup</li>
         </ul>
-        <p class="welcome-lead welcome-lead-quiet">A 2-minute walkthrough comes first, on two
-          practice tasks that are not part of the study. You can skip it.</p>
       </header>
 
       <section class="welcome-section">
         <h2 class="welcome-section-title">What you will do</h2>
-        <ol class="welcome-steps">
+        <ol class="welcome-steps" id="welcome-steps">
           <li class="welcome-step">
             <span class="welcome-step-n">1</span>
-            <div><strong>Read the task and the agent's answer.</strong>
-              Page on the left, answer on the right.</div>
+            <div><strong>Read the question and the agent’s answer.</strong>
+              The saved webpage, or the run the agent recorded, appears beside them.</div>
           </li>
           <li class="welcome-step">
             <span class="welcome-step-n">2</span>
-            <div><strong>Decide whether it is correct.</strong>
-              Some tasks show the evidence the agent used; others do not.</div>
+            <div><strong>Answer Yes or No.</strong>
+              Decide whether the agent’s answer correctly answers the question.</div>
           </li>
-          <li class="welcome-step">
+          <!-- Removed by loadWelcome when the evidence stage is switched off, which is the
+               default. A promised step that never arrives reads as a broken study. -->
+          <li class="welcome-step" id="welcome-step-evidence">
             <span class="welcome-step-n">3</span>
-            <div><strong>Say where it went wrong.</strong>
-              Mark the step or claim that caused the problem.</div>
+            <div><strong>Point to the supporting evidence.</strong>
+              Select the passage or image that helped you judge the claim.</div>
           </li>
         </ol>
       </section>
 
-      <!-- Collapsed by default, so the screen is a decision rather than a document. The summary
-           carries the sentence that actually changes how someone answers; the rest is there for
-           whoever wants it. -->
       <details class="welcome-fold">
-        <summary><strong>No trick questions.</strong> This study is not testing you</summary>
+        <summary><strong>This is Find V2.</strong> It is separate from the original study</summary>
         <div class="welcome-fold-body">
-          We are studying how easy or hard it is to check an agent's work. Please answer from what
-          you can actually see on the page. If you cannot tell what happened, choose that option:
-          it is a real and useful answer.
+          This version contains Find claims only. It uses its own Supabase configuration, sessions,
+          stimuli, and result table; opening it does not change an original Find/Guide run.
         </div>
-      </details>
-
-      <details class="welcome-fold">
-        <summary><strong>Before you start.</strong> Time, what is recorded, anonymity</summary>
-        <dl class="welcome-facts">
-          <div class="welcome-fact">
-            <dt>Time</dt>
-            <dd>About 16 minutes in one sitting. Tasks are timed to measure difficulty, not to rush
-              you.</dd>
-          </div>
-          <div class="welcome-fact">
-            <dt>What is recorded</dt>
-            <dd>Your answers and each task's duration. No account, no email, nothing from other
-              tabs.</dd>
-          </div>
-          <div class="welcome-fact">
-            <dt>Anonymity</dt>
-            <dd>Anonymous by default. A participant ID is optional, and only matches your run to a
-              session.</dd>
-          </div>
-          <div class="welcome-fact">
-            <dt>You will need</dt>
-            <dd>A desktop or laptop browser, because the page and the answer sit side by side.</dd>
-          </div>
-        </dl>
       </details>
 
       <div class="welcome-actions">
         <button class="welcome-id-toggle" id="participant-id-toggle" type="button">Add a participant ID (optional)</button>
         <div class="welcome-id-field" id="participant-id-field" hidden>
           <label class="welcome-label" for="participant-id">Participant ID
-            <span class="q-sub">optional, leave blank to stay anonymous</span></label>
+            <span class="q-sub">optional; leave blank to stay anonymous</span></label>
           <input class="welcome-input" id="participant-id" type="text" placeholder="e.g. P07" autocomplete="off">
         </div>
-
-        <div class="welcome-status" id="welcome-status"></div>
-
-        <button class="welcome-btn" id="start-btn" disabled>Start the study →</button>
-
-        <p class="welcome-fine" id="welcome-count">Loading the study…</p>
-        <p class="welcome-consent">Starting is voluntary, and you may close the tab at any point to
-          stop taking part.</p>
+        <div class="welcome-status" id="welcome-status">Loading Find V2…</div>
+        <button class="welcome-btn" id="start-btn" disabled>Start Find V2 →</button>
+        <p class="welcome-fine" id="welcome-count"></p>
+        <p class="welcome-consent">Starting is voluntary. You may close the tab at any point.</p>
       </div>
     </div>
 
-    <!-- The reviewer's door. Deliberately plain and outside the card: a participant should be able
-         to ignore it, and it grants no privilege over the data — its one real power is to NOT write. -->
+    <!--
+      ADMIN ONLY. This used to sit on the welcome screen for everyone, which put a link to a
+      different study one click from a participant who had been asked to do this one — and a
+      participant who follows it starts answering V1 tasks that no V2 session will ever record.
+      Revealed by openAdmin and hidden again on Leave Admin.
+    -->
+    <a class="admin-door find-v2-back" id="find-v1-link" href="find-v1.html" hidden>Original V1 study</a>
     <button class="admin-door" id="admin-btn">Admin</button>
     <section class="admin-panel" id="admin-panel" hidden></section>
   </main>
 
-  <script src="app/config.js?v=tuned-publish-20260814" onerror="window.__configMissing = true"></script>
-  <script src="app/supabase.js?v=tuned-publish-20260814"></script>
-  <script src="app/session.js?v=tuned-publish-20260814"></script>
-  <script src="app/admin.js?v=tuned-publish-20260814"></script>
-  <script src="app/markdown.js?v=tuned-publish-20260814"></script>
-  <script src="app/trajectory_edit.js?v=tuned-publish-20260814"></script>
-  <script src="app/welcome.js?v=tuned-publish-20260814"></script>
+  <script>window.STUDY_VARIANT = 'find-v2';</script>
+  <script src="app/find_v2_config.js?v=find-v2-20260915" onerror="window.__findV2ConfigMissing = true"></script>
+  <!-- The four-variant model is shared by the adapter, the session and the editor. -->
+  <script src="app/markdown.js?v=find-v2-20260915"></script>
+  <script src="app/find_citations.js?v=find-v2-20260915"></script>
+  <script src="app/find_v2_variants.js?v=find-v2-20260915"></script>
+  <script src="app/find_v2_supabase.js?v=find-v2-20260915"></script>
+  <script src="app/find_v2_session.js?v=find-v2-20260915"></script>
+  <!-- Exact small-sample tests and the results charts, both plain modules with no build step. -->
+  <script src="app/find_v2_stats.js?v=find-v2-20260915"></script>
+  <script src="app/find_v2_charts.js?v=find-v2-20260915"></script>
+  <script src="app/find_v2_welcome.js?v=find-v2-20260915"></script>
 </body>
 </html>
+

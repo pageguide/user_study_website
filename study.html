@@ -3,64 +3,39 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PageGuide User Study — review the task</title>
+  <title>PageGuide Find V2 — check the claim</title>
   <link rel="stylesheet" href="styles/stimulus.css">
-  <link rel="stylesheet" href="styles/site.css?v=tuned-publish-20260814">
+  <link rel="stylesheet" href="styles/site.css?v=find-v2-20260915">
 </head>
 <body>
-  <!--
-    THE TASK SCREEN, in two panes.
-
-    LEFT — the material: what the agent did, at a size where it can be checked. In the extension
-    this is a whole browser tab, because the side panel is ~400px wide and a participant is being
-    asked whether the agent clicked the right thing: at panel width a cart badge and a wishlist
-    badge are the same handful of pixels.
-
-    RIGHT — the instrument: the task, one timer and the questions, styled as the PageGuide side
-    panel it stands in for. It carries nothing a participant is asked to judge, so the two panes
-    never repeat each other.
-
-    The proportions are the real ones on purpose. A participant on the website should be working
-    under the same constraints as one in the extension, or the two datasets are measuring different
-    reading conditions rather than different grounding conditions.
-  -->
   <div class="task-shell">
+    <!-- No task header here: V2 gives the whole left pane to the page, and the question and the
+         Grounded/Non-grounded chip live in the question pane on the right. See renderFindTask. -->
     <section class="task-stimulus" id="stimulus-pane">
-      <header class="tv-head">
-        <div class="tv-head-main">
-          <div class="tv-kicker">Task</div>
-          <h1 class="tv-goal" id="tv-goal">Loading…</h1>
-        </div>
-        <div class="tv-count" id="tv-count"></div>
-      </header>
       <main class="tv-main">
         <section class="tv-stage" id="tv-stage">
-          <div class="tv-empty">Loading the steps…</div>
+          <div class="tv-empty">Loading the saved page…</div>
         </section>
       </main>
     </section>
-
     <aside class="task-panel" id="question-pane">
-      <div class="q-loading">Loading…</div>
+      <div class="q-loading">Loading Find V2…</div>
     </aside>
   </div>
 
-  <!-- Vendored verbatim from the extension: the question vocabularies, the arm strip and the
-       scoring all come from here, so the website cannot drift into being a different study. -->
-  <script src="vendor/guide_trajectories.js?v=tuned-publish-20260814"></script>
-  <script src="app/config.js?v=tuned-publish-20260814" onerror="window.__configMissing = true"></script>
-  <script src="app/markdown.js?v=tuned-publish-20260814"></script>
-  <script src="app/supabase.js?v=tuned-publish-20260814"></script>
-  <script src="app/session.js?v=tuned-publish-20260814"></script>
-  <script src="app/admin.js?v=tuned-publish-20260814"></script>
-  <script src="app/find_task.js?v=tuned-publish-20260814"></script>
-  <!-- The walkthrough, and the invented practice material it runs on. Loaded before study.js so its
-       hooks exist the first time boot() looks for them; neither file touches the real stimuli. -->
-  <script src="app/fake_page.js?v=tuned-publish-20260814"></script>
-  <script src="app/tutorial_fixtures.js?v=tuned-publish-20260814"></script>
-  <script src="app/tutorial.js?v=tuned-publish-20260814"></script>
-  <script src="app/stimulus.js?v=tuned-publish-20260814"></script>
-  <script src="app/instrument.js?v=tuned-publish-20260814"></script>
-  <script src="app/study.js?v=tuned-publish-20260814"></script>
+  <script>window.STUDY_VARIANT = 'find-v2';</script>
+  <script src="app/find_v2_config.js?v=find-v2-20260915" onerror="window.__findV2ConfigMissing = true"></script>
+  <script src="app/markdown.js?v=find-v2-20260915"></script>
+  <!-- Citation markers: one tolerant reader for the player and the editor. -->
+  <script src="app/find_citations.js?v=find-v2-20260915"></script>
+  <!-- The four-variant model is shared by the adapter, the session and the editor. -->
+  <script src="app/find_v2_variants.js?v=find-v2-20260915"></script>
+  <script src="app/find_v2_supabase.js?v=find-v2-20260915"></script>
+  <script src="app/find_v2_session.js?v=find-v2-20260915"></script>
+  <script src="app/find_task.js?v=find-v2-20260915"></script>
+  <script src="app/stimulus.js?v=find-v2-20260915"></script>
+  <script src="app/instrument.js?v=find-v2-20260915"></script>
+  <script src="app/study.js?v=find-v2-20260915"></script>
 </body>
 </html>
+

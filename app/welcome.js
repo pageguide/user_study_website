@@ -19,12 +19,25 @@ function say(msg, tone = '') {
 }
 
 let queue = [];
+/** Everything a reviewer may open, held out as well as live. Filled when the review tab opens. */
+let reviewQueue = [];
 
 if (idToggle && idField && idInput) {
   idToggle.onclick = () => {
     idField.hidden = false;
     idToggle.hidden = true;
     idInput.focus();
+  };
+  // Said before the button is pressed, not after. A test run and a real one start from the same
+  // screen on purpose, so the one thing that must never be in doubt is which of the two is about to
+  // begin — a researcher who finds out afterwards has already spent an assignment.
+  idInput.oninput = () => {
+    if (!window.StudySession.isDryRunId(idInput.value)) {
+      if (status.dataset.dryHint) { say(''); delete status.dataset.dryHint; }
+      return;
+    }
+    status.dataset.dryHint = 'yes';
+    say('Test run: nothing will be saved, no assignment is claimed, and you can step between tasks.');
   };
 }
 
@@ -40,28 +53,64 @@ const STYLE_ORDER = [
  * trajectories. Same order the extension builds (_buildTaskQueue → trajectories appended), so a
  * web run and an extension run are the same sequence.
  */
+/** One stimulus row → one queue entry. Shared so the two queues cannot describe a task differently. */
+function findQueueEntry(t) {
+  // answer + distractors ride along: they are what Q1's options are built from, and fetching the
+  // task again at question time would be a second round trip for data already in hand.
+  return {
+    taskType: 'find', id: t.id, title: t.title, question: t.question,
+    url: t.url, type: t.type, answer: t.answer, distractors: t.distractors,
+    inStudy: !!t.in_study,
+    style: studyStyle({ taskType: 'find', type: t.type, title: t.title, question: t.question }),
+  };
+}
+
+function guideQueueEntry(t) {
+  return {
+    taskType: 'guide', id: t.id, goal: t.goal, title: t.title, condition: t.condition,
+    inStudy: !!t.in_study,
+    style: studyStyle({ taskType: 'guide', condition: t.condition, title: t.title, goal: t.goal }),
+  };
+}
+
 async function buildQueue() {
   const out = [];
   try {
-    const tasks = await window.StudyDB.listStudyTasks();
-    // answer + distractors ride along: they are what Q1's options are built from, and fetching the
-    // task again at question time would be a second round trip for data already in hand.
-    tasks.forEach(t => out.push({
-      taskType: 'find', id: t.id, title: t.title, question: t.question,
-      url: t.url, type: t.type, answer: t.answer, distractors: t.distractors,
-      style: studyStyle({ taskType: 'find', type: t.type, title: t.title, question: t.question }),
-    }));
+    (await window.StudyDB.listStudyTasks()).forEach(t => out.push(findQueueEntry(t)));
   } catch (e) {
     console.warn('[study] no Find tasks:', e.message);
   }
   try {
-    const trajectories = await window.StudyDB.listStudyTrajectories();
-    trajectories.forEach(t => out.push({
-      taskType: 'guide', id: t.id, goal: t.goal, title: t.title, condition: t.condition,
-      style: studyStyle({ taskType: 'guide', condition: t.condition, title: t.title, goal: t.goal }),
-    }));
+    (await window.StudyDB.listStudyTrajectories()).forEach(t => out.push(guideQueueEntry(t)));
   } catch (e) {
     console.warn('[study] no guide trajectories:', e.message);
+  }
+  return out;
+}
+
+/**
+ * Everything a reviewer can open — held out as well as live.
+ *
+ * DELIBERATELY NOT `queue`. That array is what a participant is dealt from, and widening it would
+ * put an unfinished task in front of somebody; it also feeds stimulusStyleById(), the dashboard's
+ * fallback for a row with no task_style, which should keep describing the study that ran. So the
+ * reviewer's list is built separately from the unfiltered readers, and the two cannot drift because
+ * both map rows through the same two functions above.
+ *
+ * Fetched only when the review panel opens. A participant loading the welcome screen has no use for
+ * held-out stimuli, and this would be two more requests in front of the thing they came to do.
+ */
+async function buildReviewQueue() {
+  const out = [];
+  try {
+    (await window.StudyDB.listAllStudyTasks()).forEach(t => out.push(findQueueEntry(t)));
+  } catch (e) {
+    console.warn('[study] could not list every Find task:', e.message);
+  }
+  try {
+    (await window.StudyDB.listAllStudyTrajectories()).forEach(t => out.push(guideQueueEntry(t)));
+  } catch (e) {
+    console.warn('[study] could not list every trajectory:', e.message);
   }
   return out;
 }
@@ -238,24 +287,70 @@ function showAdminPanel() {
     showFindTaskEditor();
     return;
   }
+  // Fetched once per unlock rather than per render: the chip rows re-render the panel on every
+  // click, and re-listing every stimulus each time would make the filters feel slow for data that
+  // does not change while you are looking at it.
+  if (!reviewQueue.length) {
+    document.getElementById('admin-content').innerHTML = '<div class="viz-loading">Loading stimuli…</div>';
+    buildReviewQueue().then(list => {
+      reviewQueue = list;
+      showAdminReviewControls();
+    });
+    return;
+  }
   showAdminReviewControls();
+}
+
+/**
+ * What the current review selection would actually walk, task by task, with its pool marked.
+ *
+ * The counts matter more here than in the participant queue: "Review →" on an empty selection used
+ * to fail with a message, and a reviewer narrowing to the held-out Guide trajectories has no other
+ * way to see what that leaves. Marking each entry is the point of the feature — a held-out task
+ * looks identical to a live one once the walkthrough starts.
+ */
+function reviewQueueListHtml(entries) {
+  if (!entries.length) return '<p class="admin-review-empty">Nothing matches this selection.</p>';
+  return `<ol class="admin-review-list">
+    ${entries.map(e => `<li>
+      <span class="admin-pool-tag${e.inStudy ? ' is-in' : ''}">${e.inStudy ? 'IN STUDY' : 'HELD OUT'}</span>
+      <code>${adminEsc(e.id)}</code>
+      <span class="admin-review-style">${adminEsc(e.style || e.taskType)}</span>
+    </li>`).join('')}
+  </ol>`;
 }
 
 function showAdminReviewControls() {
   const o = window.StudyAdmin.adminOptions();
   const content = document.getElementById('admin-content');
+  const pooled = window.StudyAdmin.filterQueueByPool(reviewQueue, o.pool);
+  const selected = window.StudyAdmin.filterQueueByHalf(pooled, o.half);
+  const held = reviewQueue.filter(e => !e.inStudy).length;
   content.innerHTML = `
     <label class="welcome-label">Which tasks?</label>
     <div class="admin-row" id="admin-half">
       ${[['all', 'Everything'], ['find', '🔍 Find only'], ['guide', '📘 Guide only']].map(([id, label]) => `
         <button class="admin-chip${o.half === id ? ' admin-chip-on' : ''}" data-half="${id}">${label}</button>`).join('')}
     </div>
+    <!-- The pool a task sits in. in_study is what the participant queue filters on, so this row is
+         the difference between reviewing the study that ran and reviewing everything built for it. -->
+    <label class="welcome-label">Which pool?</label>
+    <div class="admin-row" id="admin-pool">
+      ${[['all', 'Everything'], ['in', '● In the study'], ['out', '○ Held out']].map(([id, label]) => `
+        <button class="admin-chip${o.pool === id ? ' admin-chip-on' : ''}" data-pool="${id}">${label}</button>`).join('')}
+    </div>
+    <p class="admin-review-note">${reviewQueue.length} stimuli in all, ${held} held out of the
+      rotation. Held-out material is shown here for checking only — this tab writes nothing, so to
+      move a task in or out use <b>Edit Find task</b> or <b>Edit trajectory</b>.</p>
     <label class="welcome-label">Which arm?</label>
     <div class="admin-row" id="admin-arm">
       ${[['grounding', 'Grounded'], ['nongrounding', 'Non-grounded']].map(([id, label]) => `
         <button class="admin-chip${o.arm === id ? ' admin-chip-on' : ''}" data-arm="${id}">${label}</button>`).join('')}
     </div>
-    <button class="welcome-btn" id="admin-go">Review →</button>
+    <label class="welcome-label">This selection walks ${selected.length}
+      task${selected.length === 1 ? '' : 's'}</label>
+    ${reviewQueueListHtml(selected)}
+    <button class="welcome-btn" id="admin-go"${selected.length ? '' : ' disabled'}>Review →</button>
     <div class="admin-row">
       <button class="admin-chip" id="admin-tutorial">▶ Preview the walkthrough</button>
       <button class="admin-chip" id="admin-endscreen">🏁 View the end screen</button>
@@ -268,16 +363,19 @@ function showAdminReviewControls() {
   content.querySelectorAll('[data-arm]').forEach(b => {
     b.onclick = () => { window.StudyAdmin.setAdminOptions({ arm: b.dataset.arm }); showAdminPanel(); };
   });
+  content.querySelectorAll('[data-pool]').forEach(b => {
+    b.onclick = () => { window.StudyAdmin.setAdminOptions({ pool: b.dataset.pool }); showAdminPanel(); };
+  });
   // The walkthrough on its own, so its wording can be checked without claiming a round-robin slot —
   // the one thing "Review →" cannot do, since it needs published tasks and this needs none.
   document.getElementById('admin-tutorial').onclick = () => {
-    location.href = 'study.html?tutorial=preview';
+    location.href = 'find-v1-study.html?tutorial=preview';
   };
   // The screen a participant reaches after the eighth task — the thank-you and the questionnaire —
   // without answering eight tasks to get to it. Needs no session for the same reason the walkthrough
   // preview does not: nothing on it is drawn from the run.
   document.getElementById('admin-endscreen').onclick = () => {
-    location.href = 'study.html?finish=preview';
+    location.href = 'find-v1-study.html?finish=preview';
   };
   document.getElementById('admin-exit').onclick = () => {
     window.StudyAdmin.revokeAdmin();
@@ -286,8 +384,12 @@ function showAdminReviewControls() {
   };
   document.getElementById('admin-go').onclick = () => {
     const opts = window.StudyAdmin.adminOptions();
-    const filtered = window.StudyAdmin.filterQueueByHalf(queue, opts.half);
-    if (!filtered.length) { say(`Nothing published for "${opts.half}".`, 'bad'); return; }
+    // The reviewer's list, not the participant queue — this is the one place the two differ, and
+    // the difference is the whole point: held-out material is reachable here and nowhere else.
+    const filtered = window.StudyAdmin.filterQueueByHalf(
+      window.StudyAdmin.filterQueueByPool(reviewQueue, opts.pool), opts.half,
+    );
+    if (!filtered.length) { say(`Nothing matches "${opts.half}" in that pool.`, 'bad'); return; }
     Object.assign(window.StudySession.state, {
       // A reviewer is not a participant. The id says so in the data too, in case a write ever slips
       // through a future change — it should be obvious in the table, not inferred.
@@ -300,7 +402,7 @@ function showAdminReviewControls() {
       adminReview: true,
     });
     window.StudySession.saveReview();
-    location.href = 'study.html';
+    location.href = 'find-v1-study.html';
   };
 }
 
@@ -311,6 +413,10 @@ let vizLoadedAt = null;
 let taskImageCounts = new Map();
 /** task_id → {citations, evidence} in the grounded agent answer. Empty until the pane loads. */
 let taskReferenceCounts = new Map();
+/** task_id → the accepted evidence spans per hop, so the drill-down can print the key beside a miss. */
+let taskGroundTruth = new Map();
+/** task_id → {errors, noError} for Guide runs: whether the trajectory has a planted error in it. */
+let taskErrorFlags = new Map();
 
 /**
  * Which tasks each card counts, when the answer should not rest on all of them.
@@ -326,6 +432,13 @@ let taskReferenceCounts = new Map();
  */
 const facetTaskFilters = new Map();   // facetKey -> Set(task_id)
 const facetPickerOpen = new Set();
+/** Which cards have the per-participant drill-down open, and which have stopped truncating it. */
+const facetDetailOpen = new Set();
+const facetDetailAll = new Set();
+/** Which cards have the per-session breakdown open. Same reason as the two above: ticking a task
+ *  rebuilds the whole pane, and a panel that shut itself every time you changed what it was
+ *  showing would be unusable. */
+const facetSessionsOpen = new Set();
 
 /**
  * Tasks a facet leaves out unless somebody ticks them back on, and why.
@@ -349,9 +462,10 @@ const FACET_TASK_EXCLUSIONS = {
   // silently reverting. It is the same captured Wikipedia article as MUFC-V1 (getTaskPage in
   // app/supabase.js serves both tasks from one page), and it was dropped so the facet would not
   // count a participant's SECOND reading of an article they had already met in Find × Visual. That
-  // reason is now spent: MUFC-V1 is itself excluded from Find × Visual below, so in the counted data
-  // the article appears exactly once and nobody reads it twice. Put this back if MUFC-V1 ever
-  // returns to that card — the two entries only make sense read together.
+  // reason was spent while MUFC-V1 was itself excluded from Find × Visual — but it is counted there
+  // again as of this change, so the article is now read on BOTH cards and a participant's second
+  // reading of it does enter Find × Text as if it were a first. The two entries only make sense read
+  // together: re-excluding one of the two is what restores "the article is measured once".
   find_text: {
     ids: ['MARS-v1'],
     why: 'a disputed answer key',
@@ -379,26 +493,27 @@ const FACET_TASK_EXCLUSIONS = {
     why: 'three duplicate re-recordings, plus both recordings of the New York goal',
   },
 
-  // TWO TASKS WHERE THE GROUNDED ARM'S CLOCK EXPLODES AND NOTHING ELSE MOVES. Across this facet's
-  // five tasks, locate time with grounding runs 34s, 26s and 45s — and then 274s on MUFC-V1 and
-  // 309s on PEDANT-V1, against 22s each without it. A fourteen-fold jump in time while accuracy and
-  // localization stay flat (100%→100% and 50%→50% on MUFC-V1; 75%→90% and 88%→85% on PEDANT-V1) is
-  // not grounding being slower to read: it is something wrong with those two runs — a citation that
-  // never resolved on the snapshot, a highlight participants sat waiting for — and it is exactly
-  // the "broken in a way the numbers cannot see" case this map exists for.
+  // ONE TASK WHERE THE GROUNDED ARM'S CLOCK EXPLODES AND NOTHING ELSE MOVES. Across this facet's
+  // five tasks, locate time with grounding runs 34s, 26s and 45s — and then 309s on PEDANT-V1,
+  // against 22s without it. A fourteen-fold jump in time while accuracy and localization stay flat
+  // (75%→90% and 88%→85%) is not grounding being slower to read: it is something wrong with that
+  // run — a citation that never resolved on the snapshot, a highlight participants sat waiting for
+  // — and it is exactly the "broken in a way the numbers cannot see" case this map exists for.
   //
-  // MUFC-V1 has a second reason of its own: it is the same captured Wikipedia page as MUFC-V1-TEXT
-  // in Find × Text. Only one of the two can be counted without a participant's second reading of
-  // that article entering the data as if it were a first — and it is this one that leaves, so the
-  // article is still measured once, on the text card, where its clock did not blow up.
+  // MUFC-V1 WAS EXCLUDED HERE AND IS NOT ANY MORE, on the same two grounds it was dropped for. Its
+  // grounded clock also blew up (274s against 22s), and it is the same captured Wikipedia page as
+  // MUFC-V1-TEXT in Find × Text, so with both counted a participant's second reading of that
+  // article now enters the data alongside their first. Both facts still hold; counting it is the
+  // researcher's call against them, and the reason belongs in this comment when it is written down.
   //
-  // READ WHAT THIS DOES TO THE HEADLINE BEFORE QUOTING IT. Those two tasks were the whole of this
-  // card's "grounding is slower" finding; without them the facet reverses direction. That is a
-  // strong claim resting on a judgement about two runs, so it belongs in the paper's method section
-  // rather than in a footnote — and if the runs turn out to be sound, this entry has to go.
+  // READ WHAT THIS DOES TO THE HEADLINE BEFORE QUOTING IT. These runs were the whole of this card's
+  // "grounding is slower" finding, so the direction of this facet turns on which of them are
+  // counted. That is a strong claim resting on a judgement about two runs, so it belongs in the
+  // paper's method section rather than in a footnote — and if PEDANT-V1 turns out to be sound, this
+  // entry has to go too.
   find_visual: {
-    ids: ['MUFC-V1', 'PEDANT-V1'],
-    why: 'two runs whose grounded locate time is ~14× the others while accuracy and localization stay flat',
+    ids: ['PEDANT-V1'],
+    why: 'a run whose grounded locate time is ~14× the others while accuracy and localization stay flat',
   },
 
   // gv2-msf1pyqv-omt0hz — the Tampa run — is the only trajectory in this facet whose ground truth
@@ -564,6 +679,11 @@ function answerCorrect(row) {
   if (row?.task_type === 'find') return row.score_answer_correct;
   if (row?.task_type === 'guide') return row.score_verdict_correct;
   return null;
+}
+
+/** The same strict definition the correct-answer time figure uses. */
+function correctAnswerRows(rows) {
+  return rows.filter(row => answerCorrect(row) === true);
 }
 
 /**
@@ -856,6 +976,23 @@ function participantCount(rows) {
   return allSessionKeys(rows).size;
 }
 
+/**
+ * How many of those people are behind BOTH halves of the comparison.
+ *
+ * The participant count alone cannot tell a within-subject card from a between-subject one, and the
+ * two support very different readings: a facet where every sitting worked one task in each arm
+ * compares a person against themselves, while a facet split into two disjoint groups compares
+ * strangers. The card's own task filter can turn the first into the second — dropping a task takes
+ * an arm away from everyone who happened to be dealt it — so this is counted on the rows the card
+ * is ACTUALLY counting, not on the facet as a whole.
+ */
+function bothArmsCount(rows) {
+  const ng = allSessionKeys(conditionRows(rows, 'nongrounding'));
+  let both = 0;
+  allSessionKeys(conditionRows(rows, 'grounding')).forEach(key => { if (ng.has(key)) both++; });
+  return both;
+}
+
 /* Booleans count as 1/0 so accuracy and duration go through the same path. */
 function metricValues(rows, metricFn) {
   return rows
@@ -1126,6 +1263,103 @@ function svgLikertPanels(data) {
   </svg>`;
 }
 
+function truncateSvgText(text, maxChars = 30) {
+  const s = String(text || '').trim();
+  return s.length <= maxChars ? s : `${s.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+// Google Forms questions usually repeat the product name, so the y-axis labels
+// only keep the part that actually differs between questions.
+function likertShortLabels(columns) {
+  const texts = columns.map(c => String(c.question || '').trim());
+  // Compare on letters/digits only so "PageGuide" and "Page Guide" share a prefix.
+  const norms = texts.map(text => {
+    const chars = [];
+    const map = [];
+    for (let i = 0; i < text.length; i++) {
+      if (/[a-z0-9]/i.test(text[i])) { chars.push(text[i].toLowerCase()); map.push(i); }
+    }
+    return { key: chars.join(''), map };
+  });
+  let shared = 0;
+  while (norms.every(n => shared < n.key.length - 1) && norms.every(n => n.key[shared] === norms[0].key[shared])) shared++;
+  if (!shared) return texts;
+  return texts.map((text, i) => {
+    const rest = text.slice(norms[i].map[shared]).replace(/^[\s,;:.–-]+/, '');
+    return rest ? rest[0].toUpperCase() + rest.slice(1) : text;
+  });
+}
+
+// 100% stacked view of the same Likert answers: one bar per question, rating 1-7
+// left to right, sharing the diverging palette used by the divergent panels.
+function svgLikertStacked(data) {
+  if (!data?.columns?.length) return emptySvg(1040, 160, 'Upload or load a CSV to draw the Likert chart');
+
+  const width = 1040;
+  const left = 300;
+  const right = 40;
+  const top = 108;
+  const rowH = 40;
+  const barH = 24;
+  const axisH = 74;
+  const legendH = 66;
+  const plotW = width - left - right;
+  const rows = data.columns;
+  const shortLabels = likertShortLabels(rows);
+  const axisY = top + rows.length * rowH + 6;
+  const height = top + rows.length * rowH + axisH + legendH;
+
+  const ticks = [0, 25, 50, 75, 100];
+  const xFor = pct => left + (pct / 100) * plotW;
+
+  const grid = ticks.map(t => `<line x1="${xFor(t).toFixed(1)}" y1="${top - 12}" x2="${xFor(t).toFixed(1)}" y2="${axisY}" stroke="${t === 0 ? '#5f6673' : '#dcdcdc'}"></line>
+    <text x="${xFor(t).toFixed(1)}" y="${axisY + 22}" text-anchor="middle" class="likert-axis">${t}</text>`).join('');
+
+  const bars = rows.map((item, i) => {
+    const n = item.values.length || 1;
+    const y = top + i * rowH;
+    let x = left;
+    const segs = [1, 2, 3, 4, 5, 6, 7].map(v => {
+      const w = (item.counts[v] / n) * plotW;
+      if (w <= 0.2) return '';
+      const rect = `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${barH}" fill="${LIKERT_COLORS[v]}"></rect>`;
+      x += w;
+      return rect;
+    }).join('');
+    const tip = {
+      title: `${item.code}: ${item.question}`,
+      rows: [1, 2, 3, 4, 5, 6, 7].map(v => ({
+        color: LIKERT_COLORS[v],
+        value: `${item.counts[v]} (${Math.round((item.counts[v] / n) * 100)}%)`,
+        label: `Rating ${v}`,
+      })),
+      foot: `n ${n}`,
+    };
+    return `<g>
+      <rect class="viz-hit" x="${(left - 260).toFixed(1)}" y="${(y - 6).toFixed(1)}" width="${(plotW + 260).toFixed(1)}" height="${barH + 12}" ${tipData(tip)} aria-label="${adminEsc(`${item.code}: ${item.question}`)}"></rect>
+      ${segs}
+      <text x="${(left - 12).toFixed(1)}" y="${(y + barH / 2 + 5).toFixed(1)}" text-anchor="end" class="likert-stack-label">${adminEsc(`${item.code}. ${truncateSvgText(shortLabels[i], 30)}`)}</text>
+    </g>`;
+  }).join('');
+
+  const legendW = 7 * 62;
+  const legendX = width / 2 - legendW / 2;
+  const legendY = axisY + axisH + 14;
+  const legend = [1, 2, 3, 4, 5, 6, 7].map((v, i) => `<rect x="${legendX + i * 62}" y="${legendY - 11}" width="14" height="14" rx="2" fill="${LIKERT_COLORS[v]}"></rect>
+    <text x="${legendX + i * 62 + 22}" y="${legendY}" class="likert-legend-num">${v}</text>`).join('');
+
+  return `<svg class="viz-svg likert-svg likert-stack-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Post-study questionnaire results as 100% stacked bars">
+    <text x="24" y="36" class="likert-stack-title">Post-Experiment Questionnaire Results</text>
+    <text x="24" y="60" class="likert-stack-subtitle">Likert Scale Responses (1 = Strongly Disagree / Negative, 7 = Strongly Agree / Positive)</text>
+    <text x="24" y="${(top + (rows.length * rowH) / 2).toFixed(1)}" text-anchor="middle" class="likert-axis-label" transform="rotate(-90 24 ${(top + (rows.length * rowH) / 2).toFixed(1)})">Question</text>
+    ${grid}
+    <line x1="${left}" y1="${axisY}" x2="${left + plotW}" y2="${axisY}" stroke="#5f6673"></line>
+    ${bars}
+    <text x="${(left + plotW / 2).toFixed(1)}" y="${axisY + 50}" text-anchor="middle" class="likert-axis-label">Percentage of Responses (%)</text>
+    ${legend}
+  </svg>`;
+}
+
 function postStudyLikertHtml() {
   const meta = postStudyLikert
     ? `${adminEsc(postStudyLikert.source)} · ${postStudyLikert.rows} responses · ${postStudyLikert.columns.length} questions`
@@ -1150,6 +1384,15 @@ function postStudyLikertHtml() {
     </div>
     <div class="viz-job-status" id="poststudy-status" hidden></div>
     <div id="poststudy-chart" class="poststudy-chart">${postStudyLikert ? svgLikertPanels(postStudyLikert) : '<div class="viz-empty">Loading the default post-study CSV…</div>'}</div>
+    <div class="poststudy-subhead">
+      <h5>Stacked view — every rating, 0-100%</h5>
+      <div class="poststudy-controls poststudy-controls-inline">
+        <button class="admin-chip" data-svg-export="#poststudy-stacked-chart svg" data-name="post-study-likert-stacked" data-format="svg" type="button"${postStudyLikert ? '' : ' disabled'}>SVG</button>
+        <button class="admin-chip" data-svg-export="#poststudy-stacked-chart svg" data-name="post-study-likert-stacked" data-format="jpeg" type="button"${postStudyLikert ? '' : ' disabled'}>JPEG</button>
+        <button class="admin-chip" data-svg-export="#poststudy-stacked-chart svg" data-name="post-study-likert-stacked" data-format="pdf" type="button"${postStudyLikert ? '' : ' disabled'}>PDF</button>
+      </div>
+    </div>
+    <div id="poststudy-stacked-chart" class="poststudy-chart">${postStudyLikert ? svgLikertStacked(postStudyLikert) : '<div class="viz-empty">Loading the default post-study CSV…</div>'}</div>
   </section>`;
 }
 
@@ -1201,10 +1444,51 @@ function vizBoxUpperFence(values) {
   return [...v].reverse().find(x => x <= hi) ?? v[v.length - 1];
 }
 
-function selectedRowsForFacet(allRows, spec) {
+function selectedRowsForFacet(allRows, spec, { completeOnly = selectionCompleteOnly } = {}) {
   const facetRows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
   const chosen = chosenTasksFor(facetKey(spec), facetRows);
-  return chosen ? facetRows.filter(r => chosen.has(String(r.task_id || ''))) : facetRows;
+  const picked = chosen ? facetRows.filter(r => chosen.has(String(r.task_id || ''))) : facetRows;
+  if (!completeOnly) return picked;
+  // Whether a sitting finished is a fact about the sitting, so it is decided over EVERY fetched row
+  // and never over the selection: a card that is counting two of eight tasks would otherwise find
+  // no finished session at all and empty itself.
+  const finished = completeSessionKeys(adminVizRows);
+  return picked.filter(r => finished.has(sessionKey(r)));
+}
+
+/**
+ * Whether the four cards drop the people who quit part-way — the button on the plots card.
+ *
+ * SEPARATE FROM `vizCompleteOnly` on purpose. That one narrows the whole pane, every chart and the
+ * row table with it; this one narrows only the selected result the figures are generated from, so a
+ * researcher can read the drop-off in the pane above and still export a finished-people-only figure.
+ *
+ * In memory only, like every other filter here: one that survived a reload would keep quietly
+ * excluding people long after anyone remembered switching it on.
+ */
+let selectionCompleteOnly = false;
+
+/**
+ * The selected result, counted in sittings rather than rows.
+ *
+ * Sittings, not participant_id: almost every participant left the id box blank and is stored as
+ * 'anon' (see the note on completion_status.mjs), so participant_id cannot tell two people apart
+ * and session_id can. One sitting is one person for as long as that stays true.
+ */
+function selectionSessionAudit(visibleRows) {
+  const selected = RESEARCH_QUESTIONS.flatMap(spec => selectedRowsForFacet(visibleRows, spec, { completeOnly: false }));
+  const finished = completeSessionKeys(adminVizRows);
+  const sessions = allSessionKeys(selected);
+  const finishedSessions = Array.from(sessions).filter(key => finished.has(key));
+  const finishedRows = selected.filter(r => finished.has(sessionKey(r)));
+  return {
+    rows: selected.length,
+    sessions: sessions.size,
+    finishedSessions: finishedSessions.length,
+    finishedRows: finishedRows.length,
+    droppedSessions: sessions.size - finishedSessions.length,
+    droppedRows: selected.length - finishedRows.length,
+  };
 }
 
 function selectedRowsForCurrentFigures(rows) {
@@ -1300,6 +1584,154 @@ function svgBoxGrid(panelsSpec, opts = {}) {
   </svg>`;
 }
 
+/** n, mean, sd and ±1 SE for one cell — the same definitions scripts/figures.mjs uses. */
+function vizStats(values) {
+  const v = values.filter(x => x != null && Number.isFinite(x));
+  if (!v.length) return { n: 0, mean: null, sd: null, se: null };
+  const mean = v.reduce((a, b) => a + b, 0) / v.length;
+  const sd = v.length > 1
+    ? Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / (v.length - 1))
+    : 0;
+  return { n: v.length, mean, sd, se: sd / Math.sqrt(v.length) };
+}
+
+/**
+ * An axis that ends on a round number, with ticks a person would have chosen.
+ *
+ * The same 1-2-2.5-5 rule as niceScale() in scripts/figures.mjs, and here for the same reason: a
+ * bar is read against its axis, so a panel topped at 8.5 with a tick at 4.3 makes every bar in it a
+ * comparison against an arbitrary number. niceMax() alone is fine for a box plot, where the reading
+ * is the box rather than its height above zero.
+ */
+function vizNiceScale(max) {
+  if (!(max > 0)) return { max: 1, ticks: [0, 1] };
+  const raw = max / 4;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || 10 * mag;
+  const top = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let t = 0; t <= top + step / 2; t += step) ticks.push(Number(t.toFixed(10)));
+  return { max: top, ticks };
+}
+
+/**
+ * The same panel grid as svgBoxGrid, drawn as mean bars with ±1 SE whiskers.
+ *
+ * WHY BOTH SHAPES EXIST. A box plot answers "what does the spread look like", which is the question
+ * for completion time — a handful of very slow runs is the finding there, and a mean bar would hide
+ * them. A bar with an error whisker answers "where is the average and how well is it pinned down",
+ * which is what the accuracy and behaviour panels are for and what the saved figures in figures/
+ * already show. Having the screen draw one thing and the paper another is how a reader ends up
+ * comparing a median to a mean without noticing.
+ *
+ * WHISKERS ARE ±1 STANDARD ERROR, matching scripts/figures.mjs and its captions — sd/√n, NOT a
+ * standard deviation and NOT a confidence interval. At these cell sizes a 95% interval is roughly
+ * twice as long, so the three are very different pictures of the same numbers and the note under
+ * each panel says which one this is.
+ *
+ * It takes the identical panelsSpec as svgBoxGrid ({ title, subtitle, values: { nongrounding: [],
+ * grounding: [] } }) so a panel can be switched between the two shapes without rewriting how its
+ * data is gathered.
+ */
+function svgBarGrid(panelsSpec, opts = {}) {
+  const width = opts.width || 1040;
+  const panelW = opts.panelW || 250;
+  const panelH = opts.panelH || 270;
+  const left0 = opts.left0 || 20;
+  const top0 = opts.top0 || 18;
+  const cols = opts.cols || Math.min(4, panelsSpec.length || 1);
+  const rowCount = Math.ceil((panelsSpec.length || 1) / cols);
+  const legendH = opts.legend === false ? 0 : 44;
+  const height = top0 + rowCount * panelH + legendH + 10;
+  const colors = { nongrounding: '#bf5a64', grounding: '#5183c9' };
+  const arms = [
+    { id: 'nongrounding', label: 'Non-grounded' },
+    { id: 'grounding', label: 'Grounded' },
+  ];
+
+  // A bar axis is scaled by the top of the WHISKER, not the top of the data: an axis topped by the
+  // tallest mean crops the error bar that says how little that mean is pinned down.
+  const reachOf = (panel) => Math.max(...arms.map(arm => {
+    const s = vizStats(panel.values[arm.id] || []);
+    return s.mean == null ? 0 : s.mean + (s.se || 0);
+  }), 0);
+  const globalScale = vizNiceScale(Math.max(...panelsSpec.map(reachOf), 0) * 1.08);
+  const globalMax = opts.max ?? globalScale.max;
+  const globalTicks = opts.ticks || (opts.max == null ? globalScale.ticks : [0, globalMax / 2, globalMax]);
+  const globalTickFormat = opts.tickFormat || ((v) => String(Math.round(v)));
+
+  // Rounded at the data end only. A bar rounded on the baseline floats off its own axis.
+  const barPath = (x, y, w, h, fill) => {
+    if (h <= 0.5) return `<rect x="${x.toFixed(1)}" y="${(y + h - 0.5).toFixed(1)}" width="${w.toFixed(1)}" height="0.5" fill="${fill}"></rect>`;
+    const r = Math.min(4, w / 2, h);
+    return `<path d="M${x.toFixed(1)},${(y + h).toFixed(1)} L${x.toFixed(1)},${(y + r).toFixed(1)}`
+      + ` Q${x.toFixed(1)},${y.toFixed(1)} ${(x + r).toFixed(1)},${y.toFixed(1)}`
+      + ` L${(x + w - r).toFixed(1)},${y.toFixed(1)}`
+      + ` Q${(x + w).toFixed(1)},${y.toFixed(1)} ${(x + w).toFixed(1)},${(y + r).toFixed(1)}`
+      + ` L${(x + w).toFixed(1)},${(y + h).toFixed(1)} Z" fill="${fill}"></path>`;
+  };
+
+  const whisker = (cx, yOf, mean, se, max) => {
+    if (se == null || !(se > 0)) return '';
+    const hi = Math.min(max, mean + se);
+    const lo = Math.max(0, mean - se);
+    const cap = 5;
+    return `<g stroke="#16161a" stroke-width="1.2" fill="none" opacity="0.75">
+      <line x1="${cx.toFixed(1)}" y1="${yOf(lo).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${yOf(hi).toFixed(1)}"></line>
+      <line x1="${(cx - cap).toFixed(1)}" y1="${yOf(hi).toFixed(1)}" x2="${(cx + cap).toFixed(1)}" y2="${yOf(hi).toFixed(1)}"></line>
+      <line x1="${(cx - cap).toFixed(1)}" y1="${yOf(lo).toFixed(1)}" x2="${(cx + cap).toFixed(1)}" y2="${yOf(lo).toFixed(1)}"></line>
+    </g>`;
+  };
+
+  const panels = panelsSpec.map((panel, i) => {
+    const x = left0 + (i % cols) * panelW;
+    const y = top0 + Math.floor(i / cols) * panelH;
+    const padL = 38;
+    const padT = 34;
+    const padB = 46;
+    const plotW = panelW - padL - 12;
+    const plotH = panelH - padT - padB;
+    // Per-panel scaling is recomputed from mean+SE rather than reusing whatever the caller worked
+    // out for a box plot: a box axis is sized by the raw spread and would leave every bar a stub.
+    const panelScale = vizNiceScale(Math.max(reachOf(panel), 0) * 1.08);
+    const panelMax = opts.perPanelScale ? panelScale.max : globalMax;
+    const panelTicks = opts.perPanelScale ? panelScale.ticks : globalTicks;
+    const tickFormat = panel.tickFormat || globalTickFormat;
+    const yOf = (v) => y + padT + plotH - (Math.min(v, panelMax) / panelMax) * plotH;
+    const baseline = y + padT + plotH;
+    const start = x + padL + plotW / 2 - 34;
+    const barW = 32;
+    const cells = arms.map(arm => vizStats(panel.values[arm.id] || []));
+    return `<g>
+      <text x="${x + padL}" y="${y + 13}" class="viz-svg-value">${adminEsc(panel.title)}  (n ${cells[0].n} vs ${cells[1].n})</text>
+      <text x="${x + padL}" y="${y + 27}" class="viz-svg-label">${adminEsc(panel.subtitle || '')}</text>
+      ${panelTicks.map(t => `<line x1="${x + padL}" y1="${yOf(t).toFixed(1)}" x2="${x + padL + plotW}" y2="${yOf(t).toFixed(1)}" stroke="${VIZ_INK.grid}" stroke-width="1"></line>
+        <text x="${x + padL - 6}" y="${(yOf(t) + 4).toFixed(1)}" text-anchor="end" class="viz-svg-label">${adminEsc(tickFormat(t))}</text>`).join('')}
+      ${cells.map((s, ai) => {
+        if (s.mean == null) return '';
+        const bx = start + ai * 38;
+        const top = yOf(s.mean);
+        return barPath(bx, top, barW, baseline - top, colors[arms[ai].id])
+          + whisker(bx + barW / 2, yOf, s.mean, s.se, panelMax);
+      }).join('')}
+      <text x="${start + barW / 2}" y="${baseline + 18}" text-anchor="middle" class="viz-svg-label">NG</text>
+      <text x="${start + 38 + barW / 2}" y="${baseline + 18}" text-anchor="middle" class="viz-svg-label">G</text>
+    </g>`;
+  }).join('');
+
+  const legendY = height - 26;
+  return `<svg class="viz-svg current-box-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${adminEsc(opts.aria || 'Current bar chart')}">
+    <rect width="${width}" height="${height}" fill="#fff"></rect>
+    ${panels}
+    ${opts.legend === false ? '' : `<g>
+      <rect x="${width / 2 - 118}" y="${legendY}" width="12" height="12" rx="2" fill="${colors.nongrounding}"></rect>
+      <text x="${width / 2 - 100}" y="${legendY + 10}" class="viz-svg-label">Non-grounded</text>
+      <rect x="${width / 2 + 20}" y="${legendY}" width="12" height="12" rx="2" fill="${colors.grounding}"></rect>
+      <text x="${width / 2 + 38}" y="${legendY + 10}" class="viz-svg-label">Grounded</text>
+    </g>`}
+  </svg>`;
+}
+
 function svgCurrentTimeBoxPlot(allRows) {
   return svgBoxGrid(RESEARCH_QUESTIONS.map(spec => {
     const rows = selectedRowsForFacet(allRows, spec);
@@ -1314,82 +1746,72 @@ function svgCurrentTimeBoxPlot(allRows) {
   }), { tickFormat: v => `${Math.round(v)}s`, aria: 'Current task completion time box plot' });
 }
 
-function svgCurrentAccuracyBoxPlot(rows) {
-  return svgBoxGrid(RESEARCH_QUESTIONS.map(spec => {
+/**
+ * Task accuracy per facet, as mean bars with ±1 SE — the saved accuracy figure's shape.
+ *
+ * SCORED ROWS, NOT TASK-LEVEL RATES. A mean over per-task rates weights a task drawn twice the same
+ * as one drawn eleven times, which is a defensible figure but not the one figures/accuracy.svg
+ * draws; two accuracy numbers on the same screen computed two ways is worse than either. So this
+ * averages 0/1 over rows, exactly as accuracyFigure() in scripts/figures.mjs does.
+ *
+ * A FIXED 0–1 AXIS on every panel, for the reason that figure states: four panels auto-scaled to
+ * their own data would put a 60% bar and a 96% bar at the same height.
+ */
+function svgCurrentAccuracyBarChart(rows) {
+  return svgBarGrid(RESEARCH_QUESTIONS.map(spec => {
     const facetRows = selectedRowsForFacet(rows, spec);
-    const vals = (condition) => {
-      const byTask = new Map();
-      facetRows.filter(r => r.condition === condition).forEach(r => {
-        const v = answerCorrect(r);
-        if (v !== true && v !== false) return;
-        const id = String(r.task_id || 'unknown');
-        if (!byTask.has(id)) byTask.set(id, []);
-        byTask.get(id).push(v ? 1 : 0);
-      });
-      return Array.from(byTask.values()).map(v => v.reduce((a, b) => a + b, 0) / v.length);
-    };
-    const rowN = (condition) => facetRows
+    const vals = (condition) => facetRows
       .filter(r => r.condition === condition)
-      .map(answerCorrect)
-      .filter(v => v === true || v === false)
-      .length;
+      .map(r => {
+        const v = answerCorrect(r);
+        return v === true ? 1 : v === false ? 0 : null;
+      })
+      .filter(v => v != null);
     return {
       title: spec.label.replace(' · ', ' x '),
-      subtitle: `task-level rates; rows ${rowN('nongrounding')} vs ${rowN('grounding')}`,
+      subtitle: 'mean of scored rows ±1 SE',
       values: { nongrounding: vals('nongrounding'), grounding: vals('grounding') },
     };
-  }), { max: 1, ticks: [0, 0.25, 0.5, 0.75, 1], tickFormat: pctAxis, aria: 'Current task accuracy box plot' });
+  }), { max: 1, ticks: [0, 0.25, 0.5, 0.75, 1], tickFormat: pctAxis, aria: 'Current task accuracy bar chart' });
 }
 
-function svgCurrentBehaviorBoxPlot(rows) {
-  const metrics = BEHAVIOR_METRICS.concat([
-    { key: 'website_click_count', label: 'Page clicks' },
-    { key: 'panel_click_count', label: 'Panel clicks' },
-  ]);
-  const countAxis = (values, key) => {
-    if (key === 'mouse_move_px') return { tickFormat: pixels };
-    const max = Math.max(...values.filter(Number.isFinite), 0);
-    const top = Math.max(1, Math.ceil(max));
-    if (top <= 6) return { max: top, ticks: Array.from({ length: top + 1 }, (_, i) => i), tickFormat: v => String(Math.round(v)) };
-    const step = Math.ceil(top / 3);
-    return { max: step * 3, ticks: [0, step, step * 2, step * 3], tickFormat: v => String(Math.round(v)) };
-  };
-  return svgBoxGrid(metrics.map(({ key, column, label }) => {
+/**
+ * The behavioural metrics pooled over every selected row, as mean bars with ±1 SE.
+ *
+ * Each metric keeps its own axis: these run from a handful of Ctrl-F presses to tens of thousands of
+ * pixels of mouse travel, and one shared scale would flatten every count panel to nothing. The tick
+ * formatting is per metric for the same reason.
+ */
+const CURRENT_BEHAVIOR_METRICS = () => BEHAVIOR_METRICS.concat([
+  { key: 'website_click_count', label: 'Page clicks' },
+  { key: 'panel_click_count', label: 'Panel clicks' },
+]);
+
+/** Mouse travel is the one metric that is not a small count, so it gets the pixel formatter. */
+const behaviorTickFormat = (key) => (key === 'mouse_move_px' ? pixels : oneDecimal);
+
+function svgCurrentBehaviorBarChart(rows) {
+  return svgBarGrid(CURRENT_BEHAVIOR_METRICS().map(({ key, column, label }) => {
     const vals = (condition) => conditionRows(rows, condition)
       .map(r => behaviorValue(r, key, column))
       .filter(v => v != null);
-    const values = { nongrounding: vals('nongrounding'), grounding: vals('grounding') };
-    const axis = countAxis(values.nongrounding.concat(values.grounding), key);
     return {
       title: label,
-      subtitle: 'per selected row',
-      ...axis,
-      values,
+      subtitle: 'mean per selected row ±1 SE',
+      tickFormat: behaviorTickFormat(key),
+      values: { nongrounding: vals('nongrounding'), grounding: vals('grounding') },
     };
   }).filter(p => p.values.nongrounding.length || p.values.grounding.length), {
     cols: 3,
     panelW: 330,
     perPanelScale: true,
-    tickFormat: oneDecimal,
-    aria: 'Current behavior measure box plots',
+    aria: 'Current behavior measure bar charts',
   });
 }
 
-function svgCurrentBehaviorByFacetBoxPlot(rows) {
-  const metrics = BEHAVIOR_METRICS.concat([
-    { key: 'website_click_count', label: 'Page clicks' },
-    { key: 'panel_click_count', label: 'Panel clicks' },
-  ]);
-  const countAxis = (values, key) => {
-    if (key === 'mouse_move_px') return { tickFormat: pixels };
-    const max = Math.max(...values.filter(Number.isFinite), 0);
-    const top = Math.max(1, Math.ceil(max));
-    if (top <= 6) return { max: top, ticks: Array.from({ length: top + 1 }, (_, i) => i), tickFormat: v => String(Math.round(v)) };
-    const step = Math.ceil(top / 3);
-    return { max: step * 3, ticks: [0, step, step * 2, step * 3], tickFormat: v => String(Math.round(v)) };
-  };
+function svgCurrentBehaviorByFacetBarChart(rows) {
   const panels = [];
-  metrics.forEach(({ key, column, label }) => {
+  CURRENT_BEHAVIOR_METRICS().forEach(({ key, column, label }) => {
     RESEARCH_QUESTIONS.forEach(spec => {
       const facetRows = selectedRowsForFacet(rows, spec);
       const vals = (condition) => facetRows
@@ -1398,24 +1820,44 @@ function svgCurrentBehaviorByFacetBoxPlot(rows) {
         .filter(v => v != null);
       const values = { nongrounding: vals('nongrounding'), grounding: vals('grounding') };
       if (!values.nongrounding.length && !values.grounding.length) return;
-      const axis = countAxis(values.nongrounding.concat(values.grounding), key);
       panels.push({
         title: `${label} · ${spec.label.replace(' · ', ' x ')}`,
-        subtitle: 'per selected facet row',
-        ...axis,
+        subtitle: 'mean per selected facet row ±1 SE',
+        tickFormat: behaviorTickFormat(key),
         values,
       });
     });
   });
   return panels.length
-    ? svgBoxGrid(panels, {
+    ? svgBarGrid(panels, {
       cols: 4,
       panelW: 250,
       perPanelScale: true,
-      tickFormat: oneDecimal,
-      aria: 'Current behavior measure box plots by facet',
+      aria: 'Current behavior measure bar charts by facet',
     })
     : emptySvg(1040, 160, 'No telemetry recorded for these selected facet rows');
+}
+
+/**
+ * How much of the selected result is people who quit part-way, and the button that drops them.
+ *
+ * The sentence is worth reading with the button OFF, which is why it is always on screen: "6 of 19
+ * sittings finished" is the one number that says how much of a figure is drop-off, and drop-off
+ * lands unevenly across the arms — whoever leaves early leaves during whichever tasks came first.
+ */
+function selectionCompleteHtml(visibleRows) {
+  const a = selectionSessionAudit(visibleRows);
+  const on = selectionCompleteOnly;
+  const people = `${a.finishedSessions} of ${a.sessions} sitting${a.sessions === 1 ? '' : 's'} in the selected result answered all ${TASKS_PER_SESSION} tasks`;
+  const rowWords = a.sessions
+    ? `${a.finishedRows} of ${a.rows} selected rows are theirs`
+      + `${a.droppedSessions ? ` — ${a.droppedSessions} partial sitting${a.droppedSessions === 1 ? '' : 's'} contribute${a.droppedSessions === 1 ? 's' : ''} the other ${a.droppedRows}` : ''}`
+    : 'nothing is selected yet';
+  return `<div class="viz-complete-toggle selection-complete-toggle">
+    <button type="button" class="admin-chip${on ? ' admin-chip-on' : ''}" id="selection-filter-complete"
+      aria-pressed="${on}">${on ? '✓ ' : ''}Full sessions only (selected result)</button>
+    <span>${people} · ${rowWords}${on ? ' — the plots below count only those' : ''}</span>
+  </div>`;
 }
 
 function figurePreviewHtml(rows) {
@@ -1445,13 +1887,14 @@ function figurePreviewHtml(rows) {
         <button class="admin-chip admin-chip-on" id="current-whisker-generate" type="button">Generate current plots</button>
       </div>
     </div>
+    ${selectionCompleteHtml(rows)}
     <div class="viz-job-status" id="current-whisker-status" hidden></div>
     <div id="current-plot-counts" class="figure-counts"${current ? '' : ' hidden'}>${current ? current.countsHtml : ''}</div>
     <div class="figure-preview-grid">
       ${generated('time', 'Task completion time', 'Box plot with Tukey whiskers. n counts all rows with both timed stages in selected tasks.', 'Press Generate current plots to build task completion time.')}
-      ${generated('accuracy', 'Task accuracy', 'Box plot over scored 0/1 task accuracy by facet.', 'Press Generate current plots to build task accuracy.')}
-      ${generated('behavior', 'Behavior measures pooled', 'Box plots pooled over the selected subset tasks.', 'Press Generate current plots to build pooled behavior measures.')}
-      ${generated('behaviorFacet', 'Behavior measures by facet', 'Box plots split by behavior metric and task facet for the selected subset tasks.', 'Press Generate current plots to build behavior measures by facet.')}
+      ${generated('accuracy', 'Task accuracy', 'Mean bars over scored 0/1 rows with ±1 SE whiskers, on a fixed 0–100% axis.', 'Press Generate current plots to build task accuracy.')}
+      ${generated('behavior', 'Behavior measures pooled', 'Mean bars with ±1 SE whiskers, pooled over the selected subset tasks.', 'Press Generate current plots to build pooled behavior measures.')}
+      ${generated('behaviorFacet', 'Behavior measures by facet', 'Mean bars with ±1 SE whiskers, split by behavior metric and task facet.', 'Press Generate current plots to build behavior measures by facet.')}
     </div>
     <details class="figure-saved-details">
       <summary>Saved plots from figures folder (total-row files)</summary>
@@ -1492,12 +1935,14 @@ function generateCurrentWhiskerPlot() {
     return `${spec.label}: ${conditionRows(facetRows, 'nongrounding').length} vs ${conditionRows(facetRows, 'grounding').length}`;
   }).join(' · ');
   const behaviorN = `${conditionRows(rows, 'nongrounding').length} vs ${conditionRows(rows, 'grounding').length}`;
-  const countsHtml = `<span><b>Selected rows</b> ${rows.length}</span><span><b>By facet</b> ${adminEsc(byFacet)}</span><span><b>Behavior pool</b> ${adminEsc(behaviorN)}</span>`;
+  const audit = selectionSessionAudit(visibleRows);
+  const peopleChip = `<span><b>Sittings</b> ${selectionCompleteOnly ? `${audit.finishedSessions} full (of ${audit.sessions})` : `${audit.sessions}, ${audit.finishedSessions} full`}</span>`;
+  const countsHtml = `<span><b>Selected rows</b> ${rows.length}</span>${peopleChip}<span><b>By facet</b> ${adminEsc(byFacet)}</span><span><b>Behavior pool</b> ${adminEsc(behaviorN)}</span>`;
   currentWhiskerPlot = {
     timeSvg: svgCurrentTimeBoxPlot(visibleRows),
-    accuracySvg: svgCurrentAccuracyBoxPlot(visibleRows),
-    behaviorSvg: svgCurrentBehaviorBoxPlot(rows),
-    behaviorFacetSvg: svgCurrentBehaviorByFacetBoxPlot(visibleRows),
+    accuracySvg: svgCurrentAccuracyBarChart(visibleRows),
+    behaviorSvg: svgCurrentBehaviorBarChart(rows),
+    behaviorFacetSvg: svgCurrentBehaviorByFacetBarChart(visibleRows),
     countsHtml,
     rows: rows.length,
     generatedAt: new Date(),
@@ -1516,7 +1961,10 @@ function generateCurrentWhiskerPlot() {
     counts.innerHTML = countsHtml;
   }
   document.querySelectorAll('[data-current-whisker-export]').forEach(btn => { btn.disabled = false; });
-  setCurrentWhiskerStatus(`Generated from ${rows.length} selected row${rows.length === 1 ? '' : 's'} after current filters and task selections.`);
+  setCurrentWhiskerStatus(`Generated from ${rows.length} selected row${rows.length === 1 ? '' : 's'} after current filters and task selections`
+    + (selectionCompleteOnly
+      ? `, counting only the ${audit.finishedSessions} sitting${audit.finishedSessions === 1 ? '' : 's'} that answered all ${TASKS_PER_SESSION} tasks.`
+      : `, counting every sitting including the ${audit.droppedSessions} that stopped part-way.`));
 }
 
 function bindCurrentWhiskerControls() {
@@ -1535,9 +1983,11 @@ function renderPostStudyLikert(data) {
   postStudyLikert = data;
   const chart = document.getElementById('poststudy-chart');
   const meta = document.getElementById('poststudy-meta');
+  const stacked = document.getElementById('poststudy-stacked-chart');
   if (chart) chart.innerHTML = svgLikertPanels(data);
+  if (stacked) stacked.innerHTML = svgLikertStacked(data);
   if (meta) meta.textContent = `${data.source} · ${data.rows} responses · ${data.columns.length} questions`;
-  document.querySelectorAll('[data-svg-export="#poststudy-chart svg"]').forEach(btn => { btn.disabled = false; });
+  document.querySelectorAll('[data-svg-export^="#poststudy-"]').forEach(btn => { btn.disabled = false; });
   setPostStudyStatus(`Generated ${data.columns.length} question chart from ${data.rows} responses.`);
 }
 
@@ -1576,8 +2026,11 @@ async function autoLoadPostStudyDefault() {
       // Try the next conventional path before surfacing an error.
     }
   }
+  const empty = '<div class="viz-empty">No default post-study CSV found. Upload a CSV or enter a path and generate the graph.</div>';
   const chart = document.getElementById('poststudy-chart');
-  if (chart) chart.innerHTML = '<div class="viz-empty">No default post-study CSV found. Upload a CSV or enter a path and generate the graph.</div>';
+  const stacked = document.getElementById('poststudy-stacked-chart');
+  if (chart) chart.innerHTML = empty;
+  if (stacked) stacked.innerHTML = empty;
   setPostStudyStatus(`No default CSV found at ${POST_STUDY_DEFAULT_PATHS.join(', ')}.`, true);
 }
 
@@ -1598,6 +2051,9 @@ function svgElementText(svg) {
     .likert-legend-title{font:900 12px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:rgba(0,0,0,.82)}
     .likert-legend-num{font:900 12px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:rgba(0,0,0,.82)}
     .likert-question{font:800 13px/1.25 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:#050505}
+    .likert-stack-title{font:800 20px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:#2f3439}
+    .likert-stack-subtitle{font:600 14px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:rgba(0,0,0,.45)}
+    .likert-stack-label{font:700 13px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;fill:rgba(0,0,0,.82)}
   `;
   copy.insertBefore(style, copy.firstChild);
   return new XMLSerializer().serializeToString(copy);
@@ -1950,6 +2406,29 @@ const RESEARCH_QUESTIONS = [
  * When a filter is active the card says so, loudly, and offers the way back. A dashboard quietly
  * showing a subset is how a number ends up in a paper describing a study nobody ran.
  */
+/**
+ * NEW or OLD, on a Guide run: does this trajectory have an error planted in it?
+ *
+ * The distinction the ids hide. Several goals were recorded twice — once as the agent ran it
+ * cleanly, and again re-recorded with a mistake in it — and the two copies of a goal ask the
+ * participant opposite questions: "find the error" against "agree there is none". Which copy a card
+ * is counting therefore changes what its average means, and until now the only way to tell them
+ * apart was to open each run.
+ *
+ * NEW = the annotated error list is not empty. OLD = the reviewer's explicit `no_error`. A run with
+ * neither is not guessed at — it gets no badge, because a trajectory nobody has annotated yet is
+ * exactly the case where inventing an answer would be worst.
+ */
+function taskErrorTagHtml(taskId) {
+  const flag = taskErrorFlags.get(String(taskId || ''));
+  if (!flag) return '';
+  if (flag.errors > 0) {
+    return `<b class="viz-task-tag is-new" title="Re-recorded with ${flag.errors} planted error${flag.errors === 1 ? '' : 's'} to be found">new · ${flag.errors} error${flag.errors === 1 ? '' : 's'}</b> `;
+  }
+  if (flag.noError) return '<b class="viz-task-tag is-old" title="Annotated as a clean run — the correct verdict is “no error”">old · no error</b> ';
+  return '';
+}
+
 function facetTaskPickerHtml(spec, facetRows, chosen) {
   const key = facetKey(spec);
   const byTask = new Map();
@@ -1989,7 +2468,7 @@ function facetTaskPickerHtml(spec, facetRows, chosen) {
             <input type="checkbox" class="viz-task-check" data-facet="${key}"
               data-task="${adminEsc(t.id)}"${on ? ' checked' : ''}>
             <code>${adminEsc(t.id)}</code>
-            <span class="viz-task-n">${t.ng} vs ${t.g} rows${
+            <span class="viz-task-n">${taskErrorTagHtml(t.id)}${t.ng} vs ${t.g} rows${
               Number.isFinite(imgs) ? ` · ${imgs} images` : ''}</span>
             <span class="viz-task-q">${adminEsc(String(t.question).slice(0, 60))}</span>
           </label>`;
@@ -2086,6 +2565,103 @@ function proportionInterval(cell) {
     return ci ? `${(ci[0] * 100).toFixed(2)}–${pct(ci[1])}` : null;
   };
   return pairFoot('95% CI', side(cell?.nongrounded), side(cell?.grounded));
+}
+
+/**
+ * IS THE ACCURACY GAP REAL, OR IS IT THIS MANY ROWS?
+ *
+ * Every card already prints two proportions and their Wilson intervals, and every reader then does
+ * the same thing by eye: decides whether the two ranges overlap enough to mean anything. That
+ * judgement is worth making explicitly and identically on all four facets, so the card says it.
+ *
+ * FISHER'S EXACT, NOT A CHI-SQUARE OR A Z-TEST. The cells here are 20–39 rows with proportions
+ * pinned against the ceiling — Guide × Visual's grounded arm is 26 of 27 — which is exactly where
+ * the normal approximation and chi-square's expected-count rule both stop being trustworthy.
+ * Fisher's is exact at any n and costs a few log-factorials.
+ *
+ * WHAT IT DOES NOT ACCOUNT FOR. It treats rows as independent, which is how accuracy is pooled
+ * everywhere else on this dashboard. A participant who worked both arms of one facet contributes to
+ * both columns, so the true test is a paired one and this p is the conservative-to-anti-conservative
+ * approximation of it; the header already prints how many participants are in both arms, which is
+ * the number that says how far off that assumption is here. It is a flag for "worth a second look",
+ * not a result to publish — the same caution the thin-data note makes.
+ */
+function logGamma(x) {
+  // Lanczos, g = 7. Accurate to ~15 digits over the range these counts can reach, which is far more
+  // than a p-value printed to three decimals needs.
+  const C = [676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
+    12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  if (x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * x)) - logGamma(1 - x);
+  const z = x - 1;
+  let a = 0.99999999999980993;
+  C.forEach((c, i) => { a += c / (z + i + 1); });
+  const t = z + C.length - 0.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(a);
+}
+
+function logFactorial(n) {
+  return logGamma(n + 1);
+}
+
+/** The hypergeometric probability of one 2x2 table, in logs so the factorials cannot overflow. */
+function logHypergeometric(a, b, c, d) {
+  return logFactorial(a + b) + logFactorial(c + d) + logFactorial(a + c) + logFactorial(b + d)
+    - logFactorial(a) - logFactorial(b) - logFactorial(c) - logFactorial(d)
+    - logFactorial(a + b + c + d);
+}
+
+/**
+ * Two-sided Fisher's exact test on [[a, b], [c, d]].
+ *
+ * The two-sided p is the sum over every table with the SAME MARGINS whose probability is no greater
+ * than the observed one — the standard definition, not twice the one-sided tail, which disagrees
+ * with it on the asymmetric tables this study produces. The 1e-7 slack is the usual guard against a
+ * table that ties the observed probability being dropped by floating-point noise.
+ */
+function fisherExactTwoSided(a, b, c, d) {
+  const n = a + b + c + d;
+  if (!n || [a, b, c, d].some(v => !Number.isFinite(v) || v < 0)) return null;
+  const row1 = a + b;
+  const col1 = a + c;
+  const observed = logHypergeometric(a, b, c, d);
+  const lo = Math.max(0, col1 - (c + d));
+  const hi = Math.min(row1, col1);
+  let p = 0;
+  for (let x = lo; x <= hi; x++) {
+    const lp = logHypergeometric(x, row1 - x, col1 - x, n - row1 - col1 + x);
+    if (lp <= observed + 1e-7) p += Math.exp(lp);
+  }
+  return Math.min(1, p);
+}
+
+/** Three decimals, except where three decimals would print 0.000 and claim more than it knows. */
+function formatP(p) {
+  return p < 0.001 ? '< 0.001' : p.toFixed(3);
+}
+
+/**
+ * The significance line under a proportion: "p  0.031 · significant".
+ *
+ * Returns null for anything that is not a pair of 0/1 cells — the same guard isBinaryCell makes
+ * elsewhere, because a Fisher test on mean seconds would be a category error, silently rendered.
+ */
+function significanceFoot(cell) {
+  if (!isBinaryCell(cell)) return null;
+  const ng = cell?.nongrounded?.values || [];
+  const g = cell?.grounded?.values || [];
+  if (!ng.length || !g.length) return null;
+  const hits = (values) => values.filter(v => v === 1).length;
+  const p = fisherExactTwoSided(hits(g), g.length - hits(g), hits(ng), ng.length - hits(ng));
+  if (p == null) return null;
+  const significant = p < 0.05;
+  const title = `Two-sided Fisher exact test on correct/wrong x arm, ${g.length} grounded rows `
+    + `vs ${ng.length} non-grounded. Rows are treated as independent.`;
+  return {
+    html: `<span class="viz-foot-label">p</span>`
+      + `<span class="viz-sig ${significant ? 'is-sig' : 'is-ns'}" title="${adminEsc(title)}">`
+      + `${adminEsc(formatP(p))} · ${significant ? 'significant' : 'not significant'}`
+      + `</span><span class="viz-sig-note">at &alpha; .05, Fisher exact</span>`,
+  };
 }
 
 /**
@@ -2266,6 +2842,235 @@ function localizationParts(spec) {
   ];
 }
 
+/** How many rows of each arm the drill-down prints before it offers to show the rest. */
+const DETAIL_PREVIEW = 20;
+/** Below this many rows on a task, "nobody got it right" is small-sample luck, not a broken key. */
+const MISMATCH_MIN_N = 5;
+
+/** The accepted spans for one hop of one task, as plain strings. */
+function acceptedSpans(taskId, hop) {
+  const hops = taskGroundTruth.get(String(taskId || ''));
+  const list = hops && hops[String(hop)];
+  return (Array.isArray(list) ? list : [])
+    .map(hit => String(hit?.text || hit?.source_text || hit?.quote || hit?.label || '').trim())
+    .filter(Boolean);
+}
+
+/**
+ * Tasks where a hop is wrong for EVERYBODY, in both arms, on enough rows to mean something.
+ *
+ * This is the shape a broken answer key makes in the data, and it is not the shape being bad at a
+ * task makes: participants disagree with each other when a question is hard, and agree with each
+ * other when the question is fine and the KEY is wrong. A whole task at 0% across both conditions
+ * is therefore a claim about the annotation, not about the people — and it is invisible on the card
+ * above, which only shows the facet average that such a task is quietly holding down.
+ *
+ * It is a suspicion, deliberately, and says so where it prints. The honest follow-up is to open the
+ * rows and compare a pick against the accepted span, which is exactly what sits underneath it.
+ */
+function suspectKeyMismatches(rows) {
+  const byTask = new Map();
+  rows.forEach(row => {
+    const id = String(row.task_id || '');
+    if (!id) return;
+    const cell = byTask.get(id) || { n: 0, hits: { 1: 0, 2: 0 }, seen: { 1: 0, 2: 0 } };
+    const hops = row.score_evidence_hop_exact || {};
+    cell.n++;
+    ['1', '2'].forEach(h => {
+      if (!(h in hops)) return;
+      cell.seen[h]++;
+      if (hops[h]) cell.hits[h]++;
+    });
+    byTask.set(id, cell);
+  });
+  const out = new Map();
+  byTask.forEach((cell, id) => {
+    const dead = ['1', '2'].filter(h => cell.seen[h] >= MISMATCH_MIN_N && cell.hits[h] === 0);
+    if (dead.length) out.set(id, dead);
+  });
+  return out;
+}
+
+/** One evidence hop of one trial: what they picked, the verdict, and the key when they missed. */
+function trialHopHtml(row, pick, hop) {
+  const verdict = (row.score_evidence_hop_exact || {})[String(hop)];
+  const kind = String(pick?.kind || '') === 'image' ? 'image' : 'passage';
+  const text = String(pick?.text || '').trim();
+  const accepted = acceptedSpans(row.task_id, hop);
+  // The key is printed only on a miss. Beside a hit it is the same string twice and would bury the
+  // one line that matters on a card that already has a lot of lines.
+  const key = verdict || !accepted.length ? '' : `<div class="viz-trial-key">
+    <span>accepted</span> ${accepted.map(s => `<q>${adminEsc(s)}</q>`).join('')}</div>`;
+  return `<div class="viz-trial-hop viz-trial-${verdict ? 'hit' : verdict == null ? 'none' : 'miss'}">
+    <span class="viz-trial-hop-tag">hop ${hop} · ${kind}</span>
+    <span class="viz-trial-verdict">${verdict == null ? 'unscored' : verdict ? 'hit' : 'miss'}</span>
+    <q class="viz-trial-pick">${text ? adminEsc(text) : 'nothing recorded'}</q>
+    ${key}
+  </div>`;
+}
+
+/** One trial, as the participant worked it. */
+function trialHtml(row, flagged) {
+  const correct = answerCorrect(row);
+  const picks = Array.isArray(row.evidence_responses) ? row.evidence_responses : [];
+  const byHop = new Map(picks.map(p => [Number(p?.hop || 0), p]));
+  const isFind = row.task_type === 'find';
+
+  // Guide runs have no evidence_responses at all — they localize by naming an error and a step. A
+  // block that rendered blank for half the cards would read as missing data rather than a different
+  // task, so the Guide side shows its own two verdicts instead of nothing.
+  const body = isFind
+    ? [1, 2].filter(h => byHop.has(h) || (row.score_evidence_hop_exact || {})[String(h)] != null)
+      .map(h => trialHopHtml(row, byHop.get(h), h)).join('')
+    : `<div class="viz-trial-hop">
+        <span class="viz-trial-hop-tag">errors named</span>
+        <q class="viz-trial-pick">${Array.isArray(row.guide_errors) && row.guide_errors.length
+          ? adminEsc(row.guide_errors.map(e => String(e?.type || e?.label || e)).join(', '))
+          : 'none — nothing to localize'}</q>
+        <div class="viz-trial-key"><span>scores</span>
+          type F1 ${pct(f1(row.score_type_precision, row.score_type_recall))} ·
+          step F1 ${pct(f1(row.score_step_precision, row.score_step_recall))}</div>
+      </div>`;
+
+  const said = [row.confidence ? `confidence ${row.confidence}` : '', row.helpfulness ? `useful ${row.helpfulness}` : '']
+    .filter(Boolean).join(' · ');
+
+  return `<li class="viz-trial">
+    <div class="viz-trial-head">
+      <code>${adminEsc(row.participant_id || '—')}</code>
+      <code class="viz-trial-task">${adminEsc(row.task_id || '—')}${
+        flagged ? '<span class="viz-trial-flag" title="every participant missed a hop on this task — suspect the key">key?</span>' : ''}</code>
+      <span class="viz-trial-answer viz-trial-${correct == null ? 'none' : correct ? 'hit' : 'miss'}">${
+        correct == null ? 'unscored' : correct ? 'correct' : 'wrong'}</span>
+      <span class="viz-trial-time">${seconds(row.answer_multiple_choice_ms)} judge ·
+        ${seconds(row.find_supporting_answer_ms)} locate</span>
+    </div>
+    ${row.answer == null || row.answer === '' ? ''
+      : `<div class="viz-trial-chose"><span>chose</span> <q>${adminEsc(String(row.answer))}</q></div>`}
+    ${body}
+    ${said ? `<div class="viz-trial-said">${adminEsc(said)}</div>` : ''}
+  </li>`;
+}
+
+/**
+ * Every counted trial on this card, arm by arm.
+ *
+ * WHY IT TAKES THE CARD'S OWN `rows`. The point of opening a number is to see what it is made of,
+ * and a drill-down that re-derived its own row set could disagree with the figure it sits under —
+ * which would be worse than not having it, because it would look like evidence. So this is handed
+ * the exact array the stats above were computed from, including the task picker's effect: untick a
+ * task and its trials leave here too.
+ *
+ * IT SHOWS RAW PARTICIPANT IDS and is admin-only for that reason. Everything exported anonymises
+ * them to an integer (scripts/publish_rows.mjs) — do not feed this block into an export.
+ */
+/**
+ * The sittings behind this card, one line each — the header's two counts, opened up.
+ *
+ * WHY A CARD NEEDS THIS AT ALL. "n 41 vs 36 · 46 participants · 31 in both arms" is three numbers
+ * that cannot be checked against each other by eye: they do not add up to anything, because most
+ * people appear on both sides and some appear on only one. This is the same rows keyed by sitting
+ * instead of by trial, so the header can be read off it rather than believed.
+ *
+ * IT IS HANDED THE CARD'S OWN `rows` for the same reason the trial drill-down is: untick a task and
+ * a sitting whose only row in this facet was that task leaves here too, which is precisely the
+ * effect worth being able to see. A panel that re-derived its own row set could disagree with the
+ * header above it and would look like evidence while doing so.
+ *
+ * SESSION IDS ARE SHOWN RAW, and this pane is admin-only for that reason — the same rule the trial
+ * drill-down already follows. Every export anonymises them to an integer instead
+ * (scripts/figures.mjs, scripts/publish_rows.mjs, scripts/breakdonw_participants.mjs); do not feed
+ * this block into one.
+ */
+function facetSessionsHtml(spec, rows) {
+  if (!rows.length) return '';
+  const key = facetKey(spec);
+  const open = facetSessionsOpen.has(key);
+
+  const sittings = new Map();
+  rows.forEach(r => {
+    const id = sessionKey(r);
+    if (!id) return;
+    if (!sittings.has(id)) {
+      sittings.set(id, { id, participant: r.participant_id || '', ng: 0, g: 0, tasks: new Set() });
+    }
+    const sitting = sittings.get(id);
+    if (r.condition === 'grounding') sitting.g++; else sitting.ng++;
+    if (r.task_id) sitting.tasks.add(String(r.task_id));
+    // The id box is optional and nearly every row carries the default `anon`, so the first row that
+    // has something better wins rather than the first row full stop.
+    if (!sitting.participant || sitting.participant === 'anon') {
+      sitting.participant = r.participant_id || sitting.participant;
+    }
+  });
+
+  const list = Array.from(sittings.values()).sort((a, b) =>
+    (b.ng + b.g) - (a.ng + a.g) || a.id.localeCompare(b.id));
+  const both = list.filter(p => p.ng && p.g).length;
+
+  const line = (p) => {
+    const paired = p.ng && p.g;
+    return `<li class="viz-session${paired ? ' is-paired' : ''}">
+      <code class="viz-session-id" title="${adminEsc(p.id)}">${adminEsc(p.id.slice(0, 12))}</code>
+      <code class="viz-session-pid">${adminEsc(p.participant || '—')}</code>
+      <span class="viz-session-arms"><b class="viz-v-ng">${p.ng}</b> vs
+        <b class="viz-v-g">${p.g}</b></span>
+      <span class="viz-session-badge">${paired ? 'both arms'
+        : p.g ? 'grounded only' : 'non-grounded only'}</span>
+      <span class="viz-session-tasks">${adminEsc(Array.from(p.tasks).sort().join(', '))}</span>
+    </li>`;
+  };
+
+  return `<details class="viz-sessions" data-facet="${key}"${open ? ' open' : ''}>
+    <summary>Sessions behind these numbers (${list.length} unique)</summary>
+    <p class="viz-session-note">One line per sitting — the <code>session_id</code> the rows were
+      written under, the id typed on the welcome screen (<code>anon</code> when the box was left
+      blank, which is why sittings and not ids are what get counted), then rows non-grounded vs
+      grounded and the tasks they came from. <b>${both} of ${list.length}</b> worked both arms of
+      this card; the rest count toward one arm only.</p>
+    <ol class="viz-session-list">${list.map(line).join('')}</ol>
+  </details>`;
+}
+
+function facetDrilldownHtml(spec, rows) {
+  if (!rows.length) return '';
+  const key = facetKey(spec);
+  const open = facetDetailOpen.has(key);
+  const showAll = facetDetailAll.has(key);
+  const flagged = suspectKeyMismatches(rows);
+
+  const arm = (condition, label, cls) => {
+    const list = conditionRows(rows, condition)
+      .slice()
+      .sort((a, b) => String(a.task_id).localeCompare(String(b.task_id))
+        || String(a.participant_id).localeCompare(String(b.participant_id)));
+    const shown = showAll ? list : list.slice(0, DETAIL_PREVIEW);
+    return `<div class="viz-trial-arm">
+      <h5 class="${cls}">${adminEsc(label)} <span>${list.length} trial${list.length === 1 ? '' : 's'}</span></h5>
+      <ol class="viz-trial-list">${shown.map(r => trialHtml(r, flagged.has(String(r.task_id)))).join('')}</ol>
+      ${list.length > shown.length ? `<p class="viz-trial-more">${list.length - shown.length} more</p>` : ''}
+    </div>`;
+  };
+
+  const truncated = conditionRows(rows, 'nongrounding').length > DETAIL_PREVIEW
+    || conditionRows(rows, 'grounding').length > DETAIL_PREVIEW;
+
+  return `<details class="viz-trials" data-facet="${key}"${open ? ' open' : ''}>
+    <summary>What each participant did (${rows.length} trial${rows.length === 1 ? '' : 's'})</summary>
+    ${flagged.size ? `<p class="viz-trial-warn">Nobody scored a hit on
+      ${Array.from(flagged.entries()).map(([id, hops]) =>
+        `<code>${adminEsc(id)}</code> hop ${hops.join(' and ')}`).join(', ')} — in either arm. That
+      pattern usually means the accepted span does not match what the page actually gives back, not
+      that every participant was wrong. Compare a pick against its <span>accepted</span> line below.</p>` : ''}
+    <div class="viz-trial-arms">
+      ${arm('nongrounding', 'Non-grounded', 'viz-v-ng')}
+      ${arm('grounding', 'Grounded', 'viz-v-g')}
+    </div>
+    ${truncated ? `<button type="button" class="viz-trial-toggle" data-facet="${key}">${
+      showAll ? `Show first ${DETAIL_PREVIEW} per arm` : 'Show every trial'}</button>` : ''}
+  </details>`;
+}
+
 function researchAnswerCard(spec, allRows) {
   const facetRows = allRows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
   // The picker lists every task the facet HAS, not every task it currently counts — a list that
@@ -2278,6 +3083,9 @@ function researchAnswerCard(spec, allRows) {
   const total = facetDelta(rows, totalTime);
   const accuracy = facetDelta(rows, answerCorrect);
   const localization = facetDelta(rows, evidenceQuality);
+  const correctRows = correctAnswerRows(rows);
+  const correctJudge = facetDelta(correctRows, judgeTime);
+  const correctLocate = facetDelta(correctRows, locateTime);
   const lead = spec.kind === 'speed' ? speed : localization;
   const thin = lead.n < MIN_CELL_N;
 
@@ -2307,9 +3115,17 @@ function researchAnswerCard(spec, allRows) {
     Each pair reads <span class="viz-v-ng">non-grounded</span>
     <span class="viz-v-arrow">→</span> <span class="viz-v-g">grounded</span>.</p>`;
 
+  // Correct-answer timing has its own n: correctness and a recorded stage time are both required,
+  // so the count can be smaller than either the accuracy cell or the card header.
+  const timingCount = cell => pairFoot('n', String(cell.nongrounded.n), String(cell.grounded.n));
+
   // Rows AND people, because they are different questions and the card was only answering one. The
   // n is what the headline average rests on; the participant count is how many sittings produced it.
   const people = participantCount(rows);
+  // How many of them are in both arms — see bothArmsCount. Printed only when it is not the whole
+  // group: on a facet where every sitting worked both arms the parenthetical is noise, and on one
+  // where the task filter has split the group it is the most important number in the header.
+  const bothArms = bothArmsCount(rows);
   // How picture-heavy this facet's material is, averaged over the DISTINCT tasks it drew rather
   // than over rows — a task drawn six times is one page, not six, and weighting by draws would
   // report the popularity of a task as a property of the condition.
@@ -2330,7 +3146,8 @@ function researchAnswerCard(spec, allRows) {
     <header>
       <span class="viz-answer-facet">${adminEsc(spec.label)}</span>
       <span class="viz-answer-n">n ${lead.nongrounded.n} vs ${lead.grounded.n}
-        · ${people} participant${people === 1 ? '' : 's'}${imageAvg == null ? ''
+        · ${people} participant${people === 1 ? '' : 's'}${bothArms < people
+          ? ` · ${bothArms} in both arms` : ''}${imageAvg == null ? ''
           : ` · ${imageAvg.toFixed(1)} images/${spec.taskType === 'find' ? 'page' : 'run'}`}</span>
     </header>
     <p class="viz-answer-q">${adminEsc(spec.question)}</p>
@@ -2348,11 +3165,21 @@ function researchAnswerCard(spec, allRows) {
     <p class="viz-answer-basis">Verdict above is from <b>${adminEsc(leadName)}</b>${
       spec.kind === 'speed' ? ', not total time' : ''}.</p>
     ${readingLegend}
+    ${spec.taskType === 'guide' ? `<div class="viz-answer-correct-time">
+      <p><strong>Correct answers only</strong>
+        <span>Mean time among trials with a correct Guide verdict.</span></p>
+      <div class="viz-answer-stats">
+        ${stat('Judge time', correctJudge, seconds, timingCount(correctJudge))}
+        ${stat('Locate time', correctLocate, seconds, timingCount(correctLocate))}
+      </div>
+    </div>
+    <p class="viz-answer-all-label">All answers</p>` : ''}
     <div class="viz-answer-stats">
       ${stat('Judge time', judge, seconds)}
       ${stat('Locate time', speed, seconds)}
       ${stat('Total time', total, seconds)}
-      ${stat('Accuracy', accuracy, pct, [wrongTally(accuracy), proportionInterval(accuracy)])}
+      ${stat('Accuracy', accuracy, pct, [wrongTally(accuracy), proportionInterval(accuracy),
+        significanceFoot(accuracy)])}
       ${stat('Localization', localization, pct)}
     </div>
 
@@ -2397,6 +3224,12 @@ function researchAnswerCard(spec, allRows) {
     </div>
     ${thin ? `<p class="viz-answer-thin">Too early to call — this needs ${MIN_CELL_N}+ rows per
       condition, and the thinner side has ${lead.n}. The direction is shown, not the finding.</p>` : ''}
+
+    <!-- The averages above, taken apart into the trials that made them. The same row array,
+         deliberately: a drill-down that disagreed with the figure it hangs under would look like
+         evidence rather than a bug. -->
+    ${facetSessionsHtml(spec, rows)}
+    ${facetDrilldownHtml(spec, rows)}
   </article>`;
 }
 
@@ -2418,17 +3251,23 @@ function analysisSummary(rows) {
     min_rows_per_cell_for_confidence: MIN_CELL_N,
     facets: RESEARCH_QUESTIONS.map(spec => {
       const facet = rows.filter(r => r.task_type === spec.taskType && taskStyle(r) === spec.style);
+      const correct = correctAnswerRows(facet);
       return {
         facet: spec.label,
         question: spec.question,
         leads_on: spec.kind === 'speed' ? 'time to locate the evidence' : 'error-type and step F1',
         rows: facet.length,
         participants: participantCount(facet),
+        // Whether the facet compares people against themselves or against each other. Without it a
+        // model reading this summary has to assume one, and both assumptions are wrong somewhere.
+        participants_in_both_arms: bothArmsCount(facet),
         // Named so the model cannot mistake one stage for the task: judge is deciding the answer,
         // locate is then finding what backs it, total is their sum. The verdict uses locate alone.
         locate_time_ms: cell(facetDelta(facet, locateTime)),
         judge_time_ms: cell(facetDelta(facet, judgeTime)),
         total_time_ms: cell(facetDelta(facet, totalTime)),
+        correct_answer_locate_time_ms: cell(facetDelta(correct, locateTime)),
+        correct_answer_judge_time_ms: cell(facetDelta(correct, judgeTime)),
         accuracy: cell(facetDelta(facet, answerCorrect)),
         localization: cell(facetDelta(facet, evidenceQuality)),
         // Both readings of the same two answers, because they fail differently: the mean uses the
@@ -2571,6 +3410,20 @@ function researchAnswersHtml(rows) {
              files into the repo it was served from, and a write token has no business being in a
              file participants are served. -->
         <button class="admin-chip" id="viz-figures">📊 Publish to figures</button>
+        <!-- Rebuilds the CSVs from what the cards are counting, copies figures_code/ and those CSVs
+             into ~/Downloads/figures-code, redraws the PDFs there, then commits and pushes that
+             folder. Pressing it again publishes whatever moved since; a press that changed nothing
+             makes no commit. -->
+        <button class="admin-chip" id="viz-figures-code">🐍 Publish matplotlib code</button>
+        <!-- One press for the paper's table: the four categories are written out of the rows these
+             cards are counting, into the finalized results sheet in ~/Downloads, and the figures and
+             their plotting code are published from the SAME rows in the same run — so the table and
+             the pictures can never quietly be about two different selections. -->
+        <button class="admin-chip" id="viz-results-table">🧾 Export results table + figures</button>
+        <!-- The sample, published the way every measure already is: the CSV is written from these
+             rows by scripts/breakdonw_participants.mjs and drawn as breakdonw_participants.pdf in
+             ~/Downloads/figures-code, one summary page and then one line per sitting. -->
+        <button class="admin-chip" id="viz-breakdown-participants">🧑‍🤝‍🧑 Publish participant breakdown</button>
         <button class="admin-chip" id="viz-huggingface">🤗 Upload figures dataset</button>
         <button class="admin-chip" id="viz-publish-rows">🤗 Publish these rows</button>
         <div class="viz-job-status" id="viz-job-status" hidden></div>
@@ -2996,8 +3849,9 @@ function bindVisualizationControls() {
   bindCurrentWhiskerControls();
   bindSvgExportButtons();
   document.getElementById('viz-analyze')?.addEventListener('click', runVizAnalysis);
-  // ALL THREE SEND THE SAME SELECTION. Whatever the four cards are counting when the button is
-  // pressed is what gets built and what gets published — figures, aggregates and rows alike.
+  // EVERY ONE OF THEM SENDS THE SAME SELECTION. Whatever the four cards are counting when the
+  // button is pressed is what gets built and what gets published — figures, aggregates, the results
+  // table and rows alike.
   const selection = () => ({ selection: currentFacetSelection(adminVizRows) });
   bindAdminJob('viz-figures', 'figures', 'Publishing figures…',
     'Figures and dataset written from the tasks these cards are counting right now — ticked boxes '
@@ -3007,6 +3861,24 @@ function bindVisualizationControls() {
   bindAdminJob('viz-publish-rows', 'publish-rows', 'Publishing the counted rows…',
     'Published. These are the rows the four cards are counting right now — including any task you '
     + 'have ticked or unticked here, which is not what the committed defaults say.', selection);
+  // One button, three steps: rebuild the CSVs from this selection, copy them and figures_code/
+  // into ~/Downloads/figures-code, then commit and push that folder.
+  bindAdminJob('viz-figures-code', 'figures-code', 'Publishing the matplotlib code…',
+    'The plotting scripts, the CSVs they read and the redrawn PDFs are in ~/Downloads/figures-code, '
+    + 'committed and pushed. The data is this selection, not the committed defaults.', selection);
+  bindAdminJob('viz-results-table', 'results-table', 'Filling the results table…',
+    'The four categories — and the two averages — are written into the finalized results sheet in '
+    + '~/Downloads, each reported measure as a mean and an SD column beside it (Accuracy, Find first '
+    + 'and second part, Guide error and step part, mouse travel, confidence and helpfulness), and '
+    + 'the figures, their CSVs and the matplotlib '
+    + 'code are published to ~/Downloads/figures-code from the same rows. The data is this '
+    + 'selection, not the committed defaults.', selection);
+  bindAdminJob('viz-breakdown-participants', 'breakdown-participants',
+    'Publishing the participant breakdown…',
+    'breakdonw_participants.csv and its PDF are in ~/Downloads/figures-code, beside the figures and '
+    + 'rebuilt from the same rows: a summary page of participants and both-arms counts per facet, '
+    + 'then one line per sitting. It carries the per-run participant number, not session ids.',
+    selection);
   bindAdminJob('viz-huggingface', 'huggingface', 'Rebuilding and uploading…',
     'Rebuilt from this selection and pushed. Participants’ free-text notes and session ids are not '
     + 'in it; the export carries a per-run participant number instead.', selection);
@@ -3020,6 +3892,27 @@ function bindVisualizationControls() {
     d.addEventListener('toggle', () => {
       if (d.open) facetPickerOpen.add(d.dataset.facet);
       else facetPickerOpen.delete(d.dataset.facet);
+    });
+  });
+  // Same reason as the picker above: ticking a task rebuilds the pane, and a drill-down that closed
+  // itself every time you changed what it was showing would be unusable.
+  document.querySelectorAll('.viz-trials').forEach(d => {
+    d.addEventListener('toggle', () => {
+      if (d.open) facetDetailOpen.add(d.dataset.facet);
+      else facetDetailOpen.delete(d.dataset.facet);
+    });
+  });
+  document.querySelectorAll('.viz-sessions').forEach(d => {
+    d.addEventListener('toggle', () => {
+      if (d.open) facetSessionsOpen.add(d.dataset.facet);
+      else facetSessionsOpen.delete(d.dataset.facet);
+    });
+  });
+  document.querySelectorAll('.viz-trial-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.facet;
+      if (facetDetailAll.has(key)) facetDetailAll.delete(key); else facetDetailAll.add(key);
+      redrawCards();
     });
   });
   document.querySelectorAll('.viz-task-check').forEach(box => {
@@ -3064,6 +3957,15 @@ function bindVisualizationControls() {
   document.getElementById('viz-filter-complete')?.addEventListener('click', () => {
     vizCompleteOnly = !vizCompleteOnly;
     renderAdminVisualizations(adminVizRows, currentVizFilters());
+  });
+  document.getElementById('selection-filter-complete')?.addEventListener('click', () => {
+    selectionCompleteOnly = !selectionCompleteOnly;
+    // Plots already on screen are rebuilt rather than blanked: the whole point of the button is to
+    // read the same four figures with and without the people who quit, and a re-render that emptied
+    // them would make that a two-click comparison against a blank card.
+    const hadPlots = !!currentWhiskerPlot;
+    renderAdminVisualizations(adminVizRows, currentVizFilters());
+    if (hadPlots) generateCurrentWhiskerPlot();
   });
   ['viz-filter-task', 'viz-filter-condition', 'viz-filter-style', 'viz-filter-participant'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', () => renderAdminVisualizations(adminVizRows, currentVizFilters()));
@@ -4356,6 +5258,8 @@ async function showAdminVisualizations() {
     // Static per task, so it rides along with the results rather than being fetched per card.
     try { taskImageCounts = await window.StudyDB.listTaskImageCounts(); } catch (e) { taskImageCounts = new Map(); }
     try { taskReferenceCounts = await window.StudyDB.listAnswerReferenceCounts(); } catch (e) { taskReferenceCounts = new Map(); }
+    try { taskGroundTruth = await window.StudyDB.listGroundTruth(); } catch (e) { taskGroundTruth = new Map(); }
+    try { taskErrorFlags = await window.StudyDB.listTrajectoryErrorFlags(); } catch (e) { taskErrorFlags = new Map(); }
     if (!rows.length) {
       content.innerHTML = '<div class="viz-empty">No result rows yet.</div><button class="admin-exit" id="admin-exit">Leave admin mode</button>';
     } else {
@@ -4427,20 +5331,30 @@ startBtn.onclick = async () => {
   // on the same machine would never be shown it.
   try { localStorage.removeItem('pageguide_web_tutorial_done'); } catch (e) { /* ignore */ }
 
+  // A TEST RUN CLAIMS NOTHING. `claim_study_assignment` writes a session row and burns a
+  // round-robin slot, so a researcher walking the study to check it would shift every participant
+  // after them by one and leave a session behind with no results under it. The slot is computed
+  // locally instead, from the id itself.
+  const dryRun = window.StudySession.isDryRunId(participantId);
   let assignment = null;
   let sessionId = null;
-  try {
-    assignment = await window.StudyDB.claimStudyAssignment(
-      participantId,
-      (window.STUDY_CONFIG || {}).ASSIGNMENT_KEY || 'default'
-    );
-    sessionId = assignment.sessionId;
-  } catch (e) {
-    console.warn('[study] could not claim round-robin assignment:', e);
-    const detail = e?.message ? ` ${e.message}` : '';
-    say(`Could not start the study because the round-robin assignment table is not ready.${detail}`, 'bad');
-    startBtn.disabled = false;
-    return;
+  if (dryRun) {
+    const slot = window.StudySession.dryRunSlot(participantId);
+    assignment = { assignmentIndex: slot, assignmentSlot: slot };
+  } else {
+    try {
+      assignment = await window.StudyDB.claimStudyAssignment(
+        participantId,
+        (window.STUDY_CONFIG || {}).ASSIGNMENT_KEY || 'default'
+      );
+      sessionId = assignment.sessionId;
+    } catch (e) {
+      console.warn('[study] could not claim round-robin assignment:', e);
+      const detail = e?.message ? ` ${e.message}` : '';
+      say(`Could not start the study because the round-robin assignment table is not ready.${detail}`, 'bad');
+      startBtn.disabled = false;
+      return;
+    }
   }
 
   let assignedQueue = [];
@@ -4464,6 +5378,7 @@ startBtn.onclick = async () => {
     idx: 0,
     results: [],
     adminReview: false,
+    dryRun,
   });
   console.info('[study] round-robin assignment', {
     assignmentIndex: assignment.assignmentIndex,
@@ -4477,7 +5392,7 @@ startBtn.onclick = async () => {
     })),
   });
   window.StudySession.saveLocal();
-  location.href = 'study.html';
+  location.href = 'find-v1-study.html';
 };
 
 init();

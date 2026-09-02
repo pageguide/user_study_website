@@ -91,7 +91,7 @@ function revokeAdmin() {
 
 /** The reviewer's choices, remembered across a reload so paging through is not restarted. */
 const ADMIN_OPTIONS_KEY = 'pageguide_web_study_admin_opts';
-const DEFAULT_OPTIONS = { half: 'all', arm: 'grounding', tab: 'review' };
+const DEFAULT_OPTIONS = { half: 'all', arm: 'grounding', pool: 'all', tab: 'review' };
 
 function adminOptions() {
   try {
@@ -120,6 +120,28 @@ function filterQueueByHalf(queue, half) {
   return list;
 }
 
+/**
+ * Filter a queue to the chosen pool: everything, only what is in the study, or only what is held
+ * out. Pure, like filterQueueByHalf.
+ *
+ * WHY A REVIEWER NEEDS THE HELD-OUT SIDE AT ALL. `in_study` is what listStudyTasks and
+ * listStudyTrajectories filter on, so a task held out of the rotation used to be unreachable from
+ * here — which is backwards: a task is held out either because it is unfinished or because
+ * something about it was wrong, and both are reasons to want to look at it. Half this study's
+ * stimuli are on that side.
+ *
+ * `inStudy` is set when the review queue is built, from the same column. An entry that somehow
+ * lacks it is treated as held out rather than as live: the queue that participants actually draw
+ * from is built separately and is still filtered at the query, so the worst this can do is show a
+ * reviewer one badge too cautious.
+ */
+function filterQueueByPool(queue, pool) {
+  const list = Array.isArray(queue) ? queue : [];
+  if (pool === 'in') return list.filter(e => e.inStudy === true);
+  if (pool === 'out') return list.filter(e => e.inStudy !== true);
+  return list;
+}
+
 window.StudyAdmin = {
   isAdmin,
   adminRole,
@@ -131,5 +153,6 @@ window.StudyAdmin = {
   adminOptions,
   setAdminOptions,
   filterQueueByHalf,
+  filterQueueByPool,
   ADMIN_PASSWORD_HINT: 'Ask the researcher.',
 };

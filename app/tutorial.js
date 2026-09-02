@@ -1,6 +1,6 @@
 // The tutorial phase: a welcome screen, then two practice tasks with the parts pointed at.
 // ========================================================================================
-// WHY THIS EXISTS. A participant used to meet the mechanics on task 1 of 8 — the two-stage timer,
+// WHY THIS EXISTS. A participant used to meet the mechanics on task 1 of 8 — the countdown,
 // the verdict → problem → error-type → step chain, and clicking a sentence inside the page snapshot
 // to give evidence. Task 1's time is data. Learning the interface on it means the first row of every
 // participant measures something different from the other seven.
@@ -76,6 +76,30 @@
           <li><strong>How to point at evidence.</strong> On a Find task you click the sentence or the
             picture in the page itself.</li>
         </ol>
+        <p class="tut-kinds-lead">The eight tasks come in two kinds, and they ask different things
+          of you:</p>
+        <div class="tut-kinds">
+          <section class="tut-kind tut-kind-find">
+            <header class="tut-kind-head"><span aria-hidden="true">🔍</span> Find information</header>
+            <div class="tut-kind-body">
+              <p class="tut-kind-what">The agent answers a question about a web page.</p>
+              <p><strong>Your job:</strong> answer the question yourself from the page, then judge
+                whether the agent's answer is right and point at the sentence or picture on the page
+                that settles it.</p>
+              <p class="tut-kind-fine">One answer, checked against the page it came from.</p>
+            </div>
+          </section>
+          <section class="tut-kind tut-kind-guide">
+            <header class="tut-kind-head"><span aria-hidden="true">🧭</span> Follow a guide</header>
+            <div class="tut-kind-body">
+              <p class="tut-kind-what">The agent carries out a task on a website, step by step.</p>
+              <p><strong>Your job:</strong> read the agent's trajectory — every step and its
+                screenshot — and decide whether it completed the task. If it did not, say which step
+                went wrong and what kind of error it was.</p>
+              <p class="tut-kind-fine">A sequence of actions, checked step by step.</p>
+            </div>
+          </section>
+        </div>
         <p class="tut-fine">About 2 minutes. You can skip it now, or leave it at any point.</p>
       </div>`;
     questionPane().innerHTML = `
@@ -83,7 +107,7 @@
       <div class="q-body">
         <p class="q-text">Would you like the walkthrough first?</p>
         <p class="q-sub">It uses two made-up practice tasks. Your answers to them are not saved, and
-          the timer on them is not measuring anything.</p>
+          the countdown on them is not measuring anything.</p>
         <div class="q-actions tut-welcome-actions">
           <button class="q-btn q-btn-primary" id="tut-start">Show me how it works →</button>
           <button class="q-btn" id="tut-skip-all">${tut.previewOnly
@@ -136,7 +160,7 @@
     S().state.tutorial = null;
     removeNav();
     document.body.classList.remove('tut-on', 'tv-nogrounding');
-    if (tut.previewOnly) { location.href = 'index.html'; return; }
+    if (tut.previewOnly) { location.href = 'find-v1.html'; return; }
     markDone();
     window.showTask();       // idx is untouched, so this is task 1 of 8
   }
@@ -263,7 +287,8 @@
         body: 'The question is what the agent was asked, and most have two parts, so read it first. '
           + 'The badge under it says <b>Grounded</b> (evidence highlighted in the page and cited in '
           + 'the answer) or <b>Non-grounded</b> (neither), which is the condition being studied and '
-          + 'not a broken page. The timer measures how hard this is to check, not how fast you are.',
+          + 'not a broken page. The clock counts down the <b>3 minutes</b> this task is meant to '
+          + 'take; it turns red if you go past, but nothing is cut off and your answer still counts.',
       },
       {
         target: '#find-page',
@@ -339,8 +364,8 @@
         body: 'You are not answering this question yourself, you are judging whether the agent did '
           + 'what it was asked. <b>Grounded</b> gives you its evidence twice over, as the page '
           + 'behind each step and as marks on the claims it saw, while <b>Non-grounded</b> gives '
-          + 'you words only. The timer restarts once, between deciding something is wrong and '
-          + 'finding where.',
+          + 'you words only. The clock counts down the <b>3 minutes</b> this task is meant to take, '
+          + 'across both stages together \u2014 deciding something is wrong, then finding where.',
       },
       {
         target: '.tv-journey',
@@ -582,7 +607,7 @@
     tut.active = false;
     tut.queue = [];
     S().state.tutorial = null;
-    if (tut.previewOnly) { location.href = 'index.html'; return; }
+    if (tut.previewOnly) { location.href = 'find-v1.html'; return; }
     markDone();
     window.showTask();
   }
@@ -689,6 +714,10 @@
         <div class="tut-tip-kicker"></div>
         <div class="tut-tip-title"></div>
         <div class="tut-tip-body"></div>
+        <div class="tut-tip-tools">
+          <button type="button" class="tut-tip-peek">See the whole page</button>
+          <button type="button" class="tut-tip-pause">Explore on my own</button>
+        </div>
         <div class="tut-tip-actions">
           <button type="button" class="tut-tip-skip">Skip the walkthrough</button>
           <span class="tut-tip-spacer"></span>
@@ -720,6 +749,8 @@
     layer.querySelector('.tut-tip-skip').onclick = skipAll;
     layer.querySelector('.tut-tip-back').onclick = () => go(-1);
     layer.querySelector('.tut-tip-next').onclick = () => go(1);
+    layer.querySelector('.tut-tip-peek').onclick = () => setPeek(!peeking);
+    layer.querySelector('.tut-tip-pause').onclick = pauseTour;
 
     setupTipDrag();
   }
@@ -776,6 +807,68 @@
     window.addEventListener('touchend', endDrag);
   }
 
+  // ── Seeing the whole screen, and stepping out of the walk ──────────────────────────────────────
+  // TWO DIFFERENT COMPLAINTS, TWO CONTROLS. "I can only see the bit you cut a hole in" wants the dim
+  // gone but the card kept — that is the peek. "Let me just poke at this task for a minute" wants
+  // the walkthrough out of the way entirely, and then wants it back on the same step — that is the
+  // pause. Neither ends the walkthrough: leaving for good is still the Skip button.
+  //
+  // The peek survives from step to step on purpose. Somebody who has said once that they would
+  // rather see the whole page does not want to say it again on every card.
+
+  let peeking = false;
+  let paused = false;
+  let resumeBtn = null;
+
+  function setPeek(on) {
+    peeking = !!on;
+    layer?.classList.toggle('is-peek', peeking);
+    const btn = layer?.querySelector('.tut-tip-peek');
+    if (btn) btn.textContent = peeking ? 'Spotlight this step again' : 'See the whole page';
+  }
+
+  /**
+   * Step out of the walkthrough without leaving it: the card, the dim and the rings all go, and a
+   * single button stays behind to come back to the very step that was open.
+   *
+   * The step's `wait` binding is deliberately left alive. Somebody exploring on their own who goes
+   * ahead and does the thing the step was asking for has done it — coming back to a card still
+   * waiting for it would be the walkthrough disagreeing with the screen.
+   */
+  function pauseTour() {
+    if (!tour) return;
+    paused = true;
+    layer.classList.remove('is-on');
+    if (frame) { cancelAnimationFrame(frame); frame = 0; }
+    holes.forEach(h => { h.ring.style.opacity = '0'; });
+    showResume();
+  }
+
+  function resumeTour() {
+    if (!tour) return removeResume();
+    paused = false;
+    removeResume();
+    layer.classList.add('is-on');
+    setPeek(peeking);
+    track(tour.step, tour.el);
+  }
+
+  function showResume() {
+    if (!resumeBtn) {
+      resumeBtn = document.createElement('button');
+      resumeBtn.type = 'button';
+      resumeBtn.className = 'tut-resume';
+      resumeBtn.onclick = resumeTour;
+      document.body.appendChild(resumeBtn);
+    }
+    resumeBtn.innerHTML = '<span aria-hidden="true">↩</span> Back to the walkthrough';
+  }
+
+  function removeResume() {
+    resumeBtn?.remove();
+    resumeBtn = null;
+  }
+
   function clearHoles() {
     holes.splice(0).forEach(h => { h.hole.remove(); h.ring.remove(); });
   }
@@ -795,7 +888,8 @@
   function startTour(steps) {
     ensureLayer();
     stopTour();
-    tour = { steps, i: -1, cleanup: null };
+    setPeek(peeking);
+    tour = { steps, i: -1, cleanup: null, step: null, el: null };
     go(1);
   }
 
@@ -807,6 +901,8 @@
     clearHoles();
     tipAnchor = null;
     userDragPos = null;
+    paused = false;
+    removeResume();
     if (layer) layer.classList.remove('is-on', 'is-waiting');
   }
 
@@ -854,21 +950,18 @@
     // pull in opposite directions: the answer card is what this step is pointing at, so a card
     // placed against it lands on top of it.
     tipAnchor = step.tipTarget ? (await resolveTarget(step.tipTarget, 1200)) : null;
-    layer.classList.add('is-on');
+    tour.step = step;
+    tour.el = el;
+    // A step reached while paused — the participant did the thing the old step was waiting for,
+    // out on their own — must not yank the card back over the screen they asked to be left alone
+    // with. The resume button is already there, and it now leads here.
+    if (!paused) layer.classList.add('is-on');
 
-    if (el?.scrollIntoView) {
+    if (el?.scrollIntoView && !paused) {
       try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ }
     }
 
-    // One rAF loop rather than scroll/resize listeners: the target can also move because a pane
-    // re-rendered, an iframe scrolled, or a section unfolded, and none of those fire a scroll event
-    // on this document.
-    const track = () => {
-      position(step, el);
-      frame = requestAnimationFrame(track);
-    };
-    if (frame) cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(track);
+    if (!paused) track(step, el);
 
     if (step.wait) tour.cleanup = step.wait(advanceOnce());
     // A step whose parts appear as the participant works — the Next button once an answer is
@@ -930,6 +1023,22 @@
       };
     }
     return rect;
+  }
+
+  /**
+   * Keep the holes and the card glued to the target.
+   *
+   * One rAF loop rather than scroll/resize listeners: the target can also move because a pane
+   * re-rendered, an iframe scrolled, or a section unfolded, and none of those fire a scroll event on
+   * this document. Stopped while the walkthrough is paused — there is nothing on screen to track.
+   */
+  function track(step, el) {
+    if (frame) cancelAnimationFrame(frame);
+    const tick = () => {
+      position(step, el);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
   }
 
   function position(step, el) {

@@ -78,6 +78,53 @@ function fmtTime(ms) {
 }
 
 /**
+ * THREE MINUTES PER TASK, COUNTED DOWN AND SHOWN.
+ *
+ * The study used to hand a participant an open-ended clock counting up, which measures how long
+ * they chose to spend rather than how far they got in a fixed budget — and left them no way to pace
+ * a task. One countdown now runs for the WHOLE task (both stages: deciding, then finding where),
+ * because the budget is the task's, not each half's.
+ *
+ * It is a SOFT limit on purpose: at 00:00 the chip goes red and starts counting the overrun as
+ * `+MM:SS`, and nothing is submitted, frozen or thrown away. A hard cut would destroy the answer a
+ * participant was three seconds from giving, and the overrun is itself worth measuring — `time_ms`
+ * still records what they actually took.
+ *
+ * Shared by both instruments (this one and the Find questions in study.js) through window.TaskTimer
+ * so the two cannot drift into different limits.
+ */
+const TASK_TIME_LIMIT_MS = 3 * 60 * 1000;
+const TASK_TIME_LOW_MS = 30 * 1000;
+
+/** Paint the one countdown chip from the task's elapsed time. */
+function paintTaskTimer(root, elapsedMs) {
+  const scope = root || document;
+  const el = scope.querySelector('#q-timer');
+  if (!el) return;
+  const remaining = TASK_TIME_LIMIT_MS - elapsedMs;
+  const over = remaining < 0;
+  el.textContent = over ? `+${fmtTime(-remaining)}` : fmtTime(remaining);
+  const chip = el.closest('.q-timer-chip');
+  chip?.classList.toggle('is-over', over);
+  chip?.classList.toggle('is-low', !over && remaining <= TASK_TIME_LOW_MS);
+  const label = scope.querySelector('#q-timer-label');
+  if (label) label.textContent = over ? 'Over 3 min' : 'Time left';
+}
+
+/** The chip's markup, so both instruments open on 03:00 rather than on a stale count-up. */
+function taskTimerHtml() {
+  return `
+        <div class="q-timers">
+          <div class="q-timer-chip" title="You have 3 minutes for this task. The clock keeps running past it \u2014 nothing is cut off.">
+            <span class="q-timer-label" id="q-timer-label">Time left</span>
+            <span class="q-timer" id="q-timer">${fmtTime(TASK_TIME_LIMIT_MS)}</span>
+          </div>
+        </div>`;
+}
+
+window.TaskTimer = { LIMIT_MS: TASK_TIME_LIMIT_MS, fmtTime, paint: paintTaskTimer, html: taskTimerHtml };
+
+/**
  * Render one task's questions and resolve when the participant submits.
  *
  * TWO STAGES, TWO TIMERS, exactly as the extension does. The split is at the moment the participant
@@ -85,28 +132,27 @@ function fmtTime(ms) {
  * after it they are hunting through the steps (localization). Averaging the two would hide which
  * one the grounding actually helped, which is the thing the study exists to find out.
  *
- * @param {object} opts - {root, steps, index, total, progressLabel, onSubmit}
+ * `dryRun` only marks the progress line. A test run answers real tasks on real screens and is
+ * deliberately never written, so the band saying so is the only thing on screen that distinguishes
+ * a rehearsal from recorded data. One more named option rather than a reach into the session module,
+ * which this file otherwise knows nothing about.
+ *
+ * @param {object} opts - {root, steps, index, total, progressLabel, dryRun, onSubmit}
  */
-function mountInstrument({ root, steps, index, total, goal, progressLabel, onSubmit }) {
+function mountInstrument({ root, steps, index, total, goal, progressLabel, dryRun, onSubmit }) {
   const startedAt = Date.now();
   let choiceElapsed = null;
   let errorsStartedAt = null;
   let answerTimer = null;
-  let errorsTimer = null;
 
   root.innerHTML = `
     <div class="q-head">
       <span class="q-title">📘 Review the task</span>
     </div>
-    <div class="q-progress">${escapeHTML(progressLabel || `Task ${index + 1}/${total}`)} · 📘 Follow a Guide</div>
+    <div class="q-progress${dryRun ? ' is-dry-run' : ''}">${escapeHTML(progressLabel || `Task ${index + 1}/${total}`)} · 📘 Follow a Guide</div>
     <div class="q-body">
       <div class="q-task-card">
-        <div class="q-timers">
-          <div class="q-timer-chip">
-            <span class="q-timer-label" id="q-timer-label">Answer time</span>
-            <span class="q-timer" id="q-timer">00:00</span>
-          </div>
-        </div>
+        ${taskTimerHtml()}
         ${escapeHTML(goal || '')}
       </div>
 
@@ -193,9 +239,9 @@ function mountInstrument({ root, steps, index, total, goal, progressLabel, onSub
   const showError = (msg) => { errorMsg.textContent = msg; errorMsg.hidden = false; };
   const clearError = () => { errorMsg.hidden = true; };
 
-  answerTimer = setInterval(() => {
-    $('q-timer').textContent = fmtTime(Date.now() - startedAt);
-  }, 1000);
+  // ONE interval for the whole task, started here and never restarted: the countdown is the task's
+  // budget, so it must not go back to 03:00 when the second stage opens.
+  answerTimer = setInterval(() => paintTaskTimer(root, Date.now() - startedAt), 1000);
 
   // Q1b appears only when the verdict is "did not complete" — it is the follow-up to that answer,
   // and showing it beforehand asks what went wrong with a run nobody has said went wrong.
@@ -255,14 +301,8 @@ function mountInstrument({ root, steps, index, total, goal, progressLabel, onSub
     $('q-errors-stage').hidden = false;
     $('q-next').hidden = true;
     $('q-submit').hidden = false;
-    // Hand over: the answer timer's span is already banked in choiceElapsed, and the total keeps
-    // counting from startedAt regardless of what is on screen.
-    clearInterval(answerTimer); answerTimer = null;
-    $('q-timer-label').textContent = 'Error-check time';
-    $('q-timer').textContent = '00:00';
-    errorsTimer = setInterval(() => {
-      $('q-timer').textContent = fmtTime(Date.now() - errorsStartedAt);
-    }, 1000);
+    // The answer stage's span is banked in choiceElapsed; the chip keeps counting down from
+    // startedAt because the three minutes cover both stages together.
     $('q-errors-stage').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
 
@@ -292,7 +332,6 @@ function mountInstrument({ root, steps, index, total, goal, progressLabel, onSub
     clearError();
 
     clearInterval(answerTimer);
-    clearInterval(errorsTimer);
     const correctSel = root.querySelector('input[name="q-correct"]:checked');
     onSubmit({
       answerElapsed: Math.max(0, Date.now() - startedAt),
@@ -307,7 +346,7 @@ function mountInstrument({ root, steps, index, total, goal, progressLabel, onSub
     });
   };
 
-  return () => { clearInterval(answerTimer); clearInterval(errorsTimer); };
+  return () => clearInterval(answerTimer);
 }
 
 window.Instrument = { mountInstrument };

@@ -3,6 +3,9 @@
 # participants. See the note at the top of app/config.example.js.
 app/config.js
 
+# The same rule for the V2 project. app/find_v2_config.example.js is committed; this is not.
+app/find_v2_config.js
+
 .DS_Store
 
 # Publish-helper credentials — the secret key lives here and is never committed.
@@ -10,3 +13,7 @@ app/config.js
 
 # Rebuilt on every publish from the dashboard, and pushed to Hugging Face rather than here.
 dataset_rows/
+
+# The scores scripts/rescore_evidence.mjs overwrote, kept locally so a backfill can be undone.
+# Carries result_keys, so it is a participant-linkable file and stays out of the repo.
+scripts/.rescore_backup.json

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PageGuide User Study</title>
+  <link rel="stylesheet" href="styles/site.css?v=timer-sig-20260821">
+</head>
+<body class="welcome-body">
+  <!--
+    The welcome screen. Everything a participant needs to decide to start and nothing they will have
+    forgotten by the first task: what they will be doing, how long it takes, and what is recorded.
+    The instructions that matter *during* a task live beside the material, on the task screen.
+  -->
+  <main class="welcome">
+    <div class="welcome-card">
+      <header class="welcome-hero">
+        <p class="welcome-eyebrow">Research study · Reviewing the work of web agents</p>
+        <h1 class="welcome-title">PageGuide User Study</h1>
+        <p class="welcome-lead">
+          You will review a series of tasks completed by a web agent. For each task, you will see
+          what the agent did and the answer it gave. Then you will decide whether the agent got it
+          right, and where it went wrong if there was a problem.
+        </p>
+        <ul class="welcome-meta">
+          <li class="welcome-chip"><span class="welcome-chip-k">8</span> tasks</li>
+          <li class="welcome-chip"><span class="welcome-chip-k">~16</span> minutes</li>
+          <li class="welcome-chip"><span class="welcome-chip-k">3</span> min per task</li>
+          <li class="welcome-chip"><span class="welcome-chip-k">No</span> setup or install</li>
+        </ul>
+        <p class="welcome-lead welcome-lead-quiet">A 2-minute walkthrough comes first, on two
+          practice tasks that are not part of the study. You can skip it.</p>
+      </header>
+
+      <section class="welcome-section">
+        <h2 class="welcome-section-title">What you will do</h2>
+        <ol class="welcome-steps">
+          <li class="welcome-step">
+            <span class="welcome-step-n">1</span>
+            <div><strong>Read the task and the agent's answer.</strong>
+              Page on the left, answer on the right.</div>
+          </li>
+          <li class="welcome-step">
+            <span class="welcome-step-n">2</span>
+            <div><strong>Decide whether it is correct.</strong>
+              Some tasks show the evidence the agent used; others do not.</div>
+          </li>
+          <li class="welcome-step">
+            <span class="welcome-step-n">3</span>
+            <div><strong>Say where it went wrong.</strong>
+              Mark the step or claim that caused the problem.</div>
+          </li>
+        </ol>
+      </section>
+
+      <!-- Collapsed by default, so the screen is a decision rather than a document. The summary
+           carries the sentence that actually changes how someone answers; the rest is there for
+           whoever wants it. -->
+      <details class="welcome-fold">
+        <summary><strong>No trick questions.</strong> This study is not testing you</summary>
+        <div class="welcome-fold-body">
+          We are studying how easy or hard it is to check an agent's work. Please answer from what
+          you can actually see on the page. If you cannot tell what happened, choose that option:
+          it is a real and useful answer.
+        </div>
+      </details>
+
+      <details class="welcome-fold">
+        <summary><strong>Before you start.</strong> Time, what is recorded, anonymity</summary>
+        <dl class="welcome-facts">
+          <div class="welcome-fact">
+            <dt>Time</dt>
+            <dd>About 16 minutes in one sitting. Each task has a <strong>3-minute</strong> budget,
+              shown as a countdown; it is a guide to pace you, not a cut-off &mdash; going over does
+              not lose your answer.</dd>
+          </div>
+          <div class="welcome-fact">
+            <dt>What is recorded</dt>
+            <dd>Your answers and each task's duration. No account, no email, nothing from other
+              tabs.</dd>
+          </div>
+          <div class="welcome-fact">
+            <dt>Anonymity</dt>
+            <dd>Anonymous by default. A participant ID is optional, and only matches your run to a
+              session.</dd>
+          </div>
+          <div class="welcome-fact">
+            <dt>You will need</dt>
+            <dd>A desktop or laptop browser, because the page and the answer sit side by side.</dd>
+          </div>
+        </dl>
+      </details>
+
+      <div class="welcome-actions">
+        <button class="welcome-id-toggle" id="participant-id-toggle" type="button">Add a participant ID (optional)</button>
+        <div class="welcome-id-field" id="participant-id-field" hidden>
+          <label class="welcome-label" for="participant-id">Participant ID
+            <span class="q-sub">optional, leave blank to stay anonymous</span></label>
+          <input class="welcome-input" id="participant-id" type="text" placeholder="e.g. P07" autocomplete="off">
+        </div>
+
+        <div class="welcome-status" id="welcome-status"></div>
+
+        <button class="welcome-btn" id="start-btn" disabled>Start the study →</button>
+
+        <p class="welcome-fine" id="welcome-count">Loading the study…</p>
+        <p class="welcome-consent">Starting is voluntary, and you may close the tab at any point to
+          stop taking part.</p>
+      </div>
+    </div>
+
+    <!-- The reviewer's door. Deliberately plain and outside the card: a participant should be able
+         to ignore it, and it grants no privilege over the data — its one real power is to NOT write. -->
+    <a class="admin-door find-v2-back" href="index.html">Open Find V2 (default) →</a>
+    <button class="admin-door" id="admin-btn">Admin</button>
+    <section class="admin-panel" id="admin-panel" hidden></section>
+  </main>
+
+  <script src="app/config.js?v=timer-sig-20260821" onerror="window.__configMissing = true"></script>
+  <script src="app/supabase.js?v=timer-sig-20260821"></script>
+  <script src="app/session.js?v=timer-sig-20260821"></script>
+  <script src="app/admin.js?v=timer-sig-20260821"></script>
+  <script src="app/markdown.js?v=timer-sig-20260821"></script>
+  <script src="app/trajectory_edit.js?v=timer-sig-20260821"></script>
+  <script src="app/welcome.js?v=timer-sig-20260821"></script>
+</body>
+</html>

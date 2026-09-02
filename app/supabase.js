@@ -310,31 +310,63 @@ async function updateStudyTrajectory(id, patch) {
  * @param {object} body - the JSON payload that route expects
  * @param {Error} originalError - what Supabase said, kept as the message when there is no token
  */
-async function updateViaAdminHelper(route, body, originalError) {
-  let token = '';
-  try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
-  if (!token) {
-    token = (window.prompt('Editing study material needs the local publish helper.\n\n'
-      + 'Run `node scripts/publish.mjs --serve` and paste the admin save token it prints:') || '').trim();
-    if (token) {
-      try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
-    }
+/**
+ * The admin save token, from this tab's memory or from the researcher.
+ *
+ * THE HELPER'S TOKEN IS NEW ON EVERY START unless PAGEGUIDE_ADMIN_SAVE_TOKEN is set in .env, so the
+ * copy this tab remembers goes stale the moment the helper is restarted — which is exactly what a
+ * researcher does after editing it. `stale` is that case: the stored value is dropped first, and
+ * the prompt says why it is asking again rather than looking like a second unexplained challenge.
+ */
+function adminSaveToken(reason, { stale = false } = {}) {
+  if (stale) {
+    try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
+  } else {
+    try {
+      const stored = sessionStorage.getItem('pageguide_admin_save_token') || '';
+      if (stored) return stored;
+    } catch (e) { /* ignore */ }
   }
+  const preamble = stale
+    ? 'The publish helper rejected the saved token — it prints a new one every time it starts.\n\n'
+      + 'Paste the token from the terminal running `node scripts/publish.mjs --serve`:'
+    : `${reason}\n\nRun \`node scripts/publish.mjs --serve\` and paste the admin save token it prints:`;
+  const token = (window.prompt(preamble) || '').trim();
+  if (token) {
+    try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
+  }
+  return token;
+}
+
+/** True for the two statuses that mean "wrong token", the only ones worth re-asking about. */
+const isTokenRejection = (status) => status === 401 || status === 403;
+
+async function updateViaAdminHelper(route, body, originalError) {
+  let token = adminSaveToken('Editing study material needs the local publish helper.');
   if (!token) throw originalError;
+
+  const send = () => fetch(`http://127.0.0.1:8790${route}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
+    body: JSON.stringify(body),
+  });
 
   let res;
   try {
-    res = await fetch(`http://127.0.0.1:8790${route}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
-      body: JSON.stringify(body),
-    });
+    res = await send();
+    // ONE RETRY, AND ONLY FOR A REJECTED TOKEN. Asking again for anything else would turn a real
+    // failure into a password prompt; asking once here saves a restarted helper from costing a
+    // second press of a button whose whole point is to be one press.
+    if (isTokenRejection(res.status)) {
+      token = adminSaveToken('', { stale: true });
+      if (token) res = await send();
+    }
   } catch (e) {
     throw new Error('Could not reach the publish helper on 127.0.0.1:8790. '
       + 'Start it with `node scripts/publish.mjs --serve`, then save again.');
   }
   if (res.ok) return true;
-  if (res.status === 401 || res.status === 403) {
+  if (isTokenRejection(res.status)) {
     try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
   }
   const said = await res.text().catch(() => '');
@@ -404,6 +436,40 @@ function countAnswerMarkers(answer) {
   };
 }
 
+/**
+ * Which Guide trajectories carry an injected error, as a Map(id → {errors, noError}).
+ *
+ * THE ONE THING THE TASK PICKER CANNOT SEE OTHERWISE. Two runs of the same goal sit side by side in
+ * a card — one recorded clean and one re-recorded with a mistake planted in it — and their ids say
+ * nothing about which is which. A card that counts both is comparing "did they spot the error" with
+ * "did they correctly say there was none", which is a different question wearing the same average.
+ *
+ * `no_error` and `errors` are the annotation the editor writes (app/trajectory_edit.js): the flag is
+ * the reviewer's explicit "this run is clean", the list is where the errors are. The list wins when
+ * they disagree — an annotated error is evidence, a stale flag is not.
+ *
+ * Sub-field selects, so the megabytes of screenshots in `arms` stay in the database.
+ *
+ * A missing table or column is not an error: the picker prints no badge rather than refusing to draw.
+ */
+async function listTrajectoryErrorFlags() {
+  const out = new Map();
+  try {
+    const rows = await get('study_guide_trajectories'
+      + '?select=id,no_error:ground_truth->>no_error,errors:ground_truth->errors');
+    (Array.isArray(rows) ? rows : []).forEach(r => {
+      if (!r?.id) return;
+      out.set(String(r.id), {
+        errors: Array.isArray(r.errors) ? r.errors.length : 0,
+        noError: String(r.no_error) === 'true',
+      });
+    });
+  } catch (e) {
+    console.info('[study] could not read trajectory error annotations:', e.message);
+  }
+  return out;
+}
+
 async function listAnswerReferenceCounts() {
   const out = new Map();
   try {
@@ -422,6 +488,33 @@ async function listAnswerReferenceCounts() {
     });
   } catch (e) {
     console.info('[study] could not read trajectory answers for reference counts:', e.message);
+  }
+  return out;
+}
+
+/**
+ * Every task's accepted evidence spans, as a Map(task_id → hops).
+ *
+ * The dashboard needs the whole key at once, not one task at a time like getStudyGroundTruth() —
+ * a drill-down over a facet touches every task in it, and a fetch per card per task would be dozens
+ * of round trips for a table of ten rows. `hops` is the only column that matters here and the spans
+ * are short, so this stays small even as tasks are added.
+ *
+ * WHY THE DASHBOARD WANTS THE KEY AT ALL. A score says a pick was wrong; only the key beside the
+ * pick says whether the PARTICIPANT was wrong or the KEY was. Those call for opposite responses,
+ * and the study has already been bitten once by the difference: two stimuli scored 0 on their image
+ * hop for every participant in both arms because the key held the caption while the click resolved
+ * to the alt text, which read on the card as grounding making people worse at finding images.
+ */
+async function listGroundTruth() {
+  const out = new Map();
+  try {
+    const rows = await get('study_ground_truth?select=task_id,hops');
+    (Array.isArray(rows) ? rows : []).forEach(r => {
+      if (r?.task_id) out.set(String(r.task_id), r.hops || null);
+    });
+  } catch (e) {
+    console.info('[study] could not read ground truth for the drill-down:', e.message);
   }
   return out;
 }
@@ -474,29 +567,30 @@ async function updateCannedResponseGrounding(taskId, condition, patch) {
  * running and about to succeed.
  */
 async function runAdminJob(name, payload = null) {
-  let token = '';
-  try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
-  if (!token) {
-    token = (window.prompt('This runs a script on your machine, through the local publish helper.\n\n'
-      + 'Run `node scripts/publish.mjs --serve` and paste the admin save token it prints:') || '').trim();
-    if (token) {
-      try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
-    }
-  }
+  let token = adminSaveToken('This runs a script on your machine, through the local publish helper.');
   if (!token) throw new Error('No admin token, so nothing was run.');
+
+  const send = () => fetch(`http://127.0.0.1:8790/admin/run/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
+    body: payload ? JSON.stringify(payload) : undefined,
+  });
 
   let res;
   try {
-    res = await fetch(`http://127.0.0.1:8790/admin/run/${encodeURIComponent(name)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
-      body: payload ? JSON.stringify(payload) : undefined,
-    });
+    res = await send();
+    // A restarted helper is the usual reason a stored token stops working, and restarting it is
+    // what you do after changing what it can run — so ask once more and carry on, rather than
+    // reporting a rejection the researcher can only answer by pressing the button again.
+    if (isTokenRejection(res.status)) {
+      token = adminSaveToken('', { stale: true });
+      if (token) res = await send();
+    }
   } catch (e) {
     throw new Error('Could not reach the publish helper on 127.0.0.1:8790. '
       + 'Start it with `node scripts/publish.mjs --serve`, then try again.');
   }
-  if (res.status === 401 || res.status === 403) {
+  if (isTokenRejection(res.status)) {
     try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
   }
   const body = await res.json().catch(() => ({}));
@@ -516,26 +610,27 @@ async function runAdminJob(name, payload = null) {
  * notes only when the researcher asked for them. No participant ids, no session ids, no raw rows.
  */
 async function requestAnalysis({ summary, notes = [], model = '' }) {
-  let token = '';
-  try { token = sessionStorage.getItem('pageguide_admin_save_token') || ''; } catch (e) { /* ignore */ }
-  if (!token) {
-    token = (window.prompt('Paste the admin save token printed by `node scripts/publish.mjs --serve`:') || '').trim();
-    if (!token) throw new Error('An admin save token is needed to reach the analysis helper.');
-    try { sessionStorage.setItem('pageguide_admin_save_token', token); } catch (e) { /* ignore */ }
-  }
+  let token = adminSaveToken('Reading the cards out needs the local analysis helper.');
+  if (!token) throw new Error('An admin save token is needed to reach the analysis helper.');
+
+  const send = () => fetch('http://127.0.0.1:8790/admin/analysis', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
+    body: JSON.stringify({ summary, notes, model }),
+  });
 
   let res;
   try {
-    res = await fetch('http://127.0.0.1:8790/admin/analysis', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-PageGuide-Admin-Token': token },
-      body: JSON.stringify({ summary, notes, model }),
-    });
+    res = await send();
+    if (isTokenRejection(res.status)) {
+      token = adminSaveToken('', { stale: true });
+      if (token) res = await send();
+    }
   } catch (e) {
     throw new Error('The analysis helper is not running. Start it with `node scripts/publish.mjs --serve`.');
   }
   const body = await res.json().catch(() => null);
-  if (res.status === 401 || res.status === 403) {
+  if (isTokenRejection(res.status)) {
     try { sessionStorage.removeItem('pageguide_admin_save_token'); } catch (e) { /* ignore */ }
   }
   if (!res.ok) throw new Error(body?.error || `The helper returned ${res.status}.`);
@@ -656,4 +751,6 @@ window.StudyDB = {
   listStudyResults,
   listTaskImageCounts,
   listAnswerReferenceCounts,
+  listTrajectoryErrorFlags,
+  listGroundTruth,
 };

@@ -29,10 +29,14 @@
 // Reads the anon key from app/config.js, the same key the site serves to participants.
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+// The dashboard's rules, read out of app/welcome.js — see scripts/dashboard_defs.mjs for why they
+// are lifted rather than restated, and why every script that reports a number goes through it.
+import {
+  ROOT, FACETS, csv, dashboardDefinitions, fetchRows, facetRows as facetRowsFor,
+  selectionSource as sourceOf, stats,
+} from './dashboard_defs.mjs';
 
 const args = process.argv.slice(2);
 const useAllTasks = args.includes('--all-tasks');
@@ -50,85 +54,7 @@ const selectionArg = args.find(a => a.startsWith('--selection='));
 const SELECTION_FILE = selectionArg ? selectionArg.split('=').slice(1).join('=') : '';
 let SELECTION = null;
 
-// ── The dashboard's own definitions ──────────────────────────────────────────────────────────────
-
-/**
- * Pull named declarations out of app/welcome.js and evaluate them here.
- *
- * The file is a browser script — no exports, no module system — so this is source extraction rather
- * than an import. It is deliberately brittle about names: a missing one throws.
- *
- * `stimulusStyleById` is stubbed. In the browser it reads the queue the welcome screen already
- * built, which does not exist in Node; every row written since the study went live carries an
- * explicit `task_style`, and taskStyle() consults that first. The stub means a row that somehow
- * lacks one falls through to the same id/evidence heuristics the dashboard uses, instead of this
- * script inventing a third answer.
- */
-async function dashboardDefinitions() {
-  const src = await readFile(join(ROOT, 'app/welcome.js'), 'utf8');
-
-  const takeFunction = (name) => {
-    const start = src.indexOf(`function ${name}(`);
-    if (start < 0) throw new Error(`app/welcome.js no longer defines ${name}() — figures.mjs must be updated with it.`);
-    let depth = 0;
-    for (let i = src.indexOf('{', start); i < src.length; i++) {
-      if (src[i] === '{') depth++;
-      else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
-    }
-    throw new Error(`Could not read the body of ${name}() out of app/welcome.js.`);
-  };
-
-  const takeConst = (name) => {
-    const m = src.match(new RegExp(`const ${name} = [\\s\\S]*?\\n(?:\\}|\\]);`));
-    if (!m) throw new Error(`app/welcome.js no longer defines ${name} — figures.mjs must be updated with it.`);
-    return m[0];
-  };
-
-  const body = [
-    'const stimulusStyleById = () => new Map();',
-    takeConst('FACET_TASK_EXCLUSIONS'),
-    takeConst('BEHAVIOR_METRICS'),
-    takeFunction('num'),
-    takeFunction('avgValues'),
-    takeFunction('taskStyle'),
-    takeFunction('behaviorValue'),
-    takeFunction('answerCorrect'),
-    takeFunction('judgeTime'),
-    takeFunction('locateTime'),
-    takeFunction('totalTime'),
-    takeFunction('f1'),
-    takeFunction('evidenceQuality'),
-    takeFunction('localizationParts'),
-    'return { FACET_TASK_EXCLUSIONS, BEHAVIOR_METRICS, num, taskStyle, behaviorValue,'
-      + ' answerCorrect, judgeTime, locateTime, totalTime, f1, evidenceQuality, localizationParts };',
-  ].join('\n\n');
-
-  // eslint-disable-next-line no-new-func
-  return new Function(body)();
-}
-
-// ── Data ─────────────────────────────────────────────────────────────────────────────────────────
-
-async function supabase() {
-  const src = await readFile(join(ROOT, 'app/config.js'), 'utf8');
-  const url = src.match(/SUPABASE_URL:\s*'([^']+)'/)?.[1];
-  const key = src.match(/SUPABASE_ANON_KEY:\s*'([^']+)'/)?.[1];
-  if (!url || !key) throw new Error('Could not read SUPABASE_URL / SUPABASE_ANON_KEY from app/config.js');
-  const rows = await fetch(`${url}/rest/v1/study_task_results_v2?select=*&limit=50000`, {
-    headers: { apikey: key, Authorization: `Bearer ${key}` },
-    cache: 'no-store',
-  });
-  if (!rows.ok) throw new Error(`Supabase ${rows.status}: ${await rows.text().catch(() => '')}`);
-  return rows.json();
-}
-
-/** The four cards, in the order the dashboard draws them. */
-const FACETS = [
-  { key: 'find_text', taskType: 'find', style: 'text', label: 'Find × Text', short: 'Find\n×Text' },
-  { key: 'find_visual', taskType: 'find', style: 'visual', label: 'Find × Visual', short: 'Find\n×Visual' },
-  { key: 'guide_text', taskType: 'guide', style: 'text', label: 'Guide × Text', short: 'Guide\n×Text' },
-  { key: 'guide_visual', taskType: 'guide', style: 'visual', label: 'Guide × Visual', short: 'Guide\n×Visual' },
-];
+// ── Data ────────────────────────────────────────────────────────────────────────────────────────
 
 /**
  * The two arms, in fixed order, in the two colours the figures use everywhere.
@@ -157,37 +83,11 @@ const ARMS = [
   { id: 'grounding', label: 'Grounded', color: '#5183c9' },
 ];
 
-/**
- * The rows each facet counts, with the dashboard's default exclusions applied.
- *
- * --all-tasks turns them off, which is the honest way to check what a default is doing rather than
- * arguing about it: run both and compare the two figures.
- */
-function facetRows(rows, facet, defs) {
-  const inFacet = rows.filter(r => r.task_type === facet.taskType && defs.taskStyle(r) === facet.style);
-  if (useAllTasks) return inFacet;
-  const asked = SELECTION?.[facet.key];
-  if (Array.isArray(asked)) return inFacet.filter(r => asked.includes(String(r.task_id || '')));
-  const excluded = defs.FACET_TASK_EXCLUSIONS[facet.key]?.ids || [];
-  return inFacet.filter(r => !excluded.includes(String(r.task_id || '')));
-}
-
-/** Where a facet's task list came from, for the provenance file. */
-function selectionSource(facet, defs) {
-  if (useAllTasks) return 'every task (--all-tasks)';
-  if (Array.isArray(SELECTION?.[facet.key])) return 'the dashboard, as it stood at publish time';
-  return defs.FACET_TASK_EXCLUSIONS[facet.key] ? 'the committed defaults' : 'every task';
-}
-
-function stats(values) {
-  const v = values.filter(x => x != null && Number.isFinite(x));
-  if (!v.length) return { n: 0, mean: null, sd: null, se: null };
-  const mean = v.reduce((a, b) => a + b, 0) / v.length;
-  const sd = v.length > 1
-    ? Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / (v.length - 1))
-    : 0;
-  return { n: v.length, mean, sd, se: sd / Math.sqrt(v.length) };
-}
+/** This run's flags, applied to the shared selection rules. */
+const facetRows = (rows, facet, defs) =>
+  facetRowsFor(rows, facet, defs, { allTasks: useAllTasks, selection: SELECTION });
+const selectionSource = (facet, defs) =>
+  sourceOf(facet, defs, { allTasks: useAllTasks, selection: SELECTION });
 
 // ── SVG ──────────────────────────────────────────────────────────────────────────────────────────
 
@@ -603,6 +503,10 @@ const DATASET_COLUMNS = [
   'time_ms', 'answer_multiple_choice_ms', 'find_supporting_answer_ms',
   'score_answer_correct', 'score_verdict_correct',
   'score_evidence_precision', 'score_evidence_recall',
+  // The two Find hops, flattened out of the `score_evidence_hop_exact` jsonb. The results table's
+  // "Find Result (First/Second part)" columns are these two and nothing else, so a CSV without them
+  // cannot rebuild the table it ships beside — which is exactly what results_table_subset.py does.
+  'score_evidence_hop_exact_1', 'score_evidence_hop_exact_2',
   'score_type_precision', 'score_type_recall',
   'score_step_precision', 'score_step_recall', 'score_no_error_agreement',
   'confidence', 'helpfulness',
@@ -610,22 +514,24 @@ const DATASET_COLUMNS = [
   'website_click_count', 'panel_click_count',
 ];
 
-async function writeDataset(defs, metrics, counted, pooledTable, facetTable, outcomes) {
+async function writeDataset(defs, metrics, counted, pooledTable, facetTable, outcomes, allRows) {
   const dir = join(ROOT, 'dataset');
   await mkdir(dir, { recursive: true });
 
-  const participants = new Map();
-  const rowsOut = [['participant', ...DATASET_COLUMNS]];
-  FACETS.forEach(facet => counted.get(facet.key).forEach(r => {
-    const sessionKey = r.session_id != null ? `s${r.session_id}` : `r${r.client_run_id}`;
-    if (!participants.has(sessionKey)) participants.set(sessionKey, participants.size + 1);
+  /**
+   * A row, flattened to the dataset's columns. One writer for both files, so the master and the
+   * subset can never disagree about what a column means — the whole premise of filtering one into
+   * the other in Python is that they are the same table twice.
+   */
+  const datasetRow = (r, facetLabel, participant) => {
     const behaviour = (key, column) => defs.behaviorValue(r, key, column);
-    rowsOut.push([
-      participants.get(sessionKey),
-      r.task_id, r.task_type, r.task_style, facet.label, r.condition, r.question_index,
+    return [
+      participant,
+      r.task_id, r.task_type, r.task_style, facetLabel, r.condition, r.question_index,
       r.time_ms, r.answer_multiple_choice_ms, r.find_supporting_answer_ms,
       r.score_answer_correct, r.score_verdict_correct,
       r.score_evidence_precision, r.score_evidence_recall,
+      r.score_evidence_hop_exact?.['1'], r.score_evidence_hop_exact?.['2'],
       r.score_type_precision, r.score_type_recall,
       r.score_step_precision, r.score_step_recall, r.score_no_error_agreement,
       r.confidence, r.helpfulness,
@@ -633,8 +539,62 @@ async function writeDataset(defs, metrics, counted, pooledTable, facetTable, out
       behaviour('text_select_count', 'text_select_count'), behaviour('click_count', 'click_count'),
       behaviour('mouse_move_px', 'mouse_move_px'),
       behaviour('website_click_count', null), behaviour('panel_click_count', null),
-    ]);
+    ];
+  };
+
+  // NUMBERED OVER THE MASTER, not over the selection, and that ordering is the point: the same
+  // sitting has to carry the same participant number in both files, or a subset filtered out of the
+  // master in Python would describe different people than the CSV it is checked against.
+  const participants = new Map();
+  const numberFor = (r) => {
+    const sessionKey = r.session_id != null ? `s${r.session_id}` : `r${r.client_run_id}`;
+    if (!participants.has(sessionKey)) participants.set(sessionKey, participants.size + 1);
+    return participants.get(sessionKey);
+  };
+
+  /**
+   * EVERY row that came off the wire, with no task selection applied — the master the published
+   * Python filters down.
+   *
+   * `facet` is a label here, never a filter: a row whose style could not be decided still belongs
+   * in the master, because a master a script had already pruned is not one. `in_selection` says
+   * whether THIS run counted it, so the Python filter can be checked against the run that produced
+   * the file rather than trusted.
+   */
+  const masterOut = [['participant', ...DATASET_COLUMNS, 'in_selection']];
+  const selectedIds = new Map(FACETS.map(f =>
+    [f.key, new Set(counted.get(f.key).map(r => String(r.task_id || '')))]));
+  const facetOf = (r) => FACETS.find(f => r.task_type === f.taskType && defs.taskStyle(r) === f.style);
+  (Array.isArray(allRows) ? allRows : []).forEach(r => {
+    const facet = facetOf(r);
+    const inSelection = !!facet && selectedIds.get(facet.key).has(String(r.task_id || ''));
+    masterOut.push([...datasetRow(r, facet ? facet.label : '', numberFor(r)), inSelection]);
+  });
+
+  const rowsOut = [['participant', ...DATASET_COLUMNS]];
+  FACETS.forEach(facet => counted.get(facet.key).forEach(r => {
+    rowsOut.push(datasetRow(r, facet.label, numberFor(r)));
   }));
+
+  /**
+   * The selection itself, as data rather than as prose.
+   *
+   * PROVENANCE.md already says which tasks were counted, in a sentence for a person. This says the
+   * same thing for a program: it is what results_table_subset.py filters the master with, so the
+   * published Python reproduces this run's subset instead of being handed a pre-filtered file and
+   * asked to trust it.
+   */
+  const selectionOut = {
+    generated_at: new Date().toISOString(),
+    all_tasks: useAllTasks,
+    facets: Object.fromEntries(FACETS.map(f => [f.key, {
+      label: f.label,
+      task_type: f.taskType,
+      task_style: f.style,
+      source: selectionSource(f, defs),
+      task_ids: Array.from(selectedIds.get(f.key)).filter(Boolean).sort(),
+    }])),
+  };
 
   const excluded = FACETS.map(f => {
     const e = defs.FACET_TASK_EXCLUSIONS[f.key];
@@ -642,6 +602,8 @@ async function writeDataset(defs, metrics, counted, pooledTable, facetTable, out
   }).filter(Boolean);
 
   await writeFile(join(dir, 'rows.csv'), csv(rowsOut));
+  await writeFile(join(dir, 'rows_master.csv'), csv(masterOut));
+  await writeFile(join(dir, 'selection.json'), `${JSON.stringify(selectionOut, null, 2)}\n`);
   await writeFile(join(dir, 'behavior_pooled.csv'), csv(pooledTable));
   await writeFile(join(dir, 'behavior_by_facet.csv'), csv(facetTable));
   await writeFile(join(dir, 'outcomes.csv'), csv(outcomes));
@@ -738,17 +700,10 @@ function outcomeTable(defs, counted) {
 
 // ── Run ──────────────────────────────────────────────────────────────────────────────────────────
 
-function csv(lines) {
-  return lines.map(r => r.map(v => {
-    const s = v == null ? '' : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  }).join(',')).join('\n') + '\n';
-}
-
 async function main() {
   const defs = await dashboardDefinitions();
   if (SELECTION_FILE) SELECTION = JSON.parse(await readFile(SELECTION_FILE, 'utf8'));
-  const rows = await supabase();
+  const rows = await fetchRows();
 
   // The five the dashboard's cards carry, plus page clicks — the closest thing this study records
   // to the paper's "page visits", since a web run has no tab of its own to count visits to.
@@ -788,7 +743,7 @@ async function main() {
 
   await mkdir(OUT_DIR, { recursive: true });
   const suffix = useAllTasks ? '_all_tasks' : '';
-  await writeDataset(defs, metrics, counted, pooledTable, facetTable, outcomeTable(defs, counted));
+  await writeDataset(defs, metrics, counted, pooledTable, facetTable, outcomeTable(defs, counted), rows);
   const outcomes = outcomeTable(defs, counted);
   const files = [
     [`behavior_pooled${suffix}.svg`, pooledFigure(metrics, cells)],

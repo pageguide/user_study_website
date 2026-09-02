@@ -30,6 +30,10 @@ let els = { goal: null, count: null, stage: null };
 
 let arm = null;
 
+// Which way round the two sections go, and whether the journey opens folded. Set per mount rather
+// than read from a global so one file can serve both studies without either knowing about the other.
+let layout = { trailFirst: false, journeyCollapsed: false };
+
 // Gated on the arm, not on whether the data happens to carry a screenshot. _stripGuideArm nulls
 // them, but an arm can also be hand-edited in the recorder, and one uploaded image would undo the
 // condition for that participant without anyone noticing.
@@ -54,9 +58,16 @@ function esc(value) {
  * @param {object} record - a study_guide_trajectories row
  * @param {'grounding'|'nongrounding'} armName
  * @param {{goal: Element, count: Element, stage: Element}} mount
+ * @param {{trailFirst?: boolean, journeyCollapsed?: boolean}} [options] - V2's Guide task leads with
+ *   the reasoning trail and folds the journey away beneath it. Defaults to V1's layout, whose
+ *   recorded runs were judged with the journey open and first and must stay that way.
  */
-function mountStimulus(record, armName, mount) {
+function mountStimulus(record, armName, mount, options) {
   els = mount;
+  layout = {
+    trailFirst: !!options?.trailFirst,
+    journeyCollapsed: !!options?.journeyCollapsed,
+  };
   showShots = armName !== 'nongrounding';
   document.body.classList.toggle('tv-nogrounding', !showShots);
 
@@ -276,15 +287,12 @@ function render() {
   const steps = arm.steps || [];
   const milestones = (arm.trail?.milestones || []);
 
-  els.stage.innerHTML = `
-    <div class="tv-col">
-      ${statesSection()}
-
+  const journeyHtml = `
       ${sectionTitle('View Journey', showShots
         ? 'Every action the agent took, in the order it took them. Hover a step to see the page it was looking at when it acted; click for a full-size view.'
         : 'Every action the agent took, in the order it took them.')}
 
-      <details class="tv-journey" open>
+      <details class="tv-journey"${layout.journeyCollapsed ? '' : ' open'}>
         <summary class="tv-journey-summary">The steps</summary>
         <div class="tv-journey-list">
           ${steps.map(step => {
@@ -299,27 +307,47 @@ function render() {
           ${showShots && steps.length && !steps.some(st => st.screenshot) ? `
             <p class="tv-warn">No step screenshots were saved with this trajectory, so there is nothing to preview. Re-capture it from the run to add them.</p>` : ''}
         </div>
-      </details>
+      </details>`;
 
+  // THE TRAIL IS NEUTRAL, DELIBERATELY.
+  //
+  // Every milestone carries {status, errorLabel} from the recorder, and this briefly rendered them —
+  // an amber flag reading "loop" on the step that went wrong. That was a mistake: the participant's
+  // whole task is to decide whether the agent completed the job, and a marked-up step answers that
+  // question for them before they have looked at anything. The trail has to read the same whether
+  // the run succeeded or failed, or it is a hint rather than a stimulus.
+  //
+  // The fields are still in the data and the editor still shows them, so restoring the flags is a
+  // small change if the design ever calls for a condition that reveals them.
+  const trailHtml = (arm.trail?.summary || milestones.length) ? `
+      ${sectionTitle('Reasoning trail', 'The agent\'s own account of what it did and why, written after the run. It picks out the steps it treated as milestones — some of the journey above, not all of it — in the agent\'s words rather than as actions.')}
+      <div class="tv-trail">
+        ${arm.trail?.summary ? `<p class="tv-trail-summary">${richText(arm.trail.summary)}</p>` : ''}
+        ${milestones.map(m => {
+          const live = showShots && milestoneHasShot(m.step);
+          return `
+          <div class="tv-journey-row${live ? ' is-shot' : ''}"${live ? ` data-ev-step="${esc(String(m.step))}"` : ''}>
+            <span class="tv-dot"></span>
+            <span class="tv-journey-text"><b>${esc(String(m.step ?? ''))}</b> ${esc(m.text || '')}</span>
+            ${live ? '<span class="tv-peek" aria-hidden="true">⌕</span>' : ''}
+          </div>`;
+        }).join('')}
+      </div>` : '';
+
+  // The answer sits between them either way: it is the claim being judged, and it reads as a
+  // conclusion to whichever account came first.
+  const answerHtml = `
       ${sectionTitle('Agent answer', showShots
         ? 'What the agent reported back when it finished — the claim you are being asked to judge. A numbered chip marks a claim the agent backed with something it saw; hover it to see what.'
         : 'What the agent reported back when it finished — the claim you are being asked to judge.')}
-      <div class="tv-answer">${richText(arm.answer)}</div>
+      <div class="tv-answer">${richText(arm.answer)}</div>`;
 
-      ${(arm.trail?.summary || milestones.length) ? `
-        ${sectionTitle('Reasoning trail', 'The agent\'s own account of what it did and why, written after the run. It picks out the steps it treated as milestones — some of the journey above, not all of it — in the agent\'s words rather than as actions.')}
-        <div class="tv-trail">
-          ${arm.trail?.summary ? `<p class="tv-trail-summary">${richText(arm.trail.summary)}</p>` : ''}
-          ${milestones.map(m => {
-            const live = showShots && milestoneHasShot(m.step);
-            return `
-            <div class="tv-journey-row${live ? ' is-shot' : ''}"${live ? ` data-ev-step="${esc(String(m.step))}"` : ''}>
-              <span class="tv-dot"></span>
-              <span class="tv-journey-text"><b>${esc(String(m.step ?? ''))}</b> ${esc(m.text || '')}</span>
-              ${live ? '<span class="tv-peek" aria-hidden="true">⌕</span>' : ''}
-            </div>`;
-          }).join('')}
-        </div>` : ''}
+  els.stage.innerHTML = `
+    <div class="tv-col">
+      ${statesSection()}
+      ${layout.trailFirst
+        ? `${trailHtml}${answerHtml}${journeyHtml}`
+        : `${journeyHtml}${answerHtml}${trailHtml}`}
     </div>`;
 }
 

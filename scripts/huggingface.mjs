@@ -60,11 +60,22 @@ export async function findToken() {
   throw new Error('No Hugging Face token. Put HF_TOKEN=hf_… in .env, or run `huggingface-cli login`.');
 }
 
+/**
+ * Not uploaded, though they sit in `dataset/`.
+ *
+ * `rows_master.csv` is every row the study holds INCLUDING the ones no card counts — excluded
+ * tasks, disputed keys, runs recorded twice. It exists so the published Python can do its own
+ * filtering (figures_code/results_table_subset.py), and it is deliberately not part of the public
+ * dataset, which is documented as being the analysed selection. Publishing the unfiltered rows is a
+ * decision to make on purpose, not a side effect of a file appearing in a folder.
+ */
+const NOT_PUBLISHED = new Set(['rows_master.csv', 'selection.json']);
+
 /** Every file under a directory, relative-pathed, in a stable order. */
 async function walk(dir, base = dir) {
   const out = [];
   for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.name.startsWith('.')) continue;
+    if (entry.name.startsWith('.') || NOT_PUBLISHED.has(entry.name)) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...await walk(full, base));
     else out.push({ path: relative(base, full).split(sep).join('/'), full });

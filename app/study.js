@@ -7,6 +7,13 @@
 const stimulusPane = document.getElementById('stimulus-pane');
 const questionPane = document.getElementById('question-pane');
 const S = window.StudySession;
+const IS_FIND_V2 = window.STUDY_VARIANT === 'find-v2';
+
+// Find V2 only. The verdict radios stay disabled for this long after a task opens, so a participant
+// cannot click Yes before the answer they are judging has been read; and once the three-minute limit
+// passes they get this much longer to give one before the task is submitted with none.
+const ANSWER_LOCK_MS = 10 * 1000;
+const VERDICT_GRACE_MS = 5 * 1000;
 let taskTelemetry = null;
 
 // The data source, chosen per task. demo.html sets window.STUDY_SOURCE to a local fixture bank
@@ -200,9 +207,36 @@ function conditionBannerHtml(arm, taskType) {
     </div>`;
 }
 
-// Delegated from the pane, which outlives every shell rebuild — the banner itself is re-rendered
-// for each task, so binding it per render would stack listeners.
-stimulusPane.addEventListener('click', (e) => {
+/**
+ * Which half of the counterbalance this sitting is in — Group A (text) or Group B (visual).
+ *
+ * NOT A CONDITION, and drawn apart from the condition banner for that reason. The banner says what
+ * is different about THIS task; the group says which of the two protocols the whole sitting is
+ * running, and a participant switches condition between tasks but never switches group.
+ *
+ * It is on screen for the researcher as much as the participant: a pilot session where the group is
+ * only in localStorage is one where "it dealt me the wrong task" cannot be checked against anything
+ * without opening devtools. `state.group` is set once in beginStudy from the server-assigned slot
+ * (find_v2_welcome.js, groupOf) and each queued task carries its own copy, so a resumed session
+ * still knows which it is.
+ *
+ * Renders NOTHING when the group is unknown — admin review and the tutorial are not dealt a slot,
+ * and an empty chip there would read as a group that failed to load.
+ */
+function groupChipHtml() {
+  const group = S.state.group || S.state.queue?.[S.state.idx]?.group || '';
+  if (group !== 'A' && group !== 'B') return '';
+  return `
+    <div class="tv-group" title="The counterbalancing half this session was assigned. It is the same for every task in this sitting.">
+      <span class="tv-group-badge">Group ${esc(group)}</span>
+      <span class="tv-group-note">${group === 'B' ? 'visual' : 'text'}</span>
+    </div>`;
+}
+
+// Delegated from the panes, which outlive every shell rebuild — the banner itself is re-rendered for
+// each task, so binding it per render would stack listeners. BOTH panes: V1 draws the banner above
+// the material on the left, V2 draws it in the question pane on the right.
+[stimulusPane, questionPane].forEach(pane => pane.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-condition-hint]');
   if (!btn) return;
   const hint = btn.parentElement.querySelector('.tv-condition-hint');
@@ -210,7 +244,27 @@ stimulusPane.addEventListener('click', (e) => {
   hint.hidden = !hint.hidden;
   btn.setAttribute('aria-expanded', hint.hidden ? 'false' : 'true');
   btn.classList.toggle('is-open', !hint.hidden);
-});
+}));
+
+/**
+ * The V2 guide stimulus shell.
+ *
+ * No header, matching the V2 Find layout: the goal and the Grounded chip live in the question pane,
+ * and repeating them above the trajectory would push the material down for no gain. mountStimulus
+ * still wants a goal and a count element, so it gets detached ones — the trajectory writes into them
+ * and nothing renders them, which is cheaper than making the viewer's mount points optional.
+ */
+function renderGuideV2Shell() {
+  stimulusPane.innerHTML = `
+    <main class="tv-main">
+      <section class="tv-stage" id="tv-stage"></section>
+    </main>`;
+  return {
+    goal: document.createElement('h1'),
+    count: document.createElement('div'),
+    stage: document.getElementById('tv-stage'),
+  };
+}
 
 /** The guide stimulus shell — the same markup study.html ships, rebuilt after a Find task. */
 function renderGuideShell(arm) {
@@ -282,7 +336,7 @@ async function boot() {
     // Reached directly, or the session was cleared. Send them back rather than inventing a session:
     // a result row with no participant id is a row nobody can use.
     if (!window.STUDY_SOURCE) S.clearLocal();
-    location.replace('index.html');
+    location.replace(IS_FIND_V2 ? 'index.html' : 'find-v1.html');
     return;
   }
   Object.assign(S.state, saved);
@@ -310,11 +364,15 @@ async function showTask() {
 
   const task = practising ? window.Tutorial.currentTask() : queue[idx];
   if (!task) return finish();
+  renderDryRunNav();
   detachQuestionPane();
   startTaskTelemetry(task);
   const arm = S.taskArm ? S.taskArm(task) : S.conditionLabel(task?.arm || S.state.arm);
   panelMessage('<p class="q-text">Loading the next task…</p>');
   if (task.taskType === 'find') return showFindTask(task);
+  // V2's Guide task shares the viewer but not the instrument: it asks one question, not the error
+  // taxonomy, and reads its trajectory from a different table.
+  if (IS_FIND_V2) return showGuideV2Task(task, arm);
 
   let record = null;
   try {
@@ -350,6 +408,7 @@ async function showTask() {
     index: idx,
     total: queue.length,
     progressLabel: progressText(),
+    dryRun: !!S.state.dryRun,
     goal: record.goal || record.title || '',
     onSubmit: (timings) => askPostQuestions(task, record, timings),
   });
@@ -370,6 +429,12 @@ async function showTask() {
  */
 function progressText() {
   if (S.state.tutorial?.active) return window.Tutorial.progressLabel();
+  // A TEST RUN LOOKS EXACTLY LIKE A REAL ONE. Same tasks, same screens, same answers — and
+  // saveStudyResult deliberately writes none of them, which is the whole point of it. The welcome
+  // screen says so once and is then navigated away from, so a researcher can finish a ten-claim
+  // session believing it was recorded and only discover otherwise in the console. Said here it is
+  // said on every task, in the line they are already reading to see how far through they are.
+  if (S.state.dryRun) return `Task ${S.state.idx + 1}/${S.state.queue.length} · test run — not saved`;
   return null;
 }
 
@@ -389,7 +454,10 @@ async function showFindTask(task) {
   const arm = S.taskArm ? S.taskArm(task) : S.conditionLabel(task?.arm || S.state.arm);
   const source = dataSource(task);
   const [cannedRes, groundTruthRes, pageRes] = await Promise.allSettled([
-    source.getCannedResponse ? source.getCannedResponse(task.id, arm) : Promise.resolve(null),
+    // The task is passed as a third argument for Find V2, whose recorded answer
+    // depends on the correctness half of the dealt variant as well as the arm.
+    // V1's adapter takes two arguments and ignores it.
+    source.getCannedResponse ? source.getCannedResponse(task.id, arm, task) : Promise.resolve(null),
     loadFindGroundTruth(task),
     source.getTaskPage ? source.getTaskPage(task.id, task.url) : Promise.resolve(null),
   ]);
@@ -405,14 +473,19 @@ async function showFindTask(task) {
 
   const answer = canned?.answer_display || canned?.answer_raw || '';
 
+  // V2 GIVES THE WHOLE LEFT PANE TO THE PAGE. The question and the condition chip used to sit above
+  // the snapshot as well as in the question pane, which said the same thing twice and pushed the
+  // material a header's worth further down — on a laptop, far enough that the top of the page was
+  // off screen before the participant had read anything. Both now live only in the question pane,
+  // beside the answer they are about. V1 keeps its header: its runs are recorded against that layout.
   stimulusPane.innerHTML = `
-    <header class="tv-head">
+    ${IS_FIND_V2 ? '' : `<header class="tv-head">
       <div class="tv-head-main">
         <div class="tv-kicker">Task</div>
         <h1 class="tv-goal">${esc(task.question || task.title || '')}</h1>
         ${conditionBannerHtml(arm, 'find')}
       </div>
-    </header>
+    </header>`}
     <main class="tv-main">${page?.html
       ? '<iframe class="find-page" id="find-page" title="The page this question is about"></iframe>'
       : `<div class="tv-col">
@@ -444,15 +517,26 @@ async function showFindTask(task) {
       <div class="q-head"><span class="q-title">🔍 Find task</span></div>
       <div class="q-progress">Task ${idx + 1}/${queue.length} · review</div>
       <div class="q-body">
-        <p class="q-text">${esc(task.question || '')}</p>
+        <div class="q-text">${questionHtml(task.question)}</div>
+        ${IS_FIND_V2 ? conditionBannerHtml(arm, 'find') : ''}
         ${answerCardHtml(answer, arm)}
+        ${IS_FIND_V2 && arm !== 'nongrounding'
+          ? referencePanelHtml(citationLinkReport(null, answer, canned?.citation_anchors), [])
+          : ''}
         ${adminFindGroundTruthHtml(groundTruth, task)}
-        ${adminGroundingReviewHtml(task, canned, arm, cites, !!page?.html)}
+        ${IS_FIND_V2 ? '' : adminGroundingReviewHtml(task, canned, arm, cites, !!page?.html)}
         <p class="q-sub">Review mode — participant answers are not recorded.</p>
         ${adminNavHtml()}
       </div>`;
     bindFindAnswerChips(canned, arm, cites);
-    bindAdminGroundingReview(task, canned, arm, cites);
+    if (IS_FIND_V2) {
+      // The snapshot mounts asynchronously, so the first report is drawn with no document and every
+      // row reads "not found". Repaint once the frame is readable — the panel is only honest if the
+      // page it is reporting on is actually there.
+      if (arm !== 'nongrounding') whenSnapshotReady(() => bindReferencePanel(task, canned, arm));
+    } else {
+      bindAdminGroundingReview(task, canned, arm, cites);
+    }
     bindAdminNav();
     return;
   }
@@ -508,50 +592,209 @@ function answerCardHtml(answer, arm) {
 }
 
 /**
+ * The task question, as one or two numbered parts.
+ *
+ * These questions are two-hop by construction — find a thing in the prose, then read something off
+ * the picture it points at — and the evidence prompts have always said "the first part" and "the
+ * second part". The question itself was a single wall of three sentences, so a participant had to
+ * work out where one part ended and the other began before they could start, under a clock.
+ *
+ * THE SPLIT IS AUTHORED, NOT GUESSED: one line per part in the claim's question field. A question
+ * written as a single line still renders as a single paragraph, so nothing already authored changes
+ * shape until somebody edits it.
+ */
+function questionParts(question) {
+  return String(question || '')
+    .split(/\r?\n/)
+    .map(part => part.trim())
+    .filter(Boolean);
+}
+
+/**
+ * THE HINGE between two parts, marked with **double asterisks** in the authored text.
+ *
+ * A two-hop question only works if the reader sees what carries over. "A famous collection of
+ * novels…" then "in the image of the second novel…" is one chain, but split across two numbered
+ * lines it reads as two unrelated instructions, and the participant's first job becomes working out
+ * which noun in part 1 part 2 is pointing at — under a clock.
+ *
+ * AUTHORED, NOT INFERRED. Guessing the shared term from the text would be a heuristic that is wrong
+ * occasionally and silently, and the questions are the instrument. Whoever writes the question marks
+ * the hinge, the same way they choose where the parts break.
+ *
+ * Escaped BEFORE the markers are read, so a question containing a literal < or & is safe and only
+ * the two-asterisk pairs this function put there become markup.
+ */
+function questionHtml(question) {
+  const parts = questionParts(question);
+  const mark = (part) => esc(part).replace(/\*\*([^*]+)\*\*/g, '<b class="q-hinge">$1</b>');
+  if (parts.length < 2) return mark(parts[0] || '');
+  return `<ol class="q-task-parts">${parts.map(part => `<li>${mark(part)}</li>`).join('')}</ol>`;
+}
+
+/**
+ * The two clocks every V2 verdict runs under: the opening lock and the hard cutoff.
+ *
+ * Both Find and Guide need exactly this, and a state machine with a `running → grace → done`
+ * transition is the kind of thing that survives being copied once and then quietly diverges — one
+ * task type gaining a fix the other does not. So it lives here and each task drives it from its own
+ * one interval.
+ *
+ * The caller supplies `submit(answerValue)`, which must be idempotent: the grace expiring and a late
+ * click on the submit button can both reach it.
+ *
+ * @param {object} opts
+ * @param {Element} opts.pane        - the question pane to read and paint
+ * @param {string}  opts.radioName   - the verdict radio group
+ * @param {Function} opts.submit     - submit(answerValue|null); null means the grace ran out
+ * @param {Function} [opts.liveButton] - the primary button to enable when the lock lifts
+ * @param {Function} [opts.onExpire] - fold away anything past the verdict when time runs out
+ * @param {Function} [opts.showError] - where the grace countdown is written
+ * @param {Function} [opts.clearError]
+ */
+function verdictClocks({ pane, radioName, submit, liveButton, onExpire, showError, clearError }) {
+  let unlocked = !IS_FIND_V2;   // V1 has never had an opening lock
+  let deadline = 'running';     // running -> grace -> done
+  let expiredAt = null;
+
+  const $ = (id) => pane.querySelector(`#${id}`);
+  const verdict = () => pane.querySelector(`input[name="${radioName}"]:checked`)?.value || null;
+
+  const unlock = () => {
+    unlocked = true;
+    pane.querySelectorAll(`input[name="${radioName}"]`).forEach(el => { el.disabled = false; });
+    $('q-find-answer')?.classList.remove('is-locked');
+    $('q-answer-lock')?.remove();
+    const live = liveButton?.();
+    if (live) live.disabled = false;
+  };
+
+  const enforce = (elapsed) => {
+    if (deadline === 'done') return;
+    if (deadline === 'running') {
+      if (elapsed < window.TaskTimer.LIMIT_MS) return;
+      // A verdict already given is the thing the grace exists to obtain, so there is nothing left to
+      // wait for: submit what there is.
+      if (verdict()) { deadline = 'done'; return void submit(verdict()); }
+      deadline = 'grace';
+      expiredAt = Date.now();
+      onExpire?.();
+      window.QForm.markMissing($('q-find-answer'));
+      try { $('q-find-answer')?.scrollIntoView({ block: 'center' }); } catch (e) { /* ignore */ }
+    }
+    // Answering inside the grace is a real answer, not a timeout: the run simply carries on and the
+    // clock goes back to being the soft overrun it always was.
+    if (verdict()) {
+      deadline = 'done';
+      window.QForm.clearMissing(pane);
+      clearError?.();
+      return;
+    }
+    const left = Math.ceil((VERDICT_GRACE_MS - (Date.now() - expiredAt)) / 1000);
+    if (left <= 0) { deadline = 'done'; return void submit(null); }
+    showError?.(`Time is up. Choose Yes or No now — ${left}s.`);
+  };
+
+  return {
+    /** Call once a tick from the task's own interval. */
+    tick(elapsed) {
+      if (!unlocked) {
+        if (elapsed >= ANSWER_LOCK_MS) unlock();
+        else {
+          const el = $('q-answer-lock-s');
+          if (el) el.textContent = String(Math.max(1, Math.ceil((ANSWER_LOCK_MS - elapsed) / 1000)));
+        }
+      }
+      if (IS_FIND_V2) enforce(elapsed);
+    },
+    verdict,
+    /** The task is submitting by its own route; stop the cutoff from firing behind it. */
+    settle() { deadline = 'done'; },
+  };
+}
+
+/**
+ * The verdict radios plus the lock notice, shared by both task types.
+ *
+ * The container keeps the id `q-find-answer` on both: app/tutorial.js points V1's walkthrough at it
+ * by that name, and only one pane is ever mounted, so Guide reusing it costs nothing and renaming it
+ * would silently break a tour step in the other study.
+ */
+function verdictOptionsHtml(options, labelFor) {
+  const locked = IS_FIND_V2;
+  return `
+        ${locked ? `<p class="q-sub q-answer-lock" id="q-answer-lock">Read the question and the
+          agent’s answer first — you can respond in <b id="q-answer-lock-s">${Math.round(ANSWER_LOCK_MS / 1000)}</b>s.</p>` : ''}
+        <div class="q-options${locked ? ' is-locked' : ''}" id="q-find-answer">
+          ${options.map(opt => `
+            <label class="q-opt q-opt-rich">
+              <input type="radio" name="q-find-answer" value="${esc(opt)}"${locked ? ' disabled' : ''}>
+              <span class="q-opt-body"><span>${labelFor(opt)}</span></span>
+            </label>`).join('')}
+        </div>`;
+}
+
+/**
  * The participant's Find task: read the answer, pick one, then point at what supports it.
  *
- * Two stages, two timers, and no way past either without answering — see the header of
- * app/find_task.js for why both of those matter.
+ * Up to three stages, and V2 can be told to ask for only the first of them — see the Study settings
+ * tab in Admin, and window.StudySession.studyFlags for why the switches are read once at the start
+ * of a run rather than per task. V1's protocol is fixed: its data is already collected, and a flag
+ * that reached it would change what its rows mean.
+ *
+ * THE TIMER IS A HARD CUTOFF IN V2. app/instrument.js explains why the countdown was built soft;
+ * that is still true of V1 and of the Guide instrument, which is why the cutoff lives here rather
+ * than in TaskTimer. At 00:00 the participant is pushed back to the verdict and given
+ * VERDICT_GRACE_MS to give one; a task that runs those out is submitted with no verdict at all,
+ * which is a third outcome and is stored as one.
+ *
+ * AND THE VERDICT IS LOCKED FOR THE FIRST TEN SECONDS. Yes/No is one click away from the moment the
+ * task opens, and a participant who wants to be finished can answer before the page has finished
+ * rendering — producing a row that looks like a judgment and is a coin flip. The lock costs an
+ * honest participant ten seconds they were going to spend reading anyway.
  */
 function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   const { idx, queue } = S.state;
-  const options = window.FindTask.answerOptions(task);
+  // Find V1 asks which answer was found. Find V2 asks for a verdict on the
+  // displayed agent claim, whose researcher-authored key may be true or false.
+  // The rest of the task — evidence picking and its separate timer — stays on
+  // the shared path so V2 differs only where the protocol intentionally differs.
+  const yesNo = task?.studyVersion === 'find-v2';
+  const flags = IS_FIND_V2 ? S.studyFlags() : { collectEvidence: true, collectFollowup: true };
+  const askEvidence = !!flags.collectEvidence;
+  const options = yesNo ? ['yes', 'no'] : window.FindTask.answerOptions(task);
   const hops = window.FindTask.evidencePrompts(task);
   const startedAt = Date.now();
   let choiceElapsed = null;
   let supportStartedAt = null;
   let answerTimer = null;
-  let supportTimer = null;
-  const picked = [null, null];   // one evidence selection per hop
+  let submitted = false;
+  let clocks = null;              // the opening lock and the hard cutoff — see verdictClocks
+  const picked = [null, null];    // one evidence selection per hop
 
   questionPane.innerHTML = `
-    <div class="q-head"><span class="q-title">🔍 Find the answer</span></div>
-    <div class="q-progress">${esc(progressText() || `Task ${idx + 1}/${queue.length}`)}</div>
+    <div class="q-head"><span class="q-title">🔍 ${yesNo ? 'Check the claim' : 'Find the answer'}</span></div>
+    <div class="q-progress${S.state.dryRun ? ' is-dry-run' : ''}">${esc(progressText() || `Task ${idx + 1}/${queue.length}`)}</div>
     <div class="q-body">
       <div class="q-task-card">
-        <div class="q-timers">
-          <div class="q-timer-chip">
-            <span class="q-timer-label" id="q-timer-label">Answer time</span>
-            <span class="q-timer" id="q-timer">00:00</span>
-          </div>
-        </div>
-        ${esc(task.question || '')}
+        ${window.TaskTimer.html()}
+        <div class="q-task-label">Question</div>
+        ${questionHtml(task.question)}
       </div>
+      ${IS_FIND_V2 ? conditionBannerHtml(arm, 'find') + groupChipHtml() : ''}
 
       ${answerCardHtml(answer, arm)}
 
       <div class="q-card">
         <div class="q-card-head"><span class="q-badge">Q1</span>
-          <p class="q-text">Select the answer you found:${window.QForm.requiredMark()}</p></div>
-        <div class="q-options" id="q-find-answer">
-          ${options.map((opt, i) => `
-            <label class="q-opt q-opt-rich">
-              <input type="radio" name="q-find-answer" value="${esc(opt)}">
-              <span class="q-opt-body"><span>${esc(opt)}</span></span>
-            </label>`).join('')}
-        </div>
+          <p class="q-text">${yesNo ? 'Does the agent’s answer correctly answer the question?' : 'Select the answer you found:'}${window.QForm.requiredMark()}</p></div>
+        ${verdictOptionsHtml(options, opt => (yesNo
+          ? `<b>${opt === 'yes' ? 'Yes' : 'No'}</b><small>${opt === 'yes'
+            ? 'The agent’s answer is correct.' : 'The agent’s answer is not correct.'}</small>`
+          : esc(opt)))}
       </div>
 
+      ${askEvidence ? `
       <div id="q-support-stage" hidden>
         ${hops.map((hop, i) => `
           <div class="q-card" id="q-hop-card-${i}">
@@ -564,12 +807,12 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
             <button class="q-btn" data-pick-hop="${i}">${hop.kind === 'image'
               ? '🖼 Pick evidence' : '✏️ Pick evidence'}</button>
           </div>`).join('')}
-      </div>
+      </div>` : ''}
 
       <div class="q-error-msg" id="q-error-msg" hidden></div>
       <div class="q-actions">
-        <button class="q-btn q-btn-primary" id="q-find-next">Next →</button>
-        <button class="q-btn q-btn-primary" id="q-find-submit" hidden>Submit →</button>
+        <button class="q-btn q-btn-primary" id="q-find-next"${askEvidence ? '' : ' hidden'}${IS_FIND_V2 ? ' disabled' : ''}>Next →</button>
+        <button class="q-btn q-btn-primary" id="q-find-submit"${askEvidence ? ' hidden' : ''}${IS_FIND_V2 ? ' disabled' : ''}>Submit →</button>
       </div>
     </div>`;
 
@@ -579,16 +822,35 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   const errorEl = $q('q-error-msg');
   const showError = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
   const clearError = () => { errorEl.hidden = true; };
+  const verdictValue = () => clocks.verdict();
 
+  clocks = verdictClocks({
+    pane: questionPane,
+    radioName: 'q-find-answer',
+    showError,
+    clearError,
+    liveButton: () => (askEvidence ? $q('q-find-next') : $q('q-find-submit')),
+    // The evidence stage is past the verdict, and the grace only guards the verdict.
+    onExpire: () => {
+      const stage = $q('q-support-stage');
+      if (stage) stage.hidden = true;
+    },
+    submit: (answerValue) => { void finish(answerValue); },
+  });
+
+  // One countdown for the whole task — see window.TaskTimer in app/instrument.js for the three-minute
+  // budget. It ticks four times a second rather than once because the opening lock and the grace are
+  // both counted in it, and a second's lag on either reads as a frozen page.
   answerTimer = setInterval(() => {
-    $q('q-timer').textContent = fmtClock(Date.now() - startedAt);
-  }, 1000);
+    const elapsed = Date.now() - startedAt;
+    window.TaskTimer.paint(questionPane, elapsed);
+    clocks.tick(elapsed);
+  }, 250);
 
   // The same contract mountInstrument returns, in the same slot: whatever is mounted in the question
   // pane knows how to stop itself, and detachQuestionPane is what asks it to.
   S.state.detachInstrument = () => {
     clearInterval(answerTimer);
-    clearInterval(supportTimer);
     stopPicking(document.getElementById('find-page'));
   };
 
@@ -667,68 +929,269 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
     };
   });
 
+  /** Q1, which both live buttons need and neither should word differently. */
+  const requireVerdict = () => {
+    const sel = questionPane.querySelector('input[name="q-find-answer"]:checked');
+    if (sel) return sel;
+    window.QForm.flagMissing([$q('q-find-answer')]);
+    showError(yesNo
+      ? 'Please answer the highlighted question: is the agent’s answer correct?'
+      : 'Please answer the highlighted question: which answer did you find?');
+    return null;
+  };
+
+  /**
+   * The one exit from this task. `answerValue` is null only for a timed-out verdict.
+   *
+   * An unanswered evidence hop is dropped rather than sent as a blank, and findScores stays null
+   * unless every hop was actually picked: a scored zero and a question that was never asked must not
+   * arrive in the dataset looking the same.
+   */
+  const finish = async (answerValue) => {
+    if (submitted) return;
+    submitted = true;
+    clearInterval(answerTimer);
+    stopPicking(frame());
+    // The deciding half of the split, for any route that did not bank it: a verdict given but never
+    // advanced past — the cutoff caught it, or there was no evidence stage to advance to. The cutoff
+    // is the last moment that choice can be said to have been made.
+    if (answerValue != null && choiceElapsed == null) choiceElapsed = Math.max(0, Date.now() - startedAt);
+    const complete = askEvidence && picked.every(Boolean);
+    await submitFindResult(task, {
+      answer: answerValue,
+      claimText: answer,
+      answerElapsed: Math.max(0, Date.now() - startedAt),
+      answerChoiceMs: choiceElapsed,
+      findSupportingMs: askEvidence && supportStartedAt != null
+        ? Math.max(0, Date.now() - supportStartedAt) : null,
+      evidenceResponses: askEvidence
+        ? picked.map((v, i) => (v ? { hop: i + 1, prompt: hops[i].prompt, kind: hops[i].kind, ...v } : null))
+          .filter(Boolean)
+        : [],
+      findScores: complete ? scoreFindEvidence(picked, groundTruth) : null,
+      interactionSummary: taskInteractionSummary(),
+    });
+  };
+
   $q('q-find-next').onclick = () => {
     window.QForm.clearMissing(questionPane);
-    const sel = questionPane.querySelector('input[name="q-find-answer"]:checked');
-    if (!sel) {
-      window.QForm.flagMissing([$q('q-find-answer')]);
-      return showError('Please answer the highlighted question: which answer did you find?');
-    }
+    if (!requireVerdict()) return;
     clearError();
 
     choiceElapsed = Math.max(0, Date.now() - startedAt);
     supportStartedAt = Date.now();
     $q('q-support-stage').hidden = false;
     $q('q-find-next').hidden = true;
-    $q('q-find-submit').hidden = false;
-    clearInterval(answerTimer); answerTimer = null;
-    $q('q-timer-label').textContent = 'Evidence time';
-    $q('q-timer').textContent = '00:00';
-    supportTimer = setInterval(() => {
-      $q('q-timer').textContent = fmtClock(Date.now() - supportStartedAt);
-    }, 1000);
+    const submit = $q('q-find-submit');
+    submit.hidden = false;
+    submit.disabled = false;
+    // The chip keeps counting down from startedAt: the evidence stage spends the same three
+    // minutes, and supportStartedAt still splits the two halves in the recorded timings.
     $q('q-support-stage').scrollIntoView({ block: 'nearest' });
   };
 
   $q('q-find-submit').onclick = async () => {
+    window.QForm.clearMissing(questionPane);
+    if (!requireVerdict()) return;
     // EVERY hop, not just one. A half-answered pair cannot be reconstructed afterwards, and a
     // participant who could submit with one blank would do it without noticing.
-    window.QForm.clearMissing(questionPane);
-    const blanks = picked.map((v, i) => (v ? null : $q(`q-hop-card-${i}`)));
-    const missing = picked.findIndex(v => !v);
-    if (missing >= 0) {
-      window.QForm.flagMissing(blanks);
-      return showError(`Please answer the highlighted question — ${hops[missing].kind === 'image'
-        ? 'pick the image in the page' : 'pick the passage in the page'}.`);
+    if (askEvidence) {
+      const blanks = picked.map((v, i) => (v ? null : $q(`q-hop-card-${i}`)));
+      const missing = picked.findIndex(v => !v);
+      if (missing >= 0) {
+        window.QForm.flagMissing(blanks);
+        return showError(`Please answer the highlighted question — ${hops[missing].kind === 'image'
+          ? 'pick the image in the page' : 'pick the passage in the page'}.`);
+      }
     }
     clearError();
+    clocks.settle();
+    await finish(verdictValue());
+  };
 
+  window.Tutorial?.onTaskRendered(task);
+}
+
+/**
+ * The V2 Guide task: read what the agent did, then say whether it finished the job.
+ *
+ * ONE QUESTION. V1's instrument (app/instrument.js) asks the verdict, then what kind of problem it
+ * was, then which error types at which steps — a taxonomy that takes most of the three minutes. V2
+ * asks the verdict and stops. Nothing here should grow back towards mountInstrument without the
+ * protocol changing first.
+ *
+ * The left pane leads with the reasoning trail and folds the journey away beneath it, which is the
+ * one place this differs from what V1 participants saw — see the layout options on mountStimulus.
+ */
+async function showGuideV2Task(task, arm) {
+  let record = null;
+  try {
+    record = await dataSource(task).getGuideTrajectory(task.id);
+  } catch (e) {
+    console.error('[study] could not load the guide trajectory:', e);
+  }
+
+  if (!record) {
+    // Skip rather than strand: one unreadable stimulus must not end the session, and a row that was
+    // never shown must not be recorded as an answer.
+    console.warn('[study] skipping a guide task that could not be loaded:', task.id);
+    S.state.idx++;
+    if (!window.STUDY_SOURCE) S.saveLocal();
+    return showTask();
+  }
+
+  const mount = renderGuideV2Shell();
+  window.Stimulus.mountStimulus(record, arm, mount, {
+    trailFirst: true,
+    journeyCollapsed: true,
+  });
+  renderGuideV2Questions(task, record, arm);
+}
+
+/** The question pane for a Guide task: the same two clocks as Find, and a single Yes/No. */
+function renderGuideV2Questions(task, record, arm) {
+  const { idx, queue } = S.state;
+  const goal = task?.goal || task?.question || record?.goal || record?.title || '';
+  const answerText = record?.arms?.[arm]?.answer || record?.arms?.grounding?.answer || '';
+  const startedAt = Date.now();
+  let answerTimer = null;
+  let submitted = false;
+  let clocks = null;
+
+  questionPane.innerHTML = `
+    <div class="q-head"><span class="q-title">📘 Review the task</span></div>
+    <div class="q-progress${S.state.dryRun ? ' is-dry-run' : ''}">${esc(progressText() || `Task ${idx + 1}/${queue.length}`)}</div>
+    <div class="q-body">
+      <div class="q-task-card">
+        ${window.TaskTimer.html()}
+        <div class="q-task-label">The task the agent was given</div>
+        ${questionHtml(goal)}
+      </div>
+      ${conditionBannerHtml(arm, 'guide')}${groupChipHtml()}
+
+      <div class="q-card">
+        <div class="q-card-head"><span class="q-badge">Q1</span>
+          <p class="q-text">Did the agent complete the task?${window.QForm.requiredMark()}</p></div>
+        ${verdictOptionsHtml(['yes', 'no'], opt => (opt === 'yes'
+          ? '<b>Yes</b><small>It completed the task.</small>'
+          : '<b>No</b><small>It did not complete the task.</small>'))}
+      </div>
+
+      <div class="q-error-msg" id="q-error-msg" hidden></div>
+      <div class="q-actions">
+        <button class="q-btn q-btn-primary" id="q-find-submit"${IS_FIND_V2 ? ' disabled' : ''}>Submit →</button>
+      </div>
+    </div>`;
+
+  const $q = (id) => questionPane.querySelector(`#${id}`);
+  const errorEl = $q('q-error-msg');
+  const showError = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
+  const clearError = () => { errorEl.hidden = true; };
+
+  const finish = async (answerValue) => {
+    if (submitted) return;
+    submitted = true;
     clearInterval(answerTimer);
-    clearInterval(supportTimer);
-    stopPicking(frame());
-
-    const sel = questionPane.querySelector('input[name="q-find-answer"]:checked');
-    await submitFindResult(task, {
-      answer: sel.value,
+    await submitGuideV2Result(task, {
+      answer: answerValue,
+      claimText: answerText,
       answerElapsed: Math.max(0, Date.now() - startedAt),
-      answerChoiceMs: choiceElapsed,
-      findSupportingMs: supportStartedAt == null ? null : Math.max(0, Date.now() - supportStartedAt),
-      evidenceResponses: picked.map((v, i) => ({ hop: i + 1, prompt: hops[i].prompt, kind: hops[i].kind, ...v })),
-      findScores: scoreFindEvidence(picked, groundTruth),
+      answerChoiceMs: answerValue == null ? null : Math.max(0, Date.now() - startedAt),
       interactionSummary: taskInteractionSummary(),
     });
   };
 
-  window.Tutorial?.onTaskRendered(task);
+  clocks = verdictClocks({
+    pane: questionPane,
+    radioName: 'q-find-answer',
+    showError,
+    clearError,
+    liveButton: () => $q('q-find-submit'),
+    submit: (answerValue) => { void finish(answerValue); },
+  });
+
+  answerTimer = setInterval(() => {
+    const elapsed = Date.now() - startedAt;
+    window.TaskTimer.paint(questionPane, elapsed);
+    clocks.tick(elapsed);
+  }, 250);
+
+  S.state.detachInstrument = () => clearInterval(answerTimer);
+
+  $q('q-find-submit').onclick = async () => {
+    window.QForm.clearMissing(questionPane);
+    const sel = questionPane.querySelector('input[name="q-find-answer"]:checked');
+    if (!sel) {
+      window.QForm.flagMissing([$q('q-find-answer')]);
+      return showError('Please answer the highlighted question: did the agent complete the task?');
+    }
+    clearError();
+    clocks.settle();
+    await finish(sel.value);
+  };
+}
+
+/** Record the Guide result, then move on. The follow-up is the same one Find asks. */
+async function submitGuideV2Result(task, payload) {
+  const askFollowup = !!S.studyFlags().collectFollowup;
+
+  const finishTask = async (confidence, helpfulness, notes) => {
+    const row = S.buildGuideResultRow({ task, payload, confidence, helpfulness, notes });
+    S.state.results.push(row);
+    S.state.idx++;
+    if (!window.STUDY_SOURCE && !S.state.adminReview) S.saveLocal();
+    await saveStudyResult(row, { guide: true });
+    showTask();
+  };
+
+  if (!askFollowup) return finishTask(null, null, null);
+
+  questionPane.innerHTML = postTaskQuestionsHtml('q-guide-done');
+  document.getElementById('q-guide-done').onclick = async () => {
+    const done = document.getElementById('q-guide-done');
+    if (done.dataset.submitted === 'true') return;
+    const conf = questionPane.querySelector('input[name="q-conf"]:checked');
+    const help = questionPane.querySelector('input[name="q-help"]:checked');
+    const err = document.getElementById('q-error-msg');
+    if (!conf || !help) {
+      window.QForm.clearMissing(questionPane);
+      window.QForm.flagMissing([conf ? null : document.getElementById('q-conf'),
+        help ? null : document.getElementById('q-help')]);
+      err.textContent = 'Please answer the highlighted question(s).';
+      err.hidden = false;
+      return;
+    }
+    done.dataset.submitted = 'true';
+    done.disabled = true;
+    await finishTask(conf.value, help.value, postTaskNotes());
+  };
 }
 
 function normalizeEvidenceText(value) {
   return cleanEvidenceSentenceText(value).toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * A sentence with its reference markers taken off, so a pick and the key compare as prose.
+ *
+ * WIKIPEDIA'S MARKERS COME IN MORE THAN ONE SHAPE. `[1]` and `[nb1]` are the obvious ones, but the
+ * footnote form is `[nb 1]` and `[note 3]` — a SPACE between the label and the number — and missing
+ * that space cost a whole task: MUFC-V1's accepted span was transcribed clean while the page hands
+ * back "…in 2025[nb 1] – the club was served…", so the two strings differed by four characters in
+ * the middle and the substring test in evidenceMatches() could not see past it. Every participant
+ * who picked the right sentence was scored wrong.
+ *
+ * The rule stops at markers that CONTAIN A NUMBER. Stripping bare bracketed words as well would
+ * also eat editorial insertions that are part of the sentence — "‘cleaner energy technology or
+ * [build] spaceships’" is a real accepted span in this study — and those carry meaning.
+ *
+ * Both sides of every comparison run through here (groundTruthText and pickedEvidenceText both go
+ * via normalizeEvidenceText), so loosening this can only ever make a pick and its key agree where
+ * they already said the same thing.
+ */
 function cleanEvidenceSentenceText(value) {
   return String(value || '')
-    .replace(/\[\s*(?:[a-z]+)?\d+\s*\]/gi, ' ')
+    .replace(/\[\s*(?:[a-z]+\s*)?\d+\s*\]/gi, ' ')
     .replace(/^\s*\d+\]\s*/, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -775,12 +1238,6 @@ function scoreFindEvidence(picked, groundTruth) {
     exact: correct === expected.length && pickedCount === expected.length,
     hopExact,
   };
-}
-
-/** mm:ss, matching the extension's clock. */
-function fmtClock(ms) {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
 /**
@@ -1535,6 +1992,96 @@ function guideErrorLabel(id) {
   return t?.label || id || 'Unknown error';
 }
 
+/**
+ * THE REFERENCE PANEL — every citation in this answer, whether it actually finds anything in the
+ * page, and one click to re-link the ones that do not.
+ *
+ * The old workflow for checking grounding was to click each chip in turn and watch what lit up in
+ * the snapshot; a reference that silently resolved to nothing looked identical to one nobody had
+ * tried yet. Worse, a reference that resolved to the WRONG paragraph looked exactly like a correct
+ * one. This lists them all with the tier that answered, so "solid", "probably fine" and "guessed" are
+ * distinguishable without clicking anything.
+ *
+ * V2 ONLY. V1's grounding is reviewed through publish.mjs and its material is already collected;
+ * pointing a live editor at it would let a re-link change what its recorded rows meant.
+ */
+const LINK_TIERS = {
+  exact: { label: 'Exact', cls: 'is-exact', note: 'structural match, text unchanged' },
+  moved: { label: 'Moved', cls: 'is-moved', note: 'page edited around it; quote still inside' },
+  text: { label: 'By text', cls: 'is-text', note: 'matched the paragraph text, not a saved position' },
+  search: { label: 'Guessed', cls: 'is-search', note: 'found only by hunting for the phrase' },
+  none: { label: 'Not found', cls: 'is-none', note: 'nothing in the page matched — re-link it' },
+};
+
+/** How each citation in this answer currently resolves against the mounted snapshot. */
+function citationLinkReport(doc, answer, anchors) {
+  const cites = parseFindCitations(answer);
+  const list = Array.isArray(anchors) ? anchors.slice() : [];
+  return cites.map((cite, i) => {
+    const key = citationAnchorKey(cite.index, cite.text);
+    const at = list.findIndex(a => citationAnchorKey(a?.index, a?.quote) === key);
+    const found = at >= 0 ? list.splice(at, 1)[0] : null;
+    let tier = 'none';
+    if (doc) {
+      if (found) tier = resolveCitationAnchorTiered(doc, found).tier;
+      if (tier === 'none' && findElementContaining(doc, normText(cite.text))) tier = 'search';
+    }
+    return { n: i + 1, index: cite.index, quote: cite.text, anchored: !!found, tier };
+  });
+}
+
+function referencePanelHtml(report, orphans) {
+  return `
+    <div class="admin-links">
+      <div class="admin-grounding-title">References in this answer</div>
+      <p class="q-sub">Click <b>Re-link</b>, then click the exact sentence or caption in the page on
+        the left. A reference saved this way records where the passage <em>is</em>, not just what it
+        says, so it keeps resolving when the wording around it shifts.</p>
+      ${report.length ? `<ol class="admin-link-list">${report.map(item => {
+        const tier = LINK_TIERS[item.tier] || LINK_TIERS.none;
+        return `
+        <li class="admin-link-row" data-link-n="${item.n}">
+          <div class="admin-link-main">
+            <span class="admin-link-n">[${item.n}]</span>
+            <span class="admin-link-quote">${esc(item.quote)}</span>
+          </div>
+          <div class="admin-link-meta">
+            <span class="admin-link-tier ${tier.cls}" title="${esc(tier.note)}">${tier.label}</span>
+            ${item.anchored ? '' : '<span class="admin-link-tier is-none">No saved position</span>'}
+            <button type="button" class="q-btn admin-link-pick" data-relink="${item.n - 1}">Re-link</button>
+            <button type="button" class="q-btn admin-link-show" data-showlink="${item.n - 1}">Show</button>
+          </div>
+        </li>`;
+      }).join('')}</ol>` : '<p class="q-sub">This answer has no citation markers.</p>'}
+      ${orphans.length ? `<p class="admin-link-orphans"><b>${orphans.length} saved reference${
+        orphans.length === 1 ? '' : 's'} no longer match any citation.</b> This happens when an
+        answer's wording is edited without re-picking — the reference is kept, not deleted, so it can
+        be re-attached rather than quietly lost.</p>` : ''}
+      <div class="q-actions">
+        <button type="button" class="q-btn q-btn-primary" id="admin-links-save" disabled>Save references</button>
+        <a class="q-btn" href="index.html">Back to Admin</a>
+      </div>
+      <div class="admin-grounding-status" id="admin-links-status"></div>
+    </div>`;
+}
+
+/**
+ * Run `fn` once the snapshot frame has a readable document.
+ *
+ * mountSnapshot writes through srcdoc, so the frame is same-origin but not immediately populated.
+ * Polling briefly beats a load listener here because the frame may already be loaded by the time
+ * this is called, in which case the event never fires again and the panel would report every
+ * reference as missing forever.
+ */
+function whenSnapshotReady(fn, tries = 40) {
+  const frame = document.getElementById('find-page');
+  let doc = null;
+  try { doc = frame?.contentDocument; } catch (e) { doc = null; }
+  if (doc?.body?.childElementCount) return fn();
+  if (tries <= 0) return fn();
+  setTimeout(() => whenSnapshotReady(fn, tries - 1), 100);
+}
+
 function adminGroundingReviewHtml(task, canned, arm, cites, hasPage) {
   if (arm === 'nongrounding') return '';
   const answer = canned?.answer_display || canned?.answer_raw || '';
@@ -1574,6 +2121,125 @@ function adminGroundingReviewHtml(task, canned, arm, cites, hasPage) {
         <button type="button" class="q-btn" id="admin-download-grounding" disabled>Download patch</button>
       </div>
     </div>`;
+}
+
+/**
+ * The reference panel, wired up.
+ *
+ * SAVING IS THE CAREFUL PART. A re-link must change one anchor and nothing else, so:
+ *
+ *   • the answer text is never rewritten. Re-linking says where a phrase LIVES IN THE PAGE, not what
+ *     the agent said — touching the wording here would silently alter the thing participants judge.
+ *   • the anchor is matched by `index:quote`, replaced in place if it exists and appended if not,
+ *     so re-linking twice does not leave two anchors racing for the same citation.
+ *   • ORPHANS ARE KEPT. An anchor whose citation no longer appears is left in the array rather than
+ *     pruned. Pruning is what made this feel unreliable: edit an answer's wording in the claim
+ *     editor and its references were dropped on the next save, with nothing said.
+ *   • only this ONE VARIANT's citation_anchors are written. The other three are re-sent exactly as
+ *     they were loaded, because the save RPC takes a whole claim and a partial one would blank them.
+ */
+function bindReferencePanel(task, canned, arm) {
+  const list = document.getElementById('admin-links-save')?.closest('.admin-links');
+  if (!list) return;
+  const status = document.getElementById('admin-links-status');
+  const save = document.getElementById('admin-links-save');
+  const frame = () => document.getElementById('find-page');
+  const answer = canned?.answer_display || canned?.answer_raw || '';
+  let anchors = Array.isArray(canned?.citation_anchors) ? canned.citation_anchors.slice() : [];
+  let dirty = false;
+
+  const setStatus = (msg, good = false) => {
+    if (!status) return;
+    status.textContent = msg;
+    status.classList.toggle('is-good', !!good);
+  };
+
+  const repaint = () => {
+    let doc = null;
+    try { doc = frame()?.contentDocument; } catch (e) { doc = null; }
+    const cites = parseFindCitations(answer);
+    const report = citationLinkReport(doc, answer, anchors);
+    const keys = new Set(cites.map(c => citationAnchorKey(c.index, c.text)));
+    const orphans = anchors.filter(a => !keys.has(citationAnchorKey(a?.index, a?.quote)));
+    const holder = document.createElement('div');
+    holder.innerHTML = referencePanelHtml(report, orphans);
+    list.replaceWith(holder.firstElementChild);
+    bindReferencePanel(task, { ...canned, citation_anchors: anchors }, arm);
+    if (dirty) {
+      const again = document.getElementById('admin-links-save');
+      if (again) again.disabled = false;
+      setStatus('Unsaved re-links. Save references to write them.', true);
+    }
+  };
+
+  list.querySelectorAll('[data-relink]').forEach(button => {
+    button.onclick = () => {
+      const i = Number(button.dataset.relink);
+      const cite = parseFindCitations(answer)[i];
+      if (!cite) return;
+      list.querySelectorAll('[data-relink]').forEach(b => b.classList.remove('is-picking'));
+      button.classList.add('is-picking');
+      setStatus(`Click the passage in the page that supports [${i + 1}] “${cite.text.slice(0, 70)}”.`);
+      startAdminTextSelection(frame(), ({ anchor: picked }) => {
+        // The anchor keeps the citation's OWN quote, not the words that happened to be selected: the
+        // quote is what the marker says and what the chip shows, while the selection only says where
+        // to look. Letting the selection overwrite the quote would rewrite the answer by side effect.
+        const next = { ...picked, index: cite.index, quote: cite.text };
+        const key = citationAnchorKey(cite.index, cite.text);
+        const at = anchors.findIndex(a => citationAnchorKey(a?.index, a?.quote) === key);
+        if (at >= 0) anchors[at] = next; else anchors.push(next);
+        dirty = true;
+        button.classList.remove('is-picking');
+        repaint();
+      });
+    };
+  });
+
+  list.querySelectorAll('[data-showlink]').forEach(button => {
+    button.onclick = () => {
+      const i = Number(button.dataset.showlink);
+      const chip = document.querySelector(`.find-cite[data-cite-n="${i + 1}"]`);
+      if (chip) chip.click();
+      else setStatus('That citation has no chip in the answer above.');
+    };
+  });
+
+  if (save) {
+    save.onclick = async () => {
+      save.disabled = true;
+      setStatus('Saving references…');
+      try {
+        await saveVariantAnchors(task, arm, anchors);
+        dirty = false;
+        setStatus('References saved.', true);
+      } catch (e) {
+        save.disabled = false;
+        setStatus(`Not saved: ${e?.message || e}`);
+      }
+    };
+  }
+}
+
+/**
+ * Write one variant's citation_anchors back.
+ *
+ * Through a dedicated RPC that touches only that one path in the jsonb — not through saveClaim,
+ * which would read and rewrite the claim's eight-megabyte captured page to change a few hundred
+ * bytes, and would restore the question and all four answers from whatever copy this tab loaded
+ * however long ago.
+ *
+ * The password comes from this tab's sessionStorage, which is why the editor navigates here in the
+ * SAME TAB rather than opening a new one: sessionStorage survives a same-tab navigation, so the
+ * researcher is not asked to log in twice to finish one edit.
+ */
+async function saveVariantAnchors(task, arm, anchors) {
+  const key = window.FindV2Variants.KEYS.includes(S.state.variantKey)
+    ? S.state.variantKey
+    : window.FindV2Variants.variantKey(task?.claimCorrect !== false, arm);
+  let password = '';
+  try { password = sessionStorage.getItem('pageguide_find_v2_admin_password') || ''; } catch (e) { password = ''; }
+  if (!password) throw new Error('This tab has no admin password. Open Admin on the welcome screen, then use “Check & fix references”.');
+  await DB.saveVariantAnchors(password, task.id, key, anchors);
 }
 
 function bindAdminGroundingReview(task, canned, arm, cites) {
@@ -1838,9 +2504,64 @@ function adminRangeElement(range) {
   return el?.closest?.('p, li, figcaption, blockquote, h1, h2, h3, td, th, span, a') || el;
 }
 
+/**
+ * WHERE AN ELEMENT IS, structurally: its index among its parent's children, up to <body>.
+ *
+ * The snapshot is a fixed document — captured once, stored once, served byte-identical to every
+ * participant — so a structural address computed when a researcher clicks a paragraph lands on that
+ * same paragraph for everybody afterwards. That is a far stronger guarantee than the text
+ * comparison this used to rely on alone, which had to hold 400 characters equal across a
+ * re-serialization to find anything at all.
+ *
+ * It is stored ALONGSIDE the text, never instead of it: a path is exact until the page is
+ * re-captured and then it is worthless, whereas text survives a re-capture and is merely fuzzy. Each
+ * covers the other's failure, which is why resolveCitationAnchor tries them in that order.
+ */
+function elementPath(el) {
+  const path = [];
+  let node = el;
+  while (node && node.nodeType === 1 && node.tagName !== 'BODY') {
+    const parent = node.parentElement;
+    if (!parent) break;
+    path.unshift(Array.prototype.indexOf.call(parent.children, node));
+    node = parent;
+  }
+  return path;
+}
+
+function elementAtPath(doc, path) {
+  if (!Array.isArray(path) || !path.length) return null;
+  let node = doc.body;
+  for (const i of path) {
+    const next = node?.children?.[i];
+    if (!next) return null;
+    node = next;
+  }
+  return node || null;
+}
+
+/**
+ * A cheap fingerprint of the block's text, so a path can be TRUSTED rather than merely followed.
+ *
+ * Without it a stale path resolves to whatever now sits at that position and marks it confidently —
+ * the worst outcome available, because a wrong highlight looks exactly like a right one. With it,
+ * a path that lands somewhere the text no longer matches is demoted rather than believed.
+ */
+function textFingerprint(value) {
+  const text = normText(value);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `${text.length.toString(36)}.${h.toString(36)}`;
+}
+
 function buildCitationAnchor(el, index, quote) {
   const tag = el.tagName;
   const text = anchorTextOf(el);
+  const blockText = normText(el.textContent);
+  const needle = normText(quote);
   return {
     index,
     quote,
@@ -1848,6 +2569,13 @@ function buildCitationAnchor(el, index, quote) {
     text,
     ordinal: citationAnchorOrdinal(el, tag, text),
     truncated: semanticTextOf(el).length > PG_ANCHOR_TEXT_MAX,
+    // The structural address, and enough to tell whether it still points at what it pointed at.
+    path: elementPath(el),
+    fingerprint: textFingerprint(el.textContent),
+    // Where the phrase sits inside the block. Recorded so a re-link knows which occurrence was
+    // meant when the same words appear twice in one paragraph — a substring search cannot.
+    offset: needle ? blockText.indexOf(needle) : -1,
+    length: needle.length,
   };
 }
 
@@ -2038,8 +2766,31 @@ function postTaskNotes() {
   return value ? value.slice(0, 2000) : null;
 }
 
-/** Record the Find result, then move on. Mirrors the guide half's post-task questions. */
+/**
+ * Record the Find result, then move on. Mirrors the guide half's post-task questions.
+ *
+ * V2 can be told not to ask them at all (Admin → Study settings), in which case the three columns
+ * they fill are stored null and the run goes straight to the next claim. Both routes end in the same
+ * finishTask, so the practice-task branch and the double-submit guard cannot drift apart.
+ */
 async function submitFindResult(task, payload) {
+  const askFollowup = IS_FIND_V2 ? !!S.studyFlags().collectFollowup : true;
+
+  const finishTask = async (confidence, helpfulness, notes) => {
+    // A practice task is answered in full — including these two, which are asked after every real
+    // task — and then goes nowhere: no row, no push, no idx++.
+    if (S.state.tutorial?.active) return window.Tutorial.finishPracticeTask(task, payload);
+
+    const row = S.buildFindResultRow({ task, payload, confidence, helpfulness, notes });
+    S.state.results.push(row);
+    S.state.idx++;
+    if (!window.STUDY_SOURCE && !S.state.adminReview) S.saveLocal();
+    await saveStudyResult(row);
+    showTask();
+  };
+
+  if (!askFollowup) return finishTask(null, null, null);
+
   questionPane.innerHTML = postTaskQuestionsHtml('q-find-done');
 
   document.getElementById('q-find-done').onclick = async () => {
@@ -2058,32 +2809,31 @@ async function submitFindResult(task, payload) {
     }
     done.dataset.submitted = 'true';
     done.disabled = true;
-
-    // A practice task is answered in full — including these two, which are asked after every real
-    // task — and then goes nowhere: no row, no push, no idx++.
-    if (S.state.tutorial?.active) return window.Tutorial.finishPracticeTask(task, payload);
-
-    const row = S.buildFindResultRow({
-      task, payload, confidence: conf.value, helpfulness: help.value, notes: postTaskNotes(),
-    });
-    S.state.results.push(row);
-    S.state.idx++;
-    if (!window.STUDY_SOURCE && !S.state.adminReview) S.saveLocal();
-    await saveStudyResult(row);
-    showTask();
+    await finishTask(conf.value, help.value, postTaskNotes());
   };
 }
 
-const RESULT_BACKUP_KEY = 'pageguide_web_pending_results';
+const RESULT_BACKUP_KEY = IS_FIND_V2
+  ? 'pageguide_find_v2_pending_results'
+  : 'pageguide_web_pending_results';
 
-async function saveStudyResult(row) {
+async function saveStudyResult(row, { guide = false } = {}) {
   // Belt and braces on the tutorial: the practice paths already return before building a row, and a
   // practice answer that reached study_task_results_v2 would be indistinguishable from a real one.
-  if (window.STUDY_SOURCE || S.state.adminReview || S.state.tutorial?.active) {
+  //
+  // A TEST RUN is the same argument made about a whole session. It answers real tasks on the real
+  // screens, so its rows are perfectly well-formed — which is exactly why they must not be written:
+  // nothing in the row would say it came from a rehearsal. Logged instead, so a researcher checking
+  // that the right thing WOULD have been saved can still see it.
+  if (window.STUDY_SOURCE || S.state.adminReview || S.state.dryRun || S.state.tutorial?.active) {
+    if (S.state.dryRun) console.log('[test run] not saved:', row);
     return { ok: true, skipped: true };
   }
   try {
-    const saved = await DB.insertStudyResult(row);
+    // Find and Guide results are separate tables with separate shapes. Routed on an explicit flag
+    // rather than sniffed from the row's columns: a misrouted row inserts cleanly into the wrong
+    // table and is only noticed at analysis.
+    const saved = guide ? await DB.insertGuideResult(row) : await DB.insertStudyResult(row);
     if (!saved) throw new Error('Supabase insert returned no confirmation.');
     console.info('[study] task result saved', {
       session_id: row.session_id,
@@ -2201,21 +2951,11 @@ function bindFindAnswerChips(canned, arm, cites) {
  *   [ev:key]           saved visual evidence, matched against canned.evidence by key.
  */
 function parseFindCitations(answer) {
-  const out = [];
-  String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (m, index, text) => {
-    out.push({ index: Number(index), text });
-    return m;
-  });
-  return out;
+  return window.FindCitations.parse(answer);
 }
 
 function linkedFindEvidence(answer, evidence) {
-  const linked = new Set();
-  String(answer || '').replace(/\[ev:([^\]]+)\]/g, (m, key) => {
-    const clean = String(key || '').trim();
-    if (clean) linked.add(clean);
-    return m;
-  });
+  const linked = new Set(window.FindCitations.evidenceKeys(answer));
   if (!linked.size) return [];
   return (Array.isArray(evidence) ? evidence : [])
     .filter(item => linked.has(String(item?.key || '').trim()));
@@ -2230,39 +2970,8 @@ function linkedFindEvidence(answer, evidence) {
  * participant that something was cited while giving them no way to check it.
  */
 function renderFindAnswer(answer, arm) {
-  const raw = String(answer || '');
-  if (arm === 'nongrounding') {
-    return renderMarkdown(esc(window.stripNonGroundingMarkers
-      ? window.stripNonGroundingMarkers(raw)
-      : raw.replace(/\[\d+:"[^"]*"\]/g, '').replace(/\s*\[ev:[^\]]+\]/g, '').replace(/\s+([.,;:!?])/g, '$1')));
-  }
-
-  let n = 0;
-  let e = 0;
-  const withChips = esc(raw)
-    // The extension's own markup (parseCitations, sidepanel/panel.js): the cited PHRASE, then a
-    // superscript index. The phrase is hidden until the answer is expanded — that is what clicking
-    // an answer does in the panel, and it is why a citation reads as "[1]" until asked.
-    // esc() has already turned the quotes into &quot;, so the pattern matches the escaped form.
-    .replace(/\[(\d+):&quot;([\s\S]*?)&quot;\]/g, (m, index, text) => {
-      n++;
-      // ON ONE LINE, deliberately. renderStudyMarkdown is line-based and joins the lines of a
-      // paragraph with <br>; a newline inside this tag puts that <br> inside it, and its `>` closes
-      // the span early — leaving `title="Show this on the page"` on the page as prose. Same for the
-      // evidence button below. Keep every generated tag that passes through the renderer unbroken.
-      return `<span class="find-cite" data-cite-text="${text}" data-cite-n="${n}" title="Show this on the page"><span class="citation-text">${text}</span><sup class="citation-index">[${n}]</sup></span>`;
-    })
-    // [ev:key] is SAVED VISUAL EVIDENCE: a crop of the region the claim rests on, taken at record
-    // time. Its `note` is a description rather than a quotation, so it cannot be found in the page
-    // by text — the crop itself is the evidence, and opening it is the only thing that reliably
-    // shows what was meant. Rendered as its own numbered series, so it is not mistaken for a
-    // citation into the page.
-    .replace(/\[ev:([^\]]+)\]/g, (m, key) => {
-      e++;
-      return `<button type="button" class="find-ev" data-ev-key="${key}" title="Open the saved evidence for this claim">📎<sup class="citation-index">[E${e}]</sup></button>`;
-    });
-
-  return renderMarkdown(withChips);
+  // One renderer, shared with the Admin editor's preview — see app/find_citations.js.
+  return window.FindCitations.renderAnswer(answer, arm);
 }
 
 /** The shared renderer (app/markdown.js) — one renderer for the stimulus, Find and the editor. */
@@ -2919,22 +3628,61 @@ function citationEvidenceElement(el, quote) {
  * caller falls through to text search rather than marking nothing.
  */
 function resolveCitationAnchor(doc, anchor) {
-  const want = String(anchor.text || '');
-  if (!want) return null;
-  const all = doc.getElementsByTagName(anchor.tag);
-  const matches = [];
-  for (let i = 0; i < all.length; i++) {
-    const t = anchorTextOf(all[i]);
-    // A truncated locator kept only the first PG_ANCHOR_TEXT_MAX characters, so prefix is the only
-    // comparison it supports; an untruncated one must match whole, or "El pedante" would match the
-    // caption that merely starts with it.
-    if (anchor.truncated ? t.startsWith(want) : t === want) matches.push(all[i]);
+  return resolveCitationAnchorTiered(doc, anchor).el;
+}
+
+/**
+ * The same resolution, saying WHICH tier answered.
+ *
+ * The tier is not decoration. "This citation resolves, and it resolves exactly" and "this citation
+ * resolves, by guessing from a phrase" are different facts about the study's material, and only the
+ * first is worth trusting. The reference panel in review mode prints it so a researcher can see at a
+ * glance which links are solid and which want re-picking — previously the only way to find a bad
+ * link was to click every chip and watch what lit up.
+ *
+ *   exact   — the structural path landed and the text there is unchanged. Believe it.
+ *   moved   — the path landed somewhere the text differs, but the quote is still inside it. The
+ *             page was edited around it; still almost certainly right.
+ *   text    — no usable path; found by matching the whole block's text and counting ordinals.
+ *             This is what every anchor written before paths existed has to use.
+ *   search  — found only by hunting for the phrase. Bounded, and the weakest tier.
+ *   none    — nothing matched. Better than marking the wrong thing.
+ */
+function resolveCitationAnchorTiered(doc, anchor) {
+  const quote = normText(anchor?.quote || '');
+
+  // 1/2. The structural address, verified against the fingerprint rather than trusted blindly.
+  const byPath = elementAtPath(doc, anchor?.path);
+  if (byPath) {
+    const same = anchor.fingerprint && textFingerprint(byPath.textContent) === anchor.fingerprint;
+    if (same) return { el: citationEvidenceElement(byPath, quote), tier: 'exact' };
+    if (quote && normText(byPath.textContent).includes(quote)) {
+      return { el: citationEvidenceElement(byPath, quote), tier: 'moved' };
+    }
   }
-  if (!matches.length) return null;
-  // Out of range means the snapshot and the recording disagree about the page — better to fall
-  // through to text search than to mark a confidently wrong element.
-  const el = matches[anchor.ordinal] || (matches.length === 1 ? matches[0] : null);
-  return el ? citationEvidenceElement(el, anchor?.quote || '') : null;
+
+  // 3. The original comparison. Both this and the text search below flatten textContent rather than
+  // walking text nodes, because "<i>Foundation</i> series" has to match the quote "Foundation
+  // series", which no text-node search can do; and the ordinal is what separates an inner phrase
+  // from the caption that contains it, which no substring search can do.
+  const want = String(anchor?.text || '');
+  if (want && anchor?.tag) {
+    const all = doc.getElementsByTagName(anchor.tag);
+    const matches = [];
+    for (let i = 0; i < all.length; i++) {
+      const t = anchorTextOf(all[i]);
+      // A truncated locator kept only the first PG_ANCHOR_TEXT_MAX characters, so prefix is the only
+      // comparison it supports; an untruncated one must match whole, or "El pedante" would match the
+      // caption that merely starts with it.
+      if (anchor.truncated ? t.startsWith(want) : t === want) matches.push(all[i]);
+    }
+    // Out of range means the snapshot and the recording disagree about the page — fall through to
+    // the phrase search rather than marking a confidently wrong element.
+    const el = matches[anchor.ordinal] || (matches.length === 1 ? matches[0] : null);
+    if (el) return { el: citationEvidenceElement(el, quote), tier: 'text' };
+  }
+
+  return { el: null, tier: 'none' };
 }
 
 /**
@@ -3243,11 +3991,77 @@ function downloadJSON(value, filename) {
   URL.revokeObjectURL(a.href);
 }
 
+// ── Stepping through a test run ──────────────────────────────────────────────────────────────────
+// WHY THIS IS NOT THE ADMIN REVIEW NAV. Review mode renders its Prev/Next inside the question pane,
+// which it owns — it draws no questions and no timer, so there is room. A test run is the real
+// study: the pane belongs to the instrument, is rebuilt on every task, and a button inside it would
+// be wiped by the next render and would sit among the questions being rehearsed. So this is a bar
+// of its own, fixed and outside both panes, exactly like the walkthrough's.
+//
+// GOING BACK THROWS THE ANSWER AWAY. Nothing here is written, so the only copy of a test answer is
+// the row in `results`, and re-answering task 3 after stepping back to it would leave two rows for
+// task 3 in the download. Truncating to the task being returned to keeps `results` reading as what
+// it is: the answers to tasks 1..idx.
+
+let dryNav = null;
+
+function dryRunNavLabel() {
+  const { queue, idx } = S.state;
+  const total = Array.isArray(queue) ? queue.length : 0;
+  if (idx >= total) return 'Test run · finished';
+  const task = queue[idx];
+  const type = task?.taskType === 'find' ? 'Find' : 'Guide';
+  const arm = S.taskArm ? S.taskArm(task) : '';
+  return `Test run · Task ${idx + 1} of ${total} · ${type}${arm ? ` · ${arm}` : ''}`;
+}
+
+function renderDryRunNav() {
+  const { queue, idx } = S.state;
+  const total = Array.isArray(queue) ? queue.length : 0;
+  // Not during the walkthrough: it has a bar of its own, in the same place, saying where in the
+  // practice you are. Two of them would disagree about what "Task 1" means.
+  if (!S.state.dryRun || S.state.tutorial?.active || !total) return removeDryRunNav();
+  if (!dryNav) {
+    dryNav = document.createElement('div');
+    dryNav.className = 'dry-nav';
+    document.body.appendChild(dryNav);
+  }
+  dryNav.innerHTML = `
+    <span class="dry-nav-dot" aria-hidden="true"></span>
+    <span class="dry-nav-label">${esc(dryRunNavLabel())}</span>
+    <button type="button" class="dry-nav-btn" id="dry-prev" title="The task before this one"
+      ${idx === 0 ? 'disabled' : ''}>‹</button>
+    <button type="button" class="dry-nav-btn" id="dry-next" title="Skip to the next task"
+      ${idx >= total ? 'disabled' : ''}>›</button>`;
+  document.getElementById('dry-prev').onclick = () => goDryRunTask(S.state.idx - 1);
+  document.getElementById('dry-next').onclick = () => goDryRunTask(S.state.idx + 1);
+}
+
+function goDryRunTask(next) {
+  const total = (S.state.queue || []).length;
+  const idx = Math.max(0, Math.min(total, next));
+  S.state.idx = idx;
+  // Forward past an unanswered task leaves `results` alone — it is already shorter than idx, and a
+  // skipped task simply has no row. Back trims, so the answer being redone is not counted twice.
+  if (S.state.results.length > idx) S.state.results = S.state.results.slice(0, idx);
+  S.saveLocal();
+  showTask();
+}
+
+function removeDryRunNav() {
+  dryNav?.remove();
+  dryNav = null;
+}
+
 /** Prev/Next/Exit, for paging through the material without answering anything. */
 function adminNavHtml() {
   if (!S.state.adminReview) return '';
   const queue = Array.isArray(S.state.queue) ? S.state.queue : [];
+  const here = queue[S.state.idx];
   return `
+    ${here && here.inStudy !== true ? `<p class="admin-held-out">Held out of the study —
+      no participant is dealt this one. Reviewing it changes nothing; use <b>Edit Find task</b> or
+      <b>Edit trajectory</b> to put it back.</p>` : ''}
     <label class="admin-task-jump">
       <span>Jump to task</span>
       <select id="admin-task-jump">
@@ -3279,7 +4093,7 @@ function bindAdminNav() {
   };
   if (prev) prev.onclick = () => { S.state.idx = Math.max(0, S.state.idx - 1); S.saveReview(); showTask(); };
   if (next) next.onclick = () => { S.state.idx++; S.saveReview(); showTask(); };
-  if (quit) quit.onclick = () => { S.clearReview(); location.href = 'index.html'; };
+  if (quit) quit.onclick = () => { S.clearReview(); location.href = 'find-v1.html'; };
 }
 
 /**
@@ -3296,7 +4110,10 @@ function adminTaskLabel(task, i, total) {
   const type = task?.taskType === 'find' ? 'Find' : 'Guide';
   const question = String(task?.question || task?.goal || task?.title || '').replace(/\s+/g, ' ').trim();
   const short = question.length > 70 ? `${question.slice(0, 69)}…` : question;
-  return `${i + 1}/${total} · ${type} · ${id}${short ? ` — ${short}` : ''}`;
+  // Which pool it came from, in the dropdown itself: a review queue can now mix live and held-out
+  // stimuli, and once the walkthrough starts the two are indistinguishable.
+  const pool = task?.inStudy === true ? '' : ' · HELD OUT';
+  return `${i + 1}/${total} · ${type} · ${id}${pool}${short ? ` — ${short}` : ''}`;
 }
 
 /**
@@ -3372,6 +4189,57 @@ function postSurveyEmbedUrl(url) {
   return `${url}${url.includes('?') ? '&' : '?'}embedded=true`;
 }
 
+/** Find V2 ends inside its own study instead of embedding V1's post-study form. */
+function finishFindV2({ preview = false } = {}) {
+  const pending = preview ? 0 : pendingResultCount();
+  const answered = preview
+    ? (Array.isArray(S.state.queue) ? S.state.queue.length : 0)
+    : S.state.results.length;
+  const dry = !!S.state.dryRun;
+
+  stimulusPane.innerHTML = `
+    <div class="q-survey-stage find-v2-finish">
+      <header class="q-survey-head">
+        <p class="welcome-eyebrow">PageGuide · Find V2</p>
+        <h1 class="q-survey-title">✅ Find V2 complete</h1>
+        <p class="q-survey-lead">You checked ${answered} agent claim${answered === 1 ? '' : 's'}.
+          Thank you for taking part.</p>
+      </header>
+      <div class="tv-done">${dry
+        ? 'This was a test run. No session or result was written to Supabase.'
+        : 'Your judgments were saved after each claim. You may close this tab.'}</div>
+    </div>`;
+
+  questionPane.innerHTML = `
+    <div class="q-head"><span class="q-title">✅ All done</span></div>
+    <div class="q-body">
+      ${pending ? `<p class="q-error-msg">${pending} result${pending === 1 ? '' : 's'} did not reach
+        Supabase. Download the backup below and send it to the researcher.</p>` : ''}
+      <p class="q-sub">Find V2 is stored separately from the original PageGuide study.</p>
+      <div class="q-actions">
+        <button class="q-btn" id="q-download">⬇ Download my Find V2 responses</button>
+        <a class="q-btn q-btn-link" href="index.html">Return to Find V2</a>
+      </div>
+    </div>`;
+
+  document.getElementById('q-download').onclick = () => {
+    const blob = new Blob([JSON.stringify({
+      study_version: 'find-v2',
+      participant_id: S.state.participantId,
+      session_id: S.state.sessionId,
+      results: S.state.results,
+      pending_results: pendingResultsForCurrentRun(),
+    }, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `find_v2_${S.state.participantId || 'anonymous'}_${Date.now()}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  if (!preview) S.clearLocal();
+}
+
 /**
  * The end of the study — and, with `{ preview: true }`, the same screen opened on its own.
  *
@@ -3382,6 +4250,10 @@ function postSurveyEmbedUrl(url) {
 function finish({ preview = false } = {}) {
   detachQuestionPane();
   stopTaskTelemetry();
+  if (IS_FIND_V2) return finishFindV2({ preview });
+  // Kept on the final screen, with only ‹ live: a test run that reaches the end and finds no way
+  // back to task 8 has to be restarted from the welcome screen to look at it again.
+  if (!preview) renderDryRunNav();
   const pending = preview ? 0 : pendingResultCount();
   // In a preview there are no results to count, and "you have finished all 0 tasks" reads as a bug
   // in the screen being checked. The queue length is what a real run would have shown.
@@ -3392,7 +4264,10 @@ function finish({ preview = false } = {}) {
   // from a response that nothing marks as not-a-participant — so the walk gets the link only. A
   // PREVIEW is the opposite: it was opened to look at this screen, so it shows the real thing, with
   // a banner saying not to submit it.
-  const review = !preview && !!S.state.adminReview;
+  // A DRY RUN GETS THE LINK, NOT THE FORM, for the same reason a review walk does: the questionnaire
+  // is live, and a real response submitted from a rehearsal is a row in the survey that nothing
+  // marks as not-a-participant. The banner above it says which kind of run this was.
+  const review = !preview && (!!S.state.adminReview || !!S.state.dryRun);
 
   // THE SURVEY GOES IN THE LEFT PANE, where the material was. The right pane is 420px wide because
   // it stands in for the extension's side panel, and a Likert grid folded into 420px is a column of
@@ -3405,6 +4280,8 @@ function finish({ preview = false } = {}) {
   const surveyHead = `
     ${preview ? `<p class="q-survey-preview">Preview of the final screen — the form below is the
       REAL questionnaire. Read it, do not submit it.</p>` : ''}
+    ${!preview && S.state.dryRun ? `<p class="q-survey-preview">Test run — none of these eight
+      answers was saved. The questionnaire linked below is the real one: do not submit it.</p>` : ''}
     <header class="q-survey-head">
       <h1 class="q-survey-title">✅ Last step — a short survey</h1>
       <p class="q-survey-lead">You have finished all ${answered} tasks. Thank you.
@@ -3416,8 +4293,11 @@ function finish({ preview = false } = {}) {
 
   stimulusPane.innerHTML = review
     ? `<div class="q-survey-stage">${surveyHead}
-        <div class="tv-done">Review mode: the survey is not embedded, so checking this screen
-          cannot leave a real response. Use the button above to read it.</div>
+        <div class="tv-done">${S.state.dryRun && !S.state.adminReview
+          ? `Test run: nothing from it was saved, and the survey is not embedded so this screen
+             cannot leave a real response. Use the button above to read it.`
+          : `Review mode: the survey is not embedded, so checking this screen
+             cannot leave a real response. Use the button above to read it.`}</div>
       </div>`
     : `<div class="q-survey-stage">${surveyHead}
         <iframe class="q-survey" title="Post-study questionnaire"
@@ -3437,7 +4317,7 @@ function finish({ preview = false } = {}) {
       <div class="q-actions">
         <button class="q-btn" id="q-download">⬇ Download my responses</button>
       </div>
-      ${preview ? '<div class="q-actions"><a class="q-btn q-btn-link" href="index.html">← Back to admin</a></div>' : ''}
+      ${preview ? '<div class="q-actions"><a class="q-btn q-btn-link" href="find-v1.html">← Back to admin</a></div>' : ''}
     </div>`;
 
   document.getElementById('q-download').onclick = () => {

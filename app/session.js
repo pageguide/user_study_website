@@ -18,7 +18,33 @@ const state = {
   results: [],
   startedAt: 0,
   detachInstrument: null,
+  // A REHEARSAL OF THE REAL RUN. Set when the participant id is `test` (see isDryRunId): every
+  // screen behaves exactly as it does for a participant, and nothing is written — no assignment
+  // claimed, no result row, no session row. The point is to walk the study as it will be walked,
+  // rather than to inspect it in review mode, which shows different screens.
+  dryRun: false,
 };
+
+/**
+ * Is this id a test run rather than a participant?
+ *
+ * `test`, or `test` with a slot number after it — `test-3` walks the queue participant slot 3 would
+ * be dealt, which is the only way to see a particular counterbalancing without spending a real
+ * assignment on it. Case-insensitive, because the box is typed into in a hurry.
+ *
+ * DELIBERATELY A NAME AND NOT A URL FLAG. A researcher checking the study opens the same page a
+ * participant opens and types into the same box; a query string is one copy-paste away from being
+ * sent to a participant, and `?dry=1` in a recruiting link would silently discard their data.
+ */
+function isDryRunId(id) {
+  return /^test(?:[-_ ]?(\d+))?$/i.test(String(id || '').trim());
+}
+
+/** The round-robin slot a `test-N` id asks for, or 0. */
+function dryRunSlot(id) {
+  const m = /^test[-_ ]?(\d+)$/i.exec(String(id || '').trim());
+  return m ? Number(m[1]) : 0;
+}
 
 /**
  * Which arm this participant is in.
@@ -60,6 +86,9 @@ function saveLocal() {
       participantId: state.participantId, arm: state.arm, sessionId: state.sessionId,
       runId: state.runId, assignmentIndex: state.assignmentIndex, assignmentSlot: state.assignmentSlot,
       idx: state.idx, results: state.results, queue: state.queue,
+      // Saved, or a refresh three tasks into a test run would come back as a participant and start
+      // writing rows from task 4.
+      dryRun: !!state.dryRun,
     }));
   } catch (e) { /* private mode, quota — not worth failing the study over */ }
 }
@@ -278,5 +307,6 @@ function buildFindResultRow({ task, payload, confidence, helpfulness, notes }) {
 window.StudySession = {
   buildFindResultRow,
   state, resolveArm, conditionLabel, taskArm, saveLocal, loadLocal, clearLocal, buildResultRow,
+  isDryRunId, dryRunSlot,
   saveReview, loadReview, clearReview, newRunId, SESSION_VERSION, validParticipantSession,
 };

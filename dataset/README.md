@@ -11,7 +11,7 @@ the aggregates plotted in the behavioural figures (mean, sd, se and n per cell).
 carries accuracy, localization F1 and its two halves, and the timing stages — mean, sd, se,
 median and quartiles per cell.
 
-Exported 2026-08-14T05:06:12.478Z · 217 rows · 43 participants.
+Exported 2026-08-20T18:52:21.514Z · 322 rows · 55 participants.
 
 ## Conditions
 
@@ -28,7 +28,7 @@ selection, so they agree with the dashboard:
 | Facet | Left out | Why |
 |---|---|---|
 | Find × Text | MARS-v1 | a disputed answer key |
-| Find × Visual | MUFC-V1, PEDANT-V1 | two runs whose grounded locate time is ~14× the others while accuracy and localization stay flat |
+| Find × Visual | PEDANT-V1 | a run whose grounded locate time is ~14× the others while accuracy and localization stay flat |
 | Guide × Text | gv2-ed05a7b6-kk24zp, gv2-ms9iw0pq-5kj5zr, gv2-msf02a2n-88li4p, gv2-msf5mo9m-qm5brt | three duplicate re-recordings, plus both recordings of the New York goal |
 | Guide × Visual | gv2-msf1pyqv-omt0hz | a run whose ground truth blames one step under two error types, so no participant can score it in full |
 
