@@ -37,7 +37,7 @@
 
 create table if not exists public.pageguide_find_v2_claims_backup_letter_ops as
   select * from public.pageguide_find_v2_claims
-  where id in ('EDU-v1', 'MARS-v1', 'MUFC-V1-TEXT', 'HARRY-v1');
+  where id in ('EDU-v1', 'MARS-v1', 'MUFC-V1-TEXT', 'HARRY-v1', 'NVIDA-V1', 'PEDANT-V1');
 
 comment on table public.pageguide_find_v2_claims_backup_letter_ops is
   'The four claims as they stood before supabase_v2_letter_ops.sql replaced their alphabet arithmetic. Restore instructions are at the bottom of that file.';
@@ -106,13 +106,102 @@ update public.pageguide_find_v2_claims set
     '{correct_nongrounding,answer_text}', to_jsonb($a$The sentence in which Harry's assumptions are challenged lists five distinct names: Harry, Quirrell, Snape, Voldemort, and Dumbledore. The third name in this sentence is Snape, and its first letter is 'S'. The author who praised Rowling's work as a "feat" is Stephen King. The first letter of his last name is 'K'. Putting 'S' and 'K' in alphabetical order gives the two-letter string **KS**.$a$::text))
 where id = 'HARRY-v1';
 
+-- ── NVIDA-V1 · "which word contains those letters" → the two-letter string ───────────────────────
+--
+-- The old final step was not the same kind of question as the others. "Which word that contains
+-- those letters in the following?" asks the participant to pick a word from a list that is not on
+-- the page, and the authored answer — 'Sugar' contains g and S — is true of a great many words. A
+-- claim whose correct answer is not unique cannot be judged wrong on the evidence.
+--
+-- ⚠ THE LETTERS HERE ARE g AND S, WHICH SPELL NO WORD. So this one cannot take EDU-v1's "what word
+-- do those two letters make up?" phrasing — there is no word to name, and asking for one would make
+-- the correct answer unanswerable. It takes the alphabetical-order form that MARS-v1 and
+-- MUFC-V1-TEXT use instead, which is the same one-glance operation and does have a single answer.
+--
+-- To use the word form here, one of the two hops has to change so the letters spell something. The
+-- second hop is the candidate: the last listed director's employer is S-Cubed Capital, and any hop
+-- landing on an o, an n or a t would give "go", "gn"… — worth authoring deliberately rather than
+-- guessing at from here.
+
+update public.pageguide_find_v2_claims set
+  question = $q$On this page, there is a sentence where a person’s name appears between “2026” and “AI.” Take **the last letter of that person’s last name**.
+Then find the last listed director’s current employer. Take **the first letter of that employer**.
+Put **the two letters** in alphabetical order. What two-letter string do they form?$q$,
+  answer_variants = jsonb_set(jsonb_set(jsonb_set(jsonb_set(
+    answer_variants,
+    '{correct_grounding,answer_text}', to_jsonb($a$The person's name that appears between '2026' and 'AI' is Jensen Huang [1158:"Jensen Huang"], and the last letter of his last name is **g**. The last listed director is Mark Stevens [813:"Mark Stevens"], whose current employer is S-Cubed Capital [813:"S-Cubed Capital"], and the first letter of that employer is **S**. Putting **g** and **S** in alphabetical order gives **gS**.$a$::text)),
+    '{correct_nongrounding,answer_text}', to_jsonb($a$The person's name that appears between '2026' and 'AI' is Jensen Huang, and the last letter of his last name is **g**. The last listed director is Mark Stevens, whose current employer is S-Cubed Capital, and the first letter of that employer is **S**. Putting **g** and **S** in alphabetical order gives **gS**.$a$::text)),
+    -- Wrong on BOTH hops, as it already was: it reads the name as Nebius and the employer as Eli
+    -- Lilly. The opening "The two-letter string is HT" is dropped — HT followed from neither hop,
+    -- so the answer contradicted itself before a participant had read a word of the page.
+    '{incorrect_grounding,answer_text}', to_jsonb($a$The sentence in question is: "On March 11, 2026, Nvidia announced that it will invest $2 billion in artificial intelligence cloud company Nebius." [720: "On March 11, 2026, Nvidia announced that it will invest $2 billion in artificial intelligence cloud company Nebius."] The last letter of "Nebius" is **s**. The last listed director's current employer is "Eli Lilly and Company" [861: "Eli Lilly and Company"], and its first letter is **E**. Putting **s** and **E** in alphabetical order gives **Es**.$a$::text)),
+    '{incorrect_nongrounding,answer_text}', to_jsonb($a$The sentence in question is: "On March 11, 2026, Nvidia announced that it will invest $2 billion in artificial intelligence cloud company Nebius." The last letter of "Nebius" is **s**. The last listed director's current employer is "Eli Lilly and Company", and its first letter is **E**. Putting **s** and **E** in alphabetical order gives **Es**.$a$::text))
+where id = 'NVIDA-V1';
+
+-- ── The two arms must differ in grounding and in NOTHING ELSE ────────────────────────────────────
+--
+-- Checked across all ten live claims, comparing each pair with the citation markers stripped the way
+-- app/find_citations.js strips them for the non-grounded arm:
+--
+--   INCORRECT pair — 2 of 10 differ beyond the markers: PEDANT-V1 and HARRY-v1.
+--   CORRECT   pair — 5 of 10 differ: PEDANT-V1, SVSF-V1, TREE-V1, TESLA-V1, MARS-v1.
+--
+-- This section fixes the two INCORRECT ones. The correct pair is a different repair and is left
+-- alone here; see the note at the end of this file.
+--
+-- WHAT WENT WRONG, in both cases the same way. The non-grounded variant was written by hand from the
+-- grounded one, and the phrase inside a marker was left behind as prose:
+--
+--   grounded      …is titled *El pedante* by Francesco Belo [45:"the first play in which a pedant
+--                 takes a central role, El pedante"].
+--   non-grounded  …is titled *El pedante* by Francesco Belo the first play in which a pedant takes a
+--                 central role, El pedante.
+--
+-- That is not a cosmetic difference. The marker's quote is the page phrase the answer rests on, and
+-- the non-grounded arm exists to withhold exactly that — so the arm that is supposed to show LESS
+-- was showing the evidence spelled out in the prose, while the grounded arm showed it only behind a
+-- numbered chip. The manipulation was inverted for those two claims.
+--
+-- Both are set to the grounded text with the markers removed, which is what the renderer produces
+-- for every other claim.
+
+update public.pageguide_find_v2_claims set
+  answer_variants = jsonb_set(
+    answer_variants,
+    '{incorrect_nongrounding,answer_text}', to_jsonb($a$The play where the pedant assumes an important part is titled *El pedante* by Francesco Belo. In the decorative border directly below the portrait, there are books and flowers, but specific details about what appears there are not provided in the text or the screenshot.$a$::text))
+where id = 'PEDANT-V1';
+
+update public.pageguide_find_v2_claims set
+  answer_variants = jsonb_set(
+    answer_variants,
+    '{incorrect_nongrounding,answer_text}', to_jsonb($a$The second letter of the second name in the sentence is "K". The author who praised Rowling's work as a feat was Stephen King. The first letter of his last name is "K". When these two letters are put in alphabetical order, they form the two-letter string "KK".$a$::text))
+where id = 'HARRY-v1';
+
+-- ── The same check, as a query you can re-run ────────────────────────────────────────────────────
+-- Any row this returns is a claim whose two arms differ in more than their markers. It should come
+-- back empty for the incorrect pair once the statements above have run.
+
+with stripped as (
+  select id,
+         regexp_replace(regexp_replace(
+           coalesce(answer_variants->'incorrect_grounding'->>'answer_text', ''),
+           '\[\s*[0-9]+\s*:\s*"[^"]*"(\s*,\s*[0-9]+\s*:\s*"[^"]*"\s*)*\]', '', 'g'),
+           '\[ev:[^\]]*\]', '', 'g') as g,
+         coalesce(answer_variants->'incorrect_nongrounding'->>'answer_text', '') as ng
+  from public.pageguide_find_v2_claims where in_study
+)
+select id, g, ng from stripped
+where regexp_replace(trim(regexp_replace(g, '\s+', ' ', 'g')), '\s+([.,])', '\1', 'g')
+   is distinct from
+      regexp_replace(trim(regexp_replace(ng, '\s+', ' ', 'g')), '\s+([.,])', '\1', 'g');
+
 -- ── Check what you now have ──────────────────────────────────────────────────────────────────────
 
 select id,
        answer_variants->'correct_grounding'->>'answer_text'     as correct_grounded,
        answer_variants->'incorrect_grounding'->>'answer_text'   as incorrect_grounded
 from public.pageguide_find_v2_claims
-where id in ('EDU-v1', 'MARS-v1', 'MUFC-V1-TEXT', 'HARRY-v1')
+where id in ('EDU-v1', 'MARS-v1', 'MUFC-V1-TEXT', 'HARRY-v1', 'NVIDA-V1', 'PEDANT-V1')
 order by id;
 
 -- ── Undo ─────────────────────────────────────────────────────────────────────────────────────────
@@ -122,3 +211,24 @@ order by id;
 --   set question = b.question, answer_variants = b.answer_variants
 --   from public.pageguide_find_v2_claims_backup_letter_ops b
 --   where c.id = b.id;
+
+-- ── STILL OUTSTANDING: the CORRECT pair on five claims ───────────────────────────────────────────
+-- PEDANT-V1, SVSF-V1, TREE-V1, TESLA-V1 have the same leftover-phrase problem in their correct
+-- variants, and MARS-v1 differs only in curly versus straight quotation marks.
+--
+-- Those four are NOT a copy-and-strip fix, because the grounded text put the phrase INSIDE the
+-- marker rather than before it — so stripping leaves a hole in the sentence:
+--
+--   grounded (TREE-V1)   In the [1:"Portrait of a Carthusian (1446) by Petrus Christus"], a small
+--                        fly appears on the lower ledge.
+--   stripped             In the, a small fly appears on the lower ledge.
+--
+-- The repair is to the GROUNDED text: the phrase belongs in the prose with the marker appended after
+-- it, the way every working claim is written —
+--
+--   In the Portrait of a Carthusian (1446) by Petrus Christus [1:"Portrait of a Carthusian (1446) by
+--   Petrus Christus"], a small fly appears on the lower ledge.
+--
+-- — after which the non-grounded arm is the same sentence with the marker removed, and reads
+-- correctly on its own. Left out of this file because it changes what the GROUNDED arm shows, which
+-- is a stimulus change worth making deliberately rather than as a tidy-up.
