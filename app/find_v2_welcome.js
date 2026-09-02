@@ -28,6 +28,35 @@
   let adminTab = 'claims';
   let variantTab = 'correct_grounding';
 
+  /**
+   * A result's timestamp, read in the study's own timezone.
+   *
+   * `created_at` is a `timestamptz` — an absolute instant — so it has no timezone of its own to
+   * show. This used to be a bare `toLocaleString()`, which renders in whatever zone the BROWSER is
+   * set to: the same row read as 3:15pm on a laptop in Alabama and 8:15pm on one in London, with
+   * nothing on screen saying which. Pinned to the study's zone so two people comparing notes are
+   * reading the same number, and labelled so nobody has to guess.
+   *
+   * The NAMED zone, not a fixed offset: Central is CST in winter and CDT in summer, and 'America/
+   * Chicago' applies whichever was in force on the day — including across the changeover, where a
+   * fixed offset would put an hour's error into half the sessions.
+   */
+  const STUDY_TIME_ZONE = 'America/Chicago';
+
+  function localTime(value) {
+    const when = new Date(value);
+    if (Number.isNaN(when.getTime())) return '';
+    try {
+      return new Intl.DateTimeFormat('en-US', {
+        timeZone: STUDY_TIME_ZONE,
+        year: 'numeric', month: 'short', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: true,
+      }).format(when);
+    } catch (e) {
+      return when.toLocaleString();   // an engine without the zone still shows a time
+    }
+  }
+
   function esc(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -2436,9 +2465,9 @@
       <p class="viz-note">${yes} Yes and ${rows.length - yes} No responses. Results are read through
         the password-checked RPC; the anon role has no direct SELECT policy on this table.</p>
       ${rows.length ? `<div class="viz-table-wrap"><table class="viz-table find-v2-results-table">
-        <thead><tr><th>When</th><th>Participant</th><th>Group</th><th>Claim</th><th>Answer shown</th><th>Grounding</th><th>Refs opened</th><th>Key</th><th>Answer</th><th>Scored</th><th>Time</th></tr></thead>
+        <thead><tr><th>When<span class="q-sub"> · Central</span></th><th>Participant</th><th>Group</th><th>Claim</th><th>Answer shown</th><th>Grounding</th><th>Refs opened</th><th>Key</th><th>Answer</th><th>Scored</th><th>Time</th></tr></thead>
         <tbody>${rows.slice(0, 1000).map(row => `<tr>
-          <td>${esc(new Date(row.created_at).toLocaleString())}</td>
+          <td>${esc(localTime(row.created_at))}</td>
           <td>${esc(row.participant_id)}</td>${groupCellHtml(row)}<td><code>${esc(row.claim_id)}</code></td>
           ${variantCellsHtml(row)}
           ${refsCellHtml(row)}
@@ -2487,9 +2516,9 @@
       ${modeAccuracyHtml(rows)}
       ${referenceUseHtml(rows)}
       ${rows.length ? `<div class="viz-table-wrap"><table class="viz-table find-v2-results-table">
-        <thead><tr><th>When</th><th>Participant</th><th>Group</th><th>Task</th><th>Why incorrect</th><th>Answer shown</th><th>Grounding</th><th>Refs opened</th><th>Completed?</th><th>Answer</th><th>Scored</th><th>Time</th></tr></thead>
+        <thead><tr><th>When<span class="q-sub"> · Central</span></th><th>Participant</th><th>Group</th><th>Task</th><th>Why incorrect</th><th>Answer shown</th><th>Grounding</th><th>Refs opened</th><th>Completed?</th><th>Answer</th><th>Scored</th><th>Time</th></tr></thead>
         <tbody>${rows.slice(0, 1000).map(row => `<tr>
-          <td>${esc(new Date(row.created_at).toLocaleString())}</td>
+          <td>${esc(localTime(row.created_at))}</td>
           <td>${esc(row.participant_id)}</td>${groupCellHtml(row)}<td><code>${esc(row.task_id)}</code></td>
           ${modeCellHtml(row)}
           <td><span class="v2-chip ${row.answer_correct_snapshot ? 'is-correct' : 'is-incorrect'}">${

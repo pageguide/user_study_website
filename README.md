@@ -159,6 +159,7 @@ project that has only ever run `supabase_find_v2.sql`, run these in order in the
 | `supabase_v2_queue_design.sql` | `queue_design` — which of the two queues a sitting is dealt (see below) |
 | `supabase_v2_group_chip.sql` | `show_group_chip` — whether a participant is told which group they are in (off by default) |
 | `supabase_v2_milestone_flag.sql` | `flag_milestones` — whether the Guide journey flags the trail's steps (on by default) |
+| `supabase_v2_local_time.sql` | views that read `created_at` in Alabama local time — optional, changes no data |
 
 Then, once per batch of imported runs:
 
