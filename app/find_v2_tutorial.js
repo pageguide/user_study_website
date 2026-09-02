@@ -60,6 +60,7 @@
   // ── The intro ──────────────────────────────────────────────────────────────────────────────────
 
   function renderWelcome() {
+    stopTour();
     window.detachQuestionPane?.();
     document.body.classList.add('tut-on');
     document.body.classList.remove('tv-nogrounding');
@@ -71,22 +72,26 @@
         <p class="tut-lead">Two practice tasks. Nothing here is recorded, and neither is one of your
           four.</p>
 
+        <!-- GIVEN / TASK, on both cards. The two kinds hand a participant different material and
+             ask them for different things, and a card that only names the material leaves them to
+             infer the job from it. Said in the same two lines each time, so the difference between
+             the kinds is the only thing that reads as different. -->
         <div class="tut-kinds">
           <div class="tut-kind">
             <div class="tut-kind-head">FIND</div>
-            <!-- WRAPPED IN .tut-kind-body, which is where the padding lives. A bare <p> inside
-                 .tut-kind sits against the card's edge. -->
             <div class="tut-kind-body">
-              <p class="tut-kind-fine">A saved webpage, and an answer an agent gave about it.</p>
-              <p class="tut-kind-what">Verify the answer against the page.</p>
+              <p class="tut-given"><b>Given:</b> a saved webpage, a question about it, and the
+                answer an agent gave.</p>
+              <p class="tut-task"><b>Task:</b> decide whether that answer is correct.</p>
             </div>
           </div>
           <div class="tut-kind">
             <div class="tut-kind-head">GUIDE</div>
             <div class="tut-kind-body">
-              <p class="tut-kind-fine">A recording of an agent doing a task, and what it reported back.</p>
-              <p class="tut-kind-what">Verify that it finished — and that it reported truthfully
-                what it did.</p>
+              <p class="tut-given"><b>Given:</b> a recording of an agent doing a task, and what it
+                reported back afterwards.</p>
+              <p class="tut-task"><b>Task:</b> decide whether it really did the job — and whether it
+                reported truthfully what it did.</p>
             </div>
           </div>
         </div>
@@ -152,6 +157,7 @@
 
   /** Leave the walkthrough, from the intro or from the bar. */
   function skipAll() {
+    stopTour();
     tut.active = false;
     tut.queue = [];
     S().state.tutorial = null;
@@ -206,6 +212,7 @@
   function goBack() {
     const stage = tut.stage;
     if (!stage) return;
+    stopTour();
     window.detachQuestionPane?.();   // a task left mid-question must stop its timers
     document.body.classList.remove('tv-nogrounding');
 
@@ -278,6 +285,244 @@
     const body = questionPane().querySelector('.q-body');
     if (body) body.insertAdjacentHTML('afterbegin', orientationHtml(task));
     questionPane().scrollTop = 0;
+    // AFTER A TICK. The snapshot iframe mounts and marks its highlights asynchronously, so a tour
+    // started in the same frame as the render finds no `.pageguide-highlight` and drops the step
+    // that is arguably the most useful one on a Find task.
+    setTimeout(() => {
+      if (tut.active && tut.stage?.kind === 'practice') {
+        startTour(task?.taskType === 'find' ? findTourSteps() : guideTourSteps());
+      }
+    }, 400);
+  }
+
+  // ── The coachmarks ─────────────────────────────────────────────────────────────────────────────
+  //
+  // A spotlight, an arrow and a card, walked with Back and Next. Every target is an element the
+  // STUDY renders for itself — #q-task-card, #q-answer-card, .tv-journey, a highlighted passage
+  // inside the page snapshot — so what is being pointed at is the thing that comes next rather than
+  // a picture of it. The cost is that this file knows those selectors; the alternative is a
+  // walkthrough that can quietly stop describing the study, so each one is checked before it is
+  // pointed at and a step whose target is missing is skipped rather than left pointing at nothing.
+  //
+  // THE PAGE SNAPSHOT IS AN IFRAME, and the evidence a Find task is about lives inside it. A target
+  // may therefore name a frame — {frame: '#find-page', sel: '.pageguide-highlight'} — and its rect
+  // is the element's own plus the frame's offset. Same-origin by construction: the snapshot is
+  // mounted with srcdoc precisely so it can be read.
+
+  let tour = null;      // {steps, i}
+  let tourFrame = 0;    // rAF handle for keeping the spotlight on a moving target
+
+  function tourEls() {
+    let root = document.getElementById('tut-v2-tour');
+    if (root) return root;
+    root = document.createElement('div');
+    root.id = 'tut-v2-tour';
+    root.className = 'v2tour';
+    root.innerHTML = `
+      <div class="v2tour-hole" id="v2tour-hole"></div>
+      <div class="v2tour-card" id="v2tour-card">
+        <div class="v2tour-arrow" id="v2tour-arrow"></div>
+        <div class="v2tour-step" id="v2tour-step"></div>
+        <div class="v2tour-title" id="v2tour-title"></div>
+        <div class="v2tour-body" id="v2tour-body"></div>
+        <div class="v2tour-actions">
+          <button class="q-btn q-btn-link" id="v2tour-back">← Back</button>
+          <button class="q-btn q-btn-primary" id="v2tour-next">Next →</button>
+        </div>
+      </div>`;
+    document.body.appendChild(root);
+    root.querySelector('#v2tour-back').onclick = () => tourGo(-1);
+    root.querySelector('#v2tour-next').onclick = () => tourGo(1);
+    return root;
+  }
+
+  /** The element a step points at, or null. Waits briefly: a pane may still be rendering. */
+  function resolveTarget(target) {
+    if (!target) return null;
+    if (typeof target === 'string') return document.querySelector(target);
+    const host = document.querySelector(target.frame);
+    const doc = host?.contentDocument;
+    if (!doc) return null;
+    const el = doc.querySelector(target.sel);
+    return el ? { el, host } : null;
+  }
+
+  /** A target's rectangle in viewport coordinates, with the frame's offset added when it is in one. */
+  function rectOf(found) {
+    if (!found) return null;
+    if (found.el && found.host) {
+      const inner = found.el.getBoundingClientRect();
+      const frame = found.host.getBoundingClientRect();
+      return {
+        top: frame.top + inner.top, left: frame.left + inner.left,
+        width: inner.width, height: inner.height,
+      };
+    }
+    const r = found.getBoundingClientRect();
+    return { top: r.top, left: r.left, width: r.width, height: r.height };
+  }
+
+  function startTour(steps) {
+    stopTour();
+    const live = steps.filter(step => !!resolveTarget(step.target));
+    if (!live.length) return;
+    tour = { steps: live, i: 0 };
+    document.body.classList.add('v2tour-on');
+    paintTour();
+  }
+
+  function stopTour() {
+    tour = null;
+    if (tourFrame) { cancelAnimationFrame(tourFrame); tourFrame = 0; }
+    document.getElementById('tut-v2-tour')?.remove();
+    document.body.classList.remove('v2tour-on');
+  }
+
+  function tourGo(direction) {
+    if (!tour) return;
+    const next = tour.i + direction;
+    if (next < 0) return;
+    if (next >= tour.steps.length) return stopTour();   // past the last card: get on with the task
+    tour.i = next;
+    paintTour();
+  }
+
+  function paintTour() {
+    if (!tour) return;
+    const root = tourEls();
+    const step = tour.steps[tour.i];
+    const found = resolveTarget(step.target);
+    if (!found) return tourGo(1);
+
+    root.querySelector('#v2tour-step').textContent = `Step ${tour.i + 1} of ${tour.steps.length}`;
+    root.querySelector('#v2tour-title').textContent = step.title;
+    root.querySelector('#v2tour-body').innerHTML = step.body;
+    root.querySelector('#v2tour-back').hidden = tour.i === 0;
+    root.querySelector('#v2tour-next').textContent =
+      tour.i === tour.steps.length - 1 ? 'Got it — let me answer' : 'Next →';
+
+    // Scroll the target into view before measuring, or the first card on a pane that has been
+    // scrolled lands on a rectangle that is no longer where it was.
+    const scrollable = found.el ? found.host : found;
+    try { scrollable.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { /* ignore */ }
+
+    const place = () => {
+      if (!tour) return;
+      const r = rectOf(resolveTarget(step.target));
+      if (r) position(root, r, step);
+      tourFrame = requestAnimationFrame(place);
+    };
+    if (tourFrame) cancelAnimationFrame(tourFrame);
+    place();
+  }
+
+  /**
+   * The spotlight over the target and the card beside it.
+   *
+   * The card goes on whichever side has room, and the arrow points back at the target from wherever
+   * the card ended up — a fixed side puts the card off-screen on a narrow window, and an arrow that
+   * does not follow it points at nothing.
+   */
+  function position(root, r, step) {
+    const pad = 6;
+    const hole = root.querySelector('#v2tour-hole');
+    hole.style.top = `${r.top - pad}px`;
+    hole.style.left = `${r.left - pad}px`;
+    hole.style.width = `${r.width + pad * 2}px`;
+    hole.style.height = `${r.height + pad * 2}px`;
+
+    const card = root.querySelector('#v2tour-card');
+    const arrow = root.querySelector('#v2tour-arrow');
+    const box = card.getBoundingClientRect();
+    const gap = 18;
+    const roomLeft = r.left, roomRight = window.innerWidth - (r.left + r.width);
+
+    let side = step.place || (roomLeft > box.width + gap ? 'left'
+      : roomRight > box.width + gap ? 'right'
+      : r.top > box.height + gap ? 'top' : 'bottom');
+    if (side === 'left' && roomLeft < box.width + gap) side = 'right';
+    if (side === 'right' && roomRight < box.width + gap) side = 'left';
+
+    let top, left;
+    if (side === 'left' || side === 'right') {
+      top = r.top + r.height / 2 - box.height / 2;
+      left = side === 'left' ? r.left - box.width - gap : r.left + r.width + gap;
+    } else {
+      left = r.left + r.width / 2 - box.width / 2;
+      top = side === 'top' ? r.top - box.height - gap : r.top + r.height + gap;
+    }
+    top = Math.max(12, Math.min(top, window.innerHeight - box.height - 12));
+    left = Math.max(12, Math.min(left, window.innerWidth - box.width - 12));
+    card.style.top = `${top}px`;
+    card.style.left = `${left}px`;
+
+    card.dataset.side = side;
+    // The arrow sits on the card's edge nearest the target and is nudged along that edge to line up
+    // with the target's centre, so it points at the thing rather than at the middle of the gap.
+    if (side === 'left' || side === 'right') {
+      const y = Math.max(14, Math.min(r.top + r.height / 2 - top, box.height - 14));
+      arrow.style.top = `${y}px`;
+      arrow.style.left = '';
+    } else {
+      const x = Math.max(14, Math.min(r.left + r.width / 2 - left, box.width - 14));
+      arrow.style.left = `${x}px`;
+      arrow.style.top = '';
+    }
+  }
+
+  // ── What each task kind gets pointed at ────────────────────────────────────────────────────────
+  // A `.pageguide-highlight` only exists in the grounded arm, and only once the snapshot has been
+  // mounted and marked — so that step is dropped rather than pointed at an empty selector, which is
+  // also what makes these lists safe to reuse for the non-grounded arm later.
+
+  function findTourSteps() {
+    return [
+      {
+        target: '#q-task-card',
+        title: 'The question',
+        body: 'What the agent was asked. Read it first — it usually has <b>two parts</b>, and both have to be right.',
+      },
+      {
+        target: '#q-answer-card',
+        title: 'The agent’s answer',
+        body: 'The claim you are judging. The small numbers in it are references: hover one to see the sentence it points at, highlighted on the page.',
+      },
+      {
+        target: { frame: '#find-page', sel: '.pageguide-highlight' },
+        title: 'The evidence, on the page',
+        body: 'This is the passage the answer says it used. Check that it really says what the answer claims — a reference shows you where the agent looked, not that it was right.',
+      },
+      {
+        target: '#q-find-answer',
+        title: 'Your verdict',
+        body: 'Yes if the answer correctly answers the question, No if it does not. You can answer once the short wait is over.',
+      },
+    ];
+  }
+
+  function guideTourSteps() {
+    return [
+      {
+        target: '#q-task-card',
+        title: 'The task the agent was given',
+        body: 'What it was supposed to do. Everything on the left is what it actually did.',
+      },
+      {
+        target: '.tv-journey',
+        title: 'The journey',
+        body: 'Every action it took, in order. <b>Hover a step</b> to see the page it was looking at when it acted, and click for a full-size view.',
+      },
+      {
+        target: '.tv-answer',
+        title: 'What it reported back',
+        body: 'The claim you are judging. An agent can finish, sound certain, and describe something its own steps do not show.',
+      },
+      {
+        target: '#q-find-answer',
+        title: 'Your verdict',
+        body: 'Did it complete the task? <b>No</b> covers two cases: it did not finish, <b>or</b> its answer claims something that did not happen.',
+      },
+    ];
   }
 
   // ── The debrief ────────────────────────────────────────────────────────────────────────────────
@@ -301,6 +546,7 @@
 
   /** The answer screen, drawn from what was given — so Back can return to it unchanged. */
   function showDebrief(task, given) {
+    stopTour();
     window.detachQuestionPane?.();
     tut.stage = { kind: 'debrief', idx: tut.idx };
 
@@ -350,6 +596,7 @@
   }
 
   function endTutorial() {
+    stopTour();
     document.body.classList.remove('tv-nogrounding');
     removeNav();
     tut.active = false;

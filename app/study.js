@@ -662,7 +662,7 @@ async function fetchFindGroundTruthDirect(task) {
 /** The agent's recorded answer, rendered with its citations and evidence. */
 function answerCardHtml(answer, arm) {
   return `
-    <div class="q-card" style="margin-top:12px;">
+    <div class="q-card" id="q-answer-card" style="margin-top:12px;">
       <div class="q-card-head"><span class="q-badge">A</span>
         <p class="q-text">The agent's answer${arm === 'nongrounding' ? ' (non-grounded)' : ''}</p></div>
       <div class="find-answer">${answer
@@ -856,7 +856,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
     <div class="q-head"><span class="q-title">🔍 ${yesNo ? 'Check the claim' : 'Find the answer'}</span></div>
     <div class="q-progress${S.state.dryRun ? ' is-dry-run' : ''}">${esc(progressText() || `Task ${idx + 1}/${queue.length}`)}</div>
     <div class="q-body">
-      <div class="q-task-card">
+      <div class="q-task-card" id="q-task-card">
         ${window.TaskTimer.html()}
         <div class="q-task-label">Question</div>
         ${questionHtml(task.question)}
@@ -1138,7 +1138,11 @@ async function showGuideV2Task(task, arm) {
   const mount = renderGuideV2Shell();
   window.Stimulus.mountStimulus(record, arm, mount, {
     trailFirst: true,
-    journeyCollapsed: true,
+    // OPEN. The journey is the record — every action, checkable against the page it was taken on —
+    // and folding it put the one piece of evidence behind a click that many participants never made.
+    // What the fold was protecting against was a long list pushing the answer off screen; with the
+    // reasoning trail no longer above it, that is no longer the shape of the pane.
+    journeyCollapsed: false,
     // THE SAME FLAG FOR THE PRACTICE AND THE REAL TASK. This renderer serves both, so the
     // walkthrough cannot teach a screen the study then withholds — which is the one thing a practice
     // run must not do.
@@ -1165,7 +1169,7 @@ function renderGuideV2Questions(task, record, arm) {
     <div class="q-head"><span class="q-title">📘 Review the task</span></div>
     <div class="q-progress${S.state.dryRun ? ' is-dry-run' : ''}">${esc(progressText() || `Task ${idx + 1}/${queue.length}`)}</div>
     <div class="q-body">
-      <div class="q-task-card">
+      <div class="q-task-card" id="q-task-card">
         ${window.TaskTimer.html()}
         <div class="q-task-label">The task the agent was given</div>
         ${questionHtml(goal)}

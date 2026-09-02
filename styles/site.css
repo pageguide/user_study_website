@@ -3952,3 +3952,70 @@ body.welcome-body { display: block; height: auto; }
 }
 
 .tut-fact-text { font-size: 13.5px; line-height: 1.5; }
+
+/* ── The Find V2 walkthrough's coachmarks ─────────────────────────────────────
+   A spotlight, an arrow and a card. The dimming is one enormous box-shadow on the spotlight rather
+   than four positioned panels: a single element cannot leave a seam between the panes, and it moves
+   in one write per frame while the target scrolls. */
+.v2tour { position: fixed; inset: 0; z-index: 2147483000; pointer-events: none; }
+
+.v2tour-hole {
+  position: fixed;
+  border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(16, 16, 26, 0.55);
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  transition: top .18s ease, left .18s ease, width .18s ease, height .18s ease;
+}
+
+.v2tour-card {
+  position: fixed;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: 14px 16px 12px;
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 12px 40px rgba(16, 16, 26, 0.35);
+  pointer-events: auto;
+}
+
+.v2tour-step {
+  font: 800 10.5px/1.4 inherit;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--accent-dark);
+}
+
+.v2tour-title { margin: 3px 0 5px; font-size: 15px; font-weight: 800; }
+.v2tour-body { font-size: 13px; line-height: 1.55; color: var(--muted); }
+.v2tour-body b { color: var(--ink); }
+
+.v2tour-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.v2tour-actions .q-btn { padding: 6px 12px; font-size: 13px; }
+
+/* The arrow is the card's own corner, rotated — so it is always the card's colour and can never
+   drift out of register with it the way a separately positioned triangle does. */
+.v2tour-arrow {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--card);
+  transform: rotate(45deg);
+}
+
+.v2tour-card[data-side="left"]  .v2tour-arrow { right: -6px; margin-top: -6px; }
+.v2tour-card[data-side="right"] .v2tour-arrow { left: -6px; margin-top: -6px; }
+.v2tour-card[data-side="top"]   .v2tour-arrow { bottom: -6px; margin-left: -6px; }
+.v2tour-card[data-side="bottom"] .v2tour-arrow { top: -6px; margin-left: -6px; }
+
+/* Given / Task on the intro cards. */
+.tut-given, .tut-task { margin: 0 0 6px; font-size: 13px; line-height: 1.55; }
+.tut-given { color: var(--muted); }
+.tut-task { color: var(--ink); margin-bottom: 0; }
+.tut-given b, .tut-task b { color: var(--accent-dark); }
