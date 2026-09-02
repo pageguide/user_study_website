@@ -305,8 +305,15 @@
 
   async function loadWelcome() {
     if (window.__findV2ConfigMissing || !DB?.supabaseConfigured()) {
-      say('Find V2 is waiting for its new Supabase project. Fill in app/find_v2_config.js after running supabase_find_v2.sql.', true);
-      count.textContent = 'The original V1 configuration is not used here.';
+      // Two different fixes depending on where this is being read, and naming the wrong one costs a
+      // researcher the time it takes to edit a file that the deploy overwrites anyway. Served over
+      // http(s) this is the published site, where the config is written at deploy time from
+      // repository secrets; opened from a file:// or a local server it is somebody's checkout.
+      const deployed = location.protocol === 'http:' || location.protocol === 'https:';
+      const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      say(deployed && !local
+        ? 'This site is not connected to its Supabase project. Set FIND_V2_SUPABASE_URL and FIND_V2_SUPABASE_ANON_KEY as repository secrets, then re-run the deploy.'
+        : 'Find V2 is waiting for its Supabase project. Copy app/find_v2_config.example.js to app/find_v2_config.js and fill it in.', true);
       return;
     }
 
