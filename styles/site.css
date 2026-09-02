@@ -4019,3 +4019,24 @@ body.welcome-body { display: block; height: auto; }
 .tut-given { color: var(--muted); }
 .tut-task { color: var(--ink); margin-bottom: 0; }
 .tut-given b, .tut-task b { color: var(--accent-dark); }
+
+/* ── Admin → Walkthrough ──────────────────────────────────────────────────────
+   The live task page in a frame. Tall rather than wide: the walkthrough's own layout is the two
+   study panes, and squeezing it below their stacking breakpoint would show a layout no participant
+   sees. */
+.walkthrough-tools { margin: 12px 0 10px; }
+
+.walkthrough-frame {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card);
+}
+
+.walkthrough-frame iframe {
+  display: block;
+  width: 100%;
+  height: 78vh;
+  min-height: 520px;
+  border: 0;
+}

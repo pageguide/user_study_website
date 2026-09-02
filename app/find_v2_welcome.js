@@ -601,6 +601,7 @@
         <button class="admin-tab${adminTab === 'results' ? ' admin-tab-on' : ''}" data-v2-tab="results">Results</button>
         <button class="admin-tab${adminTab === 'guide' ? ' admin-tab-on' : ''}" data-v2-tab="guide">Guide tasks</button>
         <button class="admin-tab${adminTab === 'preview' ? ' admin-tab-on' : ''}" data-v2-tab="preview">Session preview</button>
+        <button class="admin-tab${adminTab === 'walkthrough' ? ' admin-tab-on' : ''}" data-v2-tab="walkthrough">Walkthrough</button>
         <button class="admin-tab${adminTab === 'settings' ? ' admin-tab-on' : ''}" data-v2-tab="settings">Study settings</button>
       </div>
       <div id="find-v2-admin-content"></div>
@@ -630,7 +631,61 @@
     else if (adminTab === 'settings') renderSettings();
     else if (adminTab === 'guide') renderGuideTasks();
     else if (adminTab === 'preview') renderSessionPreview();
+    else if (adminTab === 'walkthrough') renderWalkthroughTab();
     else renderClaims();
+  }
+
+  // ── The walkthrough, inspectable ─────────────────────────────────────────
+  //
+  // THE REAL THING IN A FRAME, not a description of it. The walkthrough only exists on the task
+  // page: it needs the two panes, the instrument, the snapshot iframe and the coachmarks that
+  // measure against them. So this embeds `study.html?tutorial=preview` — the same URL the study
+  // itself answers — and everything inside works, Back and Next included.
+  //
+  // THE PREVIEW CLAIMS NO ASSIGNMENT SLOT and writes nothing: it seeds a participant id that says
+  // ADMIN-PREVIEW, builds no queue and never reaches the result path. Checking some wording must not
+  // spend a participant's place in the round robin.
+
+  function renderWalkthroughTab() {
+    const content = document.getElementById('find-v2-admin-content');
+    content.innerHTML = `
+      <p class="viz-note">The walkthrough as a participant meets it — two practice tasks, one Find
+        and one Guide, with the coachmarks pointing at the real screen. It is the live page in a
+        frame, so Back, Next, Skip and both practice answers all work. Nothing here claims an
+        assignment slot or writes a row.</p>
+
+      <div class="preview-chips walkthrough-tools">
+        <button class="admin-chip" id="v2-walk-reload">Restart it</button>
+        <a class="admin-chip" href="study.html?tutorial=preview" target="_blank" rel="noopener">Open full size ↗</a>
+        <span class="welcome-status" id="v2-walk-note"></span>
+      </div>
+
+      <div class="walkthrough-frame">
+        <iframe id="v2-walk-frame" title="The Find V2 walkthrough"
+          src="study.html?tutorial=preview"></iframe>
+      </div>
+
+      <p class="viz-note">The coachmarks are positioned against the elements the study renders, and
+        they measure the window they are in — so this frame is a fair test of where a card lands only
+        at roughly the size a participant's window would be. If a card looks wrong here, check it
+        full size before changing anything.</p>
+
+      <h3 class="admin-subtitle">When a participant is offered it</h3>
+      <p class="viz-note">Once per <b>run</b>, before task 1, and skippable. It used to be once per
+        <b>browser</b>, which meant the second participant to sit at a machine started with no
+        practice while the first got two — a difference between participants that nothing in the
+        analysis could see. Every new sitting is offered it now; a refresh partway through task 1 is
+        not, because the mark names the run in progress.</p>`;
+
+    const note = document.getElementById('v2-walk-note');
+    document.getElementById('v2-walk-reload').onclick = () => {
+      const frame = document.getElementById('v2-walk-frame');
+      // Re-assigned rather than reload()ed: the walkthrough marks itself done against the run it was
+      // taken in, and a fresh document is the only way to start it from the first screen again.
+      frame.src = `study.html?tutorial=preview&t=${Date.now()}`;
+      note.textContent = 'Restarted.';
+      note.className = 'welcome-status';
+    };
   }
 
   // ── Session preview ──────────────────────────────────────────────────────

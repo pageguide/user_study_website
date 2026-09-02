@@ -26,14 +26,34 @@
   // not ask — so having done that one is not having done this one.
   const DONE_KEY = 'pageguide_find_v2_tutorial_done';
 
-  // Not in the saved session, deliberately: validParticipantSession pins a session version, so a
-  // field here would force a bump that invalidates every in-flight run. A refresh mid-walkthrough
-  // offers it again rather than resuming it half-done, which is the right behaviour for practice.
+  /**
+   * ONCE PER RUN, NOT ONCE PER BROWSER.
+   *
+   * This used to store a permanent "seen it" flag, so the second participant to sit at a machine —
+   * and every pilot session after the first — started at task 1 with no practice, while the first
+   * one got two. A study that hands different participants different preparation has put a
+   * difference into the data that nothing in the analysis can see.
+   *
+   * So the mark is the RUN it was taken in. Every new sitting is offered the walkthrough; a refresh
+   * partway through task 1 is not, because the mark still names the run in progress and re-offering
+   * it would drop somebody back into practice from the middle of the study.
+   *
+   * Kept out of the saved session on purpose: validParticipantSession pins a session version, so a
+   * field there would force a bump that invalidates every in-flight run.
+   */
+  function currentRunId() {
+    try { return String(S()?.state?.runId || ''); } catch (e) { return ''; }
+  }
+
   function isDone() {
-    try { return localStorage.getItem(DONE_KEY) === 'yes'; } catch (e) { return false; }
+    const run = currentRunId();
+    if (!run) return false;              // no run yet: nothing has been practised for it
+    try { return localStorage.getItem(DONE_KEY) === run; } catch (e) { return false; }
   }
   function markDone() {
-    try { localStorage.setItem(DONE_KEY, 'yes'); } catch (e) { /* private mode — not worth failing over */ }
+    const run = currentRunId();
+    if (!run) return;
+    try { localStorage.setItem(DONE_KEY, run); } catch (e) { /* private mode — not worth failing over */ }
   }
   function clearDone() {
     try { localStorage.removeItem(DONE_KEY); } catch (e) { /* ignore */ }
