@@ -51,12 +51,24 @@ Put **the two letters** in alphabetical order. What two-letter string do they fo
   answer_variants = jsonb_set(jsonb_set(jsonb_set(jsonb_set(
     answer_variants,
     '{correct_grounding,answer_text}', to_jsonb($a$The planet name that appears between “Mars” and “brightness” is **Jupiter** [1051:"Jupiter"]. The third letter of Jupiter is **P**. The isotope whose amount on Mars is five to seven times the amount on Earth is **deuterium** [990:"deuterium"], as stated in the text: "The amount of Martian deuterium... is five to seven times the amount on Earth" [985:"The amount of Martian deuterium (D/H = 9.3 ± 1.7 10−4) is five to seven times the amount on Earth"]. The first letter of deuterium is **D**. Putting **P** and **D** in alphabetical order gives **DP**.$a$::text)),
-    '{correct_nongrounding,answer_text}', to_jsonb($a$The planet name that appears between "Mars" and "brightness" is **Jupiter**. The third letter of Jupiter is **P**. The isotope whose amount on Mars is five to seven times the amount on Earth is **deuterium**, as stated in the text: "The amount of Martian deuterium... is five to seven times the amount on Earth". The first letter of deuterium is **D**. Putting **P** and **D** in alphabetical order gives **DP**.$a$::text)),
+        -- The SAME punctuation as the grounded arm, curly quotes included. The two differed only in
+    -- “Mars” versus "Mars", which is invisible in a diff and still a difference between the arms.
+    '{correct_nongrounding,answer_text}', to_jsonb($a$The planet name that appears between “Mars” and “brightness” is **Jupiter**. The third letter of Jupiter is **P**. The isotope whose amount on Mars is five to seven times the amount on Earth is **deuterium**, as stated in the text: "The amount of Martian deuterium... is five to seven times the amount on Earth". The first letter of deuterium is **D**. Putting **P** and **D** in alphabetical order gives **DP**.$a$::text)),
     -- Wrong on the FIRST hop: it reads the planet as Earth, so the third letter is r rather than P.
-    '{incorrect_grounding,answer_text}', to_jsonb($a$The planet name that appears between 'Mars' and 'brightness' is Earth, and the third letter of Earth is **r**. The isotope whose amount on Mars is described as seven times the amount on Earth is deuterium, and its first letter is **d**. Putting **r** and **d** in alphabetical order gives **dr**. [338:"Earth"] [957:"deuterium"]$a$::text)),
-    -- Wrong on the OPERATION: both letters are right and the order is backwards. Previously this
-    -- variant reported the wrong SUM, which was the same idea in the arithmetic the file removes.
-    '{incorrect_nongrounding,answer_text}', to_jsonb($a$The planet name that appears between 'Mars' and 'brightness' is Jupiter, and the third letter of Jupiter is **p**. The isotope whose amount on Mars is described as seven times the amount on Earth is deuterium, and its first letter is **d**. Putting **p** and **d** in alphabetical order gives **pd**.$a$::text))
+    --
+    -- MARKERS INLINE, NOT TRAILING. This variant used to end "...gives **dr**. [338:"Earth"]
+    -- [957:"deuterium"]" — both markers dangling after the final full stop. Stripping them for the
+    -- non-grounded arm left a trailing space, so the two arms were not the same string, and in the
+    -- grounded arm the chips came out attached to nothing: a reference is only useful next to the
+    -- claim it backs. Anchored to "Earth" and "deuterium", the way the correct variant is written,
+    -- the non-grounded text is now this same sentence with the markers removed and nothing else.
+    '{incorrect_grounding,answer_text}', to_jsonb($a$The planet name that appears between 'Mars' and 'brightness' is Earth [338:"Earth"], and the third letter of Earth is **r**. The isotope whose amount on Mars is described as seven times the amount on Earth is deuterium [957:"deuterium"], and its first letter is **d**. Putting **r** and **d** in alphabetical order gives **dr**.$a$::text)),
+    -- THE SAME WRONG ANSWER, WITHOUT THE EVIDENCE. An earlier draft of this file gave the two arms
+    -- two different errors — the grounded one misread the planet, the non-grounded one put the right
+    -- letters in the wrong order. That is two stimuli, not one claim in two conditions: a
+    -- participant in the non-grounded arm would have been judging a different mistake, and the
+    -- comparison the arms exist for would have been between claims rather than between conditions.
+    '{incorrect_nongrounding,answer_text}', to_jsonb($a$The planet name that appears between 'Mars' and 'brightness' is Earth, and the third letter of Earth is **r**. The isotope whose amount on Mars is described as seven times the amount on Earth is deuterium, and its first letter is **d**. Putting **r** and **d** in alphabetical order gives **dr**.$a$::text))
 where id = 'MARS-v1';
 
 -- ── MUFC-V1-TEXT · position difference → alphabetical order ──────────────────────────────────────
@@ -232,3 +244,9 @@ order by id;
 -- — after which the non-grounded arm is the same sentence with the marker removed, and reads
 -- correctly on its own. Left out of this file because it changes what the GROUNDED arm shows, which
 -- is a stimulus change worth making deliberately rather than as a tidy-up.
+
+-- ── One more trailing marker, left alone ─────────────────────────────────────────────────────────
+-- TESLA-V1's incorrect_grounding ends with [ev:tesla_lighting_demo] after the final full stop. That
+-- one is defensible as written — an image reference for the answer as a whole rather than for a
+-- phrase in it — and its two arms already match once markers are stripped, so it is not touched
+-- here. Worth moving next to the sentence about the lecture image if that claim is ever re-authored.
