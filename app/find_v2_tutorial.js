@@ -113,7 +113,7 @@
               <p class="tut-given"><b>Given:</b> a recording of an agent doing a task, and what it
                 reported back afterwards.</p>
               <p class="tut-task"><b>Task:</b> decide whether it really did the job — and whether it
-                reported truthfully what it did. If not, mark the step or steps that went wrong.</p>
+                reported truthfully what it did. You may also mark any steps that went wrong.</p>
             </div>
           </div>
         </div>
@@ -278,7 +278,7 @@
   // Markup in it renders as the tags themselves.
   const GUIDE_POINTS = [
     ['Open View Journey', 'Every step it took. Hover one to see the page behind it.'],
-    ['Mark while you review', 'Use Mark wrong immediately when a step looks incorrect.'],
+    ['Optional step marks', 'Use Mark wrong when you can identify an incorrect step.'],
     ['“No” covers two cases', 'It did not finish, or it claims something that did not happen.'],
   ];
 
@@ -531,8 +531,8 @@
       },
       {
         target: '.tv-mark-wrong',
-        title: 'Mark a wrong step as you find it',
-        body: 'You do not need to choose Yes or No first. Select <b>Mark wrong</b> whenever a step looks incorrect. You can mark more than one, and select it again to undo it.',
+        title: 'Optionally mark a wrong step',
+        body: 'You do not need to choose Yes or No first. Select <b>Mark wrong</b> when you can identify an incorrect step. You can mark more than one, undo a mark, or leave all steps unmarked.',
       },
       {
         // The legend, not a flagged row: it is the thing that explains what the flags mean, and it
@@ -551,7 +551,7 @@
       {
         target: '#q-find-answer',
         title: 'Your verdict',
-        body: 'Did it complete the task? <b>“No”</b> covers two cases: it did not finish, <b>or</b> it claims something that did not happen. If you choose No, at least one journey step must be marked.',
+        body: 'Did it complete the task? <b>“No”</b> covers two cases: it did not finish, <b>or</b> it claims something that did not happen. Step marking is optional, including after you choose No.',
       },
     ];
   }
@@ -607,9 +607,11 @@
             : verdictRow(right, right
               ? `You said ${String(answer).toUpperCase()} — right.`
               : `You said ${String(answer).toUpperCase()}. It is ${debrief.verdict.toUpperCase()}.`)}
-          ${task?.taskType === 'guide' ? verdictRow(stepsRight, stepsRight
-            ? `You marked ${stepList(markedSteps)} — right.`
-            : `You marked ${stepList(markedSteps)}. Mark ${stepList(expectedSteps)}.`) : ''}
+          ${task?.taskType !== 'guide' ? '' : !markedSteps.length
+            ? `<p class="q-sub">You left the optional step markers blank. In this practice, the wrong steps are ${stepList(expectedSteps)}.</p>`
+            : verdictRow(stepsRight, stepsRight
+              ? `You marked ${stepList(markedSteps)} — right.`
+              : `You marked ${stepList(markedSteps)}. The wrong steps are ${stepList(expectedSteps)}.`)}
           <p class="q-text tut-debrief-answer">${esc(debrief.answer)}</p>
           <p class="q-sub">${debrief.why}${task?.taskType === 'find' ? '' : ` ${debrief.where}`}</p>
           ${task?.taskType === 'find'

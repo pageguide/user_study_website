@@ -290,13 +290,13 @@
   /**
    * One Guide judgment, for pageguide_guide_v2_results.
    *
-   * The Guide task in V2 asks for a verdict and step-level localization. Steps can be marked while
-   * the journey is reviewed; a No verdict makes at least one mark required. The selected numbers
-   * are stored in their own `marked_wrong_steps` column rather than squeezed into V1's
-   * `guide_errors` taxonomy: V2 asks where, but does not ask the participant to classify an error
-   * type. Problem/type scores therefore stay null. Step scores are filled only when the task already
-   * carries `guide_ground_truth.errors[].steps`; selections remain stored and can be rescored later
-   * for tasks whose step key is authored afterwards.
+   * The Guide task in V2 asks for a verdict and offers optional step-level localization. Steps can
+   * be marked while the journey is reviewed, but a No verdict can also be submitted with no marks.
+   * The selected numbers are stored in their own `marked_wrong_steps` column rather than squeezed
+   * into V1's `guide_errors` taxonomy: V2 asks where, but does not ask the participant to classify
+   * an error type. Problem/type scores therefore stay null. Step scores are filled only when the
+   * task already carries `guide_ground_truth.errors[].steps`; selections remain stored and can be
+   * rescored later for tasks whose step key is authored afterwards.
    *
    * `answer_correct_snapshot` is the key AS IT STOOD when this participant was shown the run. The
    * key is authored in Admin and can be revised, and a verdict is only interpretable against the

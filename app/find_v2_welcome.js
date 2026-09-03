@@ -2110,7 +2110,7 @@
     const steps = Array.isArray(row?.marked_wrong_steps)
       ? row.marked_wrong_steps.map(Number).filter(Number.isFinite).sort((a, b) => a - b) : [];
     if (steps.length) return `<td><b>${esc(steps.join(', '))}</b></td>`;
-    if (row?.guide_answer_correct === false) return '<td class="is-bad">None</td>';
+    if (row?.guide_answer_correct === false) return '<td class="q-sub">None marked</td>';
     return '<td class="q-sub">—</td>';
   }
 

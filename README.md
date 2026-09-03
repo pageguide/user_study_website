@@ -215,8 +215,8 @@ the thing that comes next rather than a diagram of it. Each is followed by the a
 
 On the Guide practice and every real Guide task, a small **Mark wrong** control is visible on every
 Journey row from the start. Participants can mark problems while reviewing, before choosing their
-Yes/No verdict; multiple steps are allowed. A No verdict requires at least one mark, while choosing
-Yes clears contradictory marks. Real Guide results store the sorted selection in
+Yes/No verdict; multiple steps are allowed, and step marking remains optional after a No verdict.
+Choosing Yes clears contradictory marks. Real Guide results store the sorted selection in
 `pageguide_guide_v2_results.marked_wrong_steps`. If a task already has
 `guide_ground_truth.errors[].steps`, the existing `score_step_*` fields are filled immediately. If
 not, the raw selection is still retained so it can be scored after that ground truth is added.
@@ -332,7 +332,8 @@ task?", a participant had no way to know that a fluent, confident, fabricated an
 so the wording served that item worst of all.
 
 If the participant chooses **No**, one lighter localization question follows: “Which step or steps
-went wrong?” They mark those numbers directly on the Journey rows. The study still asks no second
+went wrong?” They may optionally mark those numbers directly on the Journey rows, or submit without
+marking a step. The study still asks no second
 outcome verdict: a second key derived from the two facts already stored
 (`claims_completion = agent_completed`) would land every live run on the diagonal and measure
 nothing without either re-admitting the excluded honest failures or re-keying the successes.

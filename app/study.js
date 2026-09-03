@@ -1104,8 +1104,8 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
  *
  * A LIGHT TWO-STAGE QUESTION. V1's instrument (app/instrument.js) asks the verdict, what kind of
  * outcome problem it was, and which error types occurred at which steps — a taxonomy that takes
- * most of the time limit. V2 asks the same binary verdict, then only the step numbers after a No.
- * It deliberately does not grow back toward the problem/error-type taxonomy.
+ * most of the time limit. V2 asks the same binary verdict and offers optional step marks. It
+ * deliberately does not grow back toward the problem/error-type taxonomy.
  *
  * THE VERDICT COVERS BOTH WAYS A RUN FAILS, which is why the wording names them. A run can fall
  * short of the job, or it can finish and misdescribe what it saw — and the second is the item the
@@ -1239,18 +1239,13 @@ function bindGuideStepMarkers(onChange) {
     values,
     clear() { selected.clear(); paint(); },
     setDisabled(next) { disabled = !!next; paint(); },
-    focusFirst() {
-      const first = buttons[0];
-      try { first?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { /* ignore */ }
-      first?.focus({ preventScroll: true });
-    },
     destroy() {
       cleanups.forEach(cleanup => cleanup());
     },
   };
 }
 
-/** The question pane for a Guide task: verdict first, then step localization for a No. */
+/** The question pane for a Guide task: verdict plus optional step localization. */
 function renderGuideV2Questions(task, record, arm) {
   const { idx, queue } = S.state;
   const goal = task?.goal || task?.question || record?.goal || record?.title || '';
@@ -1282,8 +1277,8 @@ function renderGuideV2Questions(task, record, arm) {
 
       <div class="q-card q-guide-localize" id="q-guide-localize" hidden>
         <div class="q-card-head"><span class="q-badge">Q2</span>
-          <p class="q-text">Which step or steps went wrong?${window.QForm.requiredMark()}</p></div>
-        <p class="q-sub">In <b>View Journey</b>, select <b>Mark wrong</b> beside every step where the problem occurred.</p>
+          <p class="q-text">Which step or steps went wrong? <span class="q-sub">Optional</span></p></div>
+        <p class="q-sub">If you can identify them, select <b>Mark wrong</b> beside the relevant steps in <b>View Journey</b>.</p>
         <p class="q-guide-step-status" id="q-guide-step-status" aria-live="polite">No steps marked yet.</p>
       </div>
 
@@ -1303,10 +1298,6 @@ function renderGuideV2Questions(task, record, arm) {
     if (status) status.textContent = steps.length
       ? `${steps.length === 1 ? 'Step' : 'Steps'} ${steps.join(', ')} marked wrong.`
       : 'No steps marked yet.';
-    if (steps.length) {
-      window.QForm.markMissing($q('q-guide-localize'), false);
-      window.QForm.refreshError();
-    }
   });
 
   const finish = async (answerValue) => {
@@ -1362,7 +1353,6 @@ function renderGuideV2Questions(task, record, arm) {
       $q('q-guide-localize').hidden = !localizing;
       if (!localizing) {
         stepMarkers.clear();
-        window.QForm.markMissing($q('q-guide-localize'), false);
       }
     });
   });
@@ -1373,11 +1363,6 @@ function renderGuideV2Questions(task, record, arm) {
     if (!sel) {
       window.QForm.flagMissing([$q('q-find-answer')]);
       return showError('Please answer the highlighted question: did the agent successfully complete the task?');
-    }
-    if (sel.value === 'no' && !stepMarkers.values().length) {
-      window.QForm.markMissing($q('q-guide-localize'));
-      stepMarkers.focusFirst();
-      return showError('Mark at least one wrong step in View Journey before submitting.');
     }
     clearError();
     clocks.settle();

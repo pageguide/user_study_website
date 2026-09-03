@@ -12,7 +12,7 @@ alter table public.pageguide_guide_v2_results
   add column if not exists marked_wrong_steps integer[] not null default '{}'::integer[];
 
 comment on column public.pageguide_guide_v2_results.marked_wrong_steps is
-  'Sorted step numbers the participant marked wrong while reviewing the Guide trajectory. Marking is available before the verdict; an explicit Yes clears the selection, while a verdict timeout may still retain marks. Empty also covers no marks and pre-migration rows. This raw response remains usable when guide_ground_truth.errors[].steps is authored later.';
+  'Sorted step numbers the participant optionally marked wrong while reviewing the Guide trajectory. Marking is available before the verdict and remains optional after No; an explicit Yes clears the selection, while a verdict timeout may still retain marks. Empty also covers no marks and pre-migration rows. This raw response remains usable when guide_ground_truth.errors[].steps is authored later.';
 
 -- PostgREST caches table shapes. Ask it to expose the new column immediately instead of waiting for
 -- its next automatic schema refresh; harmless if the notification is ignored by a local Postgres.
