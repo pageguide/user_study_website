@@ -471,6 +471,82 @@ body {
 .q-step:hover { border-color: var(--accent); color: var(--accent-dark); }
 .q-step.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
+/* ── Find V2 Guide: mark the wrong step in the journey ───────────────────────
+   The trajectory is already where a participant reads and inspects a step, so localization lives
+   on that row instead of repeating every step number in the question pane. The controls are visible
+   from the start so a problem can be marked at the moment it is found. */
+.tv-step-actions {
+  justify-self: end;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.tv-mark-wrong[hidden] { display: none; }
+
+.tv-mark-wrong {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 9px;
+  border: 1px solid rgba(165, 32, 32, 0.28);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--bad);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tv-mark-wrong:hover,
+.tv-mark-wrong:focus-visible {
+  border-color: var(--bad);
+  background: rgba(165, 32, 32, 0.05);
+  outline: none;
+}
+
+.tv-mark-wrong:focus-visible { box-shadow: 0 0 0 3px rgba(165, 32, 32, 0.14); }
+
+.tv-mark-wrong[aria-pressed="true"] {
+  border-color: var(--bad);
+  background: var(--bad);
+  color: #fff;
+}
+
+.tv-mark-wrong:disabled { opacity: 0.6; cursor: default; }
+
+.tv-mark-plus {
+  width: 13px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.tv-journey-row.is-marked-wrong,
+.tv-journey-row.is-marked-wrong.is-key,
+.tv-journey-row.is-marked-wrong.is-shot:hover {
+  background: rgba(165, 32, 32, 0.07);
+  box-shadow: inset 3px 0 0 var(--bad);
+}
+
+.tv-journey-row.is-marked-wrong .tv-dot { background: var(--bad); }
+
+.q-guide-localize > .q-sub { margin: -2px 0 9px; line-height: 1.55; }
+.q-guide-step-status {
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(120, 87, 255, 0.08);
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 750;
+}
+
 .q-field {
   width: 100%;
   border: 1px solid var(--line);

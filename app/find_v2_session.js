@@ -290,10 +290,13 @@
   /**
    * One Guide judgment, for pageguide_guide_v2_results.
    *
-   * The Guide task in V2 asks ONE question — did the agent complete the task? — so
-   * guide_answer_problems, guide_errors and every problem/step score stay at their defaults. They
-   * are not zeros to be averaged; they are questions this protocol does not ask, and the columns are
-   * left alone rather than filled with something that would read as an answer.
+   * The Guide task in V2 asks for a verdict and step-level localization. Steps can be marked while
+   * the journey is reviewed; a No verdict makes at least one mark required. The selected numbers
+   * are stored in their own `marked_wrong_steps` column rather than squeezed into V1's
+   * `guide_errors` taxonomy: V2 asks where, but does not ask the participant to classify an error
+   * type. Problem/type scores therefore stay null. Step scores are filled only when the task already
+   * carries `guide_ground_truth.errors[].steps`; selections remain stored and can be rescored later
+   * for tasks whose step key is authored afterwards.
    *
    * `answer_correct_snapshot` is the key AS IT STOOD when this participant was shown the run. The
    * key is authored in Admin and can be revised, and a verdict is only interpretable against the
@@ -329,11 +332,17 @@
       failure_mode: window.FindV2GuideKey.FAILURE_MODES.includes(payload.failureMode)
         ? payload.failureMode : null,
       guide_answer_correct: verdict,
+      marked_wrong_steps: Array.from(new Set((payload.markedWrongSteps || [])
+        .map(Number).filter(step => Number.isInteger(step) && step >= 0))).sort((a, b) => a - b),
       verdict_timed_out: verdict == null,
       score_verdict_correct: verdict == null || expected == null ? null : verdict === expected,
+      score_step_precision: payload.stepScores?.precision ?? null,
+      score_step_recall: payload.stepScores?.recall ?? null,
+      score_step_exact: payload.stepScores?.exact ?? null,
       time_ms: payload.answerElapsed,
       answer_time_ms: payload.answerElapsed,
       verdict_time_ms: payload.answerChoiceMs,
+      localization_time_ms: payload.localizationElapsed ?? null,
       confidence: confidence || null,
       helpfulness: helpfulness || null,
       notes: notes || null,
@@ -364,12 +373,11 @@
     buildFindResultRow,
     buildGuideResultRow,
     // V1's taxonomy instrument (app/instrument.js → askPostQuestions) builds its row through here.
-    // V2's Guide task asks one question and goes through buildGuideResultRow, so reaching this means
-    // the wrong instrument was mounted — worth a named error rather than an undefined-is-not-a-
-    // function three frames deeper.
+    // V2's Guide task asks a verdict plus step-only localization and goes through
+    // buildGuideResultRow, so reaching this means the full V1 taxonomy instrument was mounted —
+    // worth a named error rather than an undefined-is-not-a-function three frames deeper.
     buildResultRow() {
       throw new Error('Find V2 Guide tasks do not use the taxonomy instrument; see buildGuideResultRow.');
     },
   };
 }());
-

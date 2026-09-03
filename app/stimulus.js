@@ -355,10 +355,17 @@ function render() {
             const live = showShots && !!step.screenshot;
             const key = marking && keySteps.has(Number(step.n));
             return `
-            <div class="tv-journey-row${live ? ' is-shot' : ''}${key ? ' is-key' : ''}"${live ? ` data-step="${esc(String(step.n))}"` : ''}>
+            <div class="tv-journey-row${live ? ' is-shot' : ''}${key ? ' is-key' : ''}"
+              data-journey-step="${esc(String(step.n))}"${live ? ` data-step="${esc(String(step.n))}"` : ''}>
               <span class="tv-dot"></span>
               <span class="tv-journey-text">${key ? '<span class="tv-key-flag">milestone</span>' : ''}<b>${esc(String(step.n))}</b> ${esc(step.instruction || '')}</span>
-              ${live ? '<span class="tv-peek" aria-hidden="true">⌕</span>' : ''}
+              <span class="tv-step-actions">
+                ${live ? '<span class="tv-peek" aria-hidden="true">⌕</span>' : ''}
+                <button type="button" class="tv-mark-wrong" data-mark-step="${esc(String(step.n))}"
+                  aria-pressed="false" aria-label="Mark step ${esc(String(step.n))} as wrong" hidden>
+                  <span class="tv-mark-plus" aria-hidden="true">+</span><span class="tv-mark-label">Mark wrong</span>
+                </button>
+              </span>
             </div>`;
           }).join('')}
           ${showShots && steps.length && !steps.some(st => st.screenshot) ? `

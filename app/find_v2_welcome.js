@@ -2106,6 +2106,14 @@
     return `<td><span class="v2-chip is-mode-${esc(mode)}">${esc(window.FindV2GuideKey.label(mode))}</span></td>`;
   }
 
+  function markedWrongStepsCellHtml(row) {
+    const steps = Array.isArray(row?.marked_wrong_steps)
+      ? row.marked_wrong_steps.map(Number).filter(Number.isFinite).sort((a, b) => a - b) : [];
+    if (steps.length) return `<td><b>${esc(steps.join(', '))}</b></td>`;
+    if (row?.guide_answer_correct === false) return '<td class="is-bad">None</td>';
+    return '<td class="q-sub">—</td>';
+  }
+
   function groupCellHtml(row) {
     const group = groupOfRow(row);
     return `<td><span class="v2-chip is-group-${group.key.toLowerCase()}">${esc(group.label)}</span></td>`;
@@ -2587,7 +2595,7 @@
       ${modeAccuracyHtml(rows)}
       ${referenceUseHtml(rows)}
       ${rows.length ? `<div class="viz-table-wrap"><table class="viz-table find-v2-results-table">
-        <thead><tr><th>When<span class="q-sub"> · Central</span></th><th>Participant</th><th>Group</th><th>Task</th><th>Why incorrect</th><th>Answer shown</th><th>Grounding</th><th>Refs opened</th><th>Completed?</th><th>Answer</th><th>Scored</th><th>Time</th></tr></thead>
+        <thead><tr><th>When<span class="q-sub"> · Central</span></th><th>Participant</th><th>Group</th><th>Task</th><th>Why incorrect</th><th>Answer shown</th><th>Grounding</th><th>Refs opened</th><th>Completed?</th><th>Answer</th><th>Steps marked wrong</th><th>Scored</th><th>Time</th></tr></thead>
         <tbody>${rows.slice(0, 1000).map(row => `<tr>
           <td>${esc(localTime(row.created_at))}</td>
           <td>${esc(row.participant_id)}</td>${groupCellHtml(row)}<td><code>${esc(row.task_id)}</code></td>
@@ -2599,6 +2607,7 @@
           ${refsCellHtml(row)}
           <td>${row.answer_correct_snapshot == null ? '—' : (row.answer_correct_snapshot ? 'Yes' : 'No')}</td>
           <td>${row.guide_answer_correct == null ? '—' : (row.guide_answer_correct ? 'Yes' : 'No')}</td>
+          ${markedWrongStepsCellHtml(row)}
           <td class="${row.score_verdict_correct == null ? '' : (row.score_verdict_correct ? 'is-good' : 'is-bad')}">${
             row.score_verdict_correct == null
               ? (row.verdict_timed_out ? 'Timed out' : '—')
@@ -2755,4 +2764,3 @@
 
   loadWelcome();
 }());
-

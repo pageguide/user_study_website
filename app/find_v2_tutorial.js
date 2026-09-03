@@ -113,7 +113,7 @@
               <p class="tut-given"><b>Given:</b> a recording of an agent doing a task, and what it
                 reported back afterwards.</p>
               <p class="tut-task"><b>Task:</b> decide whether it really did the job — and whether it
-                reported truthfully what it did.</p>
+                reported truthfully what it did. If not, mark the step or steps that went wrong.</p>
             </div>
           </div>
         </div>
@@ -278,6 +278,7 @@
   // Markup in it renders as the tags themselves.
   const GUIDE_POINTS = [
     ['Open View Journey', 'Every step it took. Hover one to see the page behind it.'],
+    ['Mark while you review', 'Use Mark wrong immediately when a step looks incorrect.'],
     ['“No” covers two cases', 'It did not finish, or it claims something that did not happen.'],
   ];
 
@@ -529,6 +530,11 @@
         body: 'Every action it took, in order. <b>Hover a step</b> to see the page it was looking at when it acted, and click for a full-size view.',
       },
       {
+        target: '.tv-mark-wrong',
+        title: 'Mark a wrong step as you find it',
+        body: 'You do not need to choose Yes or No first. Select <b>Mark wrong</b> whenever a step looks incorrect. You can mark more than one, and select it again to undo it.',
+      },
+      {
         // The legend, not a flagged row: it is the thing that explains what the flags mean, and it
         // is at the top of the list, so a card placed against it does not sit on top of the steps
         // the participant is being told to look at. Dropped when the flag is off — startTour skips
@@ -545,7 +551,7 @@
       {
         target: '#q-find-answer',
         title: 'Your verdict',
-        body: 'Did it complete the task? <b>“No”</b> covers two cases: it did not finish, <b>or</b> it claims something that did not happen.',
+        body: 'Did it complete the task? <b>“No”</b> covers two cases: it did not finish, <b>or</b> it claims something that did not happen. If you choose No, at least one journey step must be marked.',
       },
     ];
   }
@@ -564,7 +570,9 @@
    * scoring — it is exactly what a real task does, and better met here.
    */
   function finishPracticeTask(task, payload) {
-    const given = payload && typeof payload === 'object' ? payload.answer : payload;
+    const given = payload && typeof payload === 'object'
+      ? { answer: payload.answer, markedWrongSteps: payload.markedWrongSteps || [] }
+      : { answer: payload, markedWrongSteps: [] };
     tut.answers[tut.idx] = given;
     showDebrief(task, given);
   }
@@ -577,8 +585,16 @@
 
     const debrief = window.TutorialSource.debrief(task?.id);
     const last = tut.idx >= tut.queue.length - 1;
-    const timedOut = given == null;
-    const right = !timedOut && String(given) === debrief.verdict;
+    const answer = given && typeof given === 'object' ? given.answer : given;
+    const markedSteps = given && typeof given === 'object' && Array.isArray(given.markedWrongSteps)
+      ? given.markedWrongSteps.map(Number).filter(Number.isFinite).sort((a, b) => a - b) : [];
+    const expectedSteps = Array.isArray(debrief.wrongSteps)
+      ? debrief.wrongSteps.slice().sort((a, b) => a - b) : [];
+    const timedOut = answer == null;
+    const right = !timedOut && String(answer) === debrief.verdict;
+    const stepsRight = task?.taskType !== 'guide' || (markedSteps.length === expectedSteps.length
+      && markedSteps.every((step, i) => step === expectedSteps[i]));
+    const stepList = steps => steps.length ? `step${steps.length === 1 ? '' : 's'} ${steps.join(', ')}` : 'no steps';
 
     renderNav(`Practice ${tut.idx + 1} of ${tut.queue.length} · the answer`);
     questionPane().innerHTML = `
@@ -589,8 +605,11 @@
             ? `<p class="tut-verdict is-off"><span class="tut-verdict-mark">⏱</span>The clock ran out.
                 A task nobody answers is stored as unanswered, not as a No.</p>`
             : verdictRow(right, right
-              ? `You said ${String(given).toUpperCase()} — right.`
-              : `You said ${String(given).toUpperCase()}. It is ${debrief.verdict.toUpperCase()}.`)}
+              ? `You said ${String(answer).toUpperCase()} — right.`
+              : `You said ${String(answer).toUpperCase()}. It is ${debrief.verdict.toUpperCase()}.`)}
+          ${task?.taskType === 'guide' ? verdictRow(stepsRight, stepsRight
+            ? `You marked ${stepList(markedSteps)} — right.`
+            : `You marked ${stepList(markedSteps)}. Mark ${stepList(expectedSteps)}.`) : ''}
           <p class="q-text tut-debrief-answer">${esc(debrief.answer)}</p>
           <p class="q-sub">${debrief.why}${task?.taskType === 'find' ? '' : ` ${debrief.where}`}</p>
           ${task?.taskType === 'find'

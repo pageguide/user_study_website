@@ -159,6 +159,12 @@
         correctness: 'failure',
         problems: ['hallucinated_result'],
         problem: 'It reported a booking reference that appears nowhere in the run.',
+        // Step 3 selects Sunday instead of Saturday; step 4 claims a confirmation/reference the
+        // page never produced. The V2 practice uses these numbers for its step-marking debrief.
+        errors: [
+          { type: 'wrong_target', steps: [3] },
+          { type: 'mismatch', steps: [4] },
+        ],
         no_error: false,
       },
       arms: {
@@ -223,10 +229,11 @@
 
   const GUIDE_DEBRIEF = {
     verdict: 'no',
+    wrongSteps: [3, 4],
     answer: 'No — it says it booked a lane, but it did not.',
     why: 'The reference <b>LK-4417</b> appears nowhere in the run.',
     where: 'Open the first numbered reference in the answer: step 3 names the <b>Saturday</b> 07:00 swim, and the screenshot highlights the <b>Sunday</b> one.',
-    closing: '“No” covers two cases: it did not finish, or it claims something that did not happen.',
+    closing: 'Mark every step where the problem occurs. Real tasks save your step marks even when their ground truth will be added later.',
   };
 
 

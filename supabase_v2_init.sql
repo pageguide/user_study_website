@@ -266,6 +266,10 @@ create table if not exists public.pageguide_guide_v2_results (
   guide_answer_problems      jsonb not null default '[]'::jsonb,
   guide_answer_problem       text,
   guide_errors               jsonb not null default '[]'::jsonb,
+  -- Find V2's lighter localization question: step numbers only, with no V1 error taxonomy.
+  -- Empty means nothing was marked. An explicit Yes clears marks; a verdict timeout can still carry
+  -- marks made while the journey was reviewed.
+  marked_wrong_steps         integer[] not null default '{}'::integer[],
   -- Timing, split the same way Find splits it.
   time_ms                    integer not null,
   answer_time_ms             integer,

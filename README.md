@@ -182,6 +182,7 @@ project that has only ever run `supabase_find_v2.sql`, run these in order in the
 | `supabase_v2_group_chip.sql` | `show_group_chip` — whether a participant is told which group they are in (off by default) |
 | `supabase_v2_milestone_flag.sql` | `flag_milestones` — whether the Guide journey flags the trail's steps (on by default) |
 | `supabase_v2_reasoning_trail.sql` | `show_reasoning_trail` — whether a Guide task shows the agent's own account of the run (off by default) |
+| `supabase_v2_step_marks.sql` | `marked_wrong_steps` — step numbers a participant marks while reviewing a Guide task |
 | `supabase_v2_local_time.sql` | views that read `created_at` in Alabama local time — optional, changes no data |
 
 Then, once per batch of imported runs:
@@ -211,6 +212,14 @@ task 1.
 Offered once, before task 1, on a browser that has not seen it — and skippable from anywhere. Two
 practice tasks, one Find and one Guide, rendered by the study's own screens so what is rehearsed is
 the thing that comes next rather than a diagram of it. Each is followed by the answer and why.
+
+On the Guide practice and every real Guide task, a small **Mark wrong** control is visible on every
+Journey row from the start. Participants can mark problems while reviewing, before choosing their
+Yes/No verdict; multiple steps are allowed. A No verdict requires at least one mark, while choosing
+Yes clears contradictory marks. Real Guide results store the sorted selection in
+`pageguide_guide_v2_results.marked_wrong_steps`. If a task already has
+`guide_ground_truth.errors[].steps`, the existing `score_step_*` fields are filled immediately. If
+not, the raw selection is still retained so it can be scored after that ground truth is added.
 
 The material is invented (`app/find_v2_tutorial_fixtures.js`): a community pool timetable that no
 real stimulus touches, and not the library V1's walkthrough uses, so somebody who has done both
@@ -308,7 +317,8 @@ Guide scores stay in two groups, never averaged:
 `null` means *not scored* — no ground truth recorded, or nothing to be precise about — and never
 zero. An unfinished stimulus must not read as a participant who got everything wrong.
 
-That is the V1 protocol. **Find V2's Guide task asks one question**, in these exact words:
+That is the V1 protocol. **Find V2's Guide task starts with one binary verdict**, in these exact
+words:
 
 > **Did the agent successfully complete the task?**
 >
@@ -321,13 +331,13 @@ the answer reads clean and only the trajectory contradicts it. Asked as "did the
 task?", a participant had no way to know that a fluent, confident, fabricated answer was a **No**,
 so the wording served that item worst of all.
 
-It stays one verdict rather than two questions. A second key derived from the two facts already
-stored (`claims_completion = agent_completed`) lands every live run on the diagonal — every run
-keyed correct claims completion, and so does every run keyed incorrect — so a second question would
-have measured nothing without either re-admitting the excluded honest failures or re-keying the
-successes.
+If the participant chooses **No**, one lighter localization question follows: “Which step or steps
+went wrong?” They mark those numbers directly on the Journey rows. The study still asks no second
+outcome verdict: a second key derived from the two facts already stored
+(`claims_completion = agent_completed`) would land every live run on the diagonal and measure
+nothing without either re-admitting the excluded honest failures or re-keying the successes.
 
-**Why** a run is incorrect is not asked, because the recorder already wrote it down.
+**Why/type** a run is incorrect is not asked, because the recorder already wrote it down.
 `app/find_v2_guide_key.js` reads `guide_ground_truth` and classifies each run as `none`,
 `misreported`, `incomplete`, `could_not_complete` or `unspecified`, and the mode is snapshotted onto
 each result row as `failure_mode` — snapshotted, not joined, because the ground truth is editable

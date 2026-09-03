@@ -454,8 +454,8 @@ async function showTask() {
   const arm = S.taskArm ? S.taskArm(task) : S.conditionLabel(task?.arm || S.state.arm);
   panelMessage('<p class="q-text">Loading the next task…</p>');
   if (task.taskType === 'find') return showFindTask(task);
-  // V2's Guide task shares the viewer but not the instrument: it asks one question, not the error
-  // taxonomy, and reads its trajectory from a different table.
+  // V2's Guide task shares the viewer but not the V1 instrument: it asks for a verdict and, after a
+  // No, step numbers only — not the problem/error taxonomy — and reads from a different table.
   if (IS_FIND_V2) return showGuideV2Task(task, arm);
 
   let record = null;
@@ -1102,10 +1102,10 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
 /**
  * The V2 Guide task: read what the agent did, then say whether it finished the job.
  *
- * ONE QUESTION. V1's instrument (app/instrument.js) asks the verdict, then what kind of problem it
- * was, then which error types at which steps — a taxonomy that takes most of the three minutes. V2
- * asks the verdict and stops. Nothing here should grow back towards mountInstrument without the
- * protocol changing first.
+ * A LIGHT TWO-STAGE QUESTION. V1's instrument (app/instrument.js) asks the verdict, what kind of
+ * outcome problem it was, and which error types occurred at which steps — a taxonomy that takes
+ * most of the time limit. V2 asks the same binary verdict, then only the step numbers after a No.
+ * It deliberately does not grow back toward the problem/error-type taxonomy.
  *
  * THE VERDICT COVERS BOTH WAYS A RUN FAILS, which is why the wording names them. A run can fall
  * short of the job, or it can finish and misdescribe what it saw — and the second is the item the
@@ -1116,8 +1116,8 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
  * run keyed incorrect both claim completion, putting a second key on the diagonal for all of them.
  *
  * WHY it failed is not asked. The recorder already wrote it down, so app/find_v2_guide_key.js reads
- * it off guide_ground_truth and the row carries it — a split for the analysis that costs the
- * participant no time at all.
+ * it off guide_ground_truth and the row carries it. WHERE it failed is asked directly as step
+ * marks, because those are the participant localization measure this flow now records.
  *
  * The left pane leads with the reasoning trail and folds the journey away beneath it, which is the
  * one place this differs from what V1 participants saw — see the layout options on mountStimulus.
@@ -1159,13 +1159,105 @@ async function showGuideV2Task(task, arm) {
   renderGuideV2Questions(task, record, arm);
 }
 
-/** The question pane for a Guide task: the same two clocks as Find, and a single Yes/No. */
+/**
+ * The step-level answer key when one has been authored.
+ *
+ * Ground truth lives in `guide_ground_truth.errors[].steps` on the task, but not every imported run
+ * has been localized yet. An absent/empty list therefore means "not scored yet", never "the
+ * participant should select no steps". Keeping that distinction is what lets older result rows be
+ * rescored later from their saved `marked_wrong_steps` after the researcher fills the key in.
+ */
+function guideGroundTruthSteps(record) {
+  const errors = Array.isArray(record?.guide_ground_truth?.errors)
+    ? record.guide_ground_truth.errors : [];
+  return Array.from(new Set(errors.flatMap(error => Array.isArray(error?.steps)
+    ? error.steps : (error?.step == null ? [] : [error.step]))
+    .map(Number).filter(step => Number.isInteger(step) && step >= 0))).sort((a, b) => a - b);
+}
+
+/** Score a step selection only when this failed run already has a step-level key. */
+function guideStepScores(record, markedSteps, verdict) {
+  if (verdict !== 'no') return null;       // the localization question was not asked
+  const truth = guideGroundTruthSteps(record);
+  if (!truth.length) return null;          // the researcher can author this later
+  const marked = Array.from(new Set((markedSteps || []).map(Number)
+    .filter(step => Number.isInteger(step) && step >= 0)));
+  const truthSet = new Set(truth);
+  const hits = marked.filter(step => truthSet.has(step)).length;
+  return {
+    precision: marked.length ? hits / marked.length : 0,
+    recall: hits / truth.length,
+    exact: marked.length === truth.length && marked.every(step => truthSet.has(step)),
+  };
+}
+
+/**
+ * Make the trajectory itself the localization control.
+ *
+ * The renderer owns the numbered rows and their screenshots, so duplicating a bank of step buttons
+ * in the question pane would make the participant look back and forth between two copies. These
+ * small toggles live on the rows and are available from the moment the journey appears, so a
+ * participant can mark a problem while they are inspecting it rather than first committing a
+ * verdict and retracing their work. They return a sorted list ready for Supabase.
+ */
+function bindGuideStepMarkers(onChange) {
+  const buttons = Array.from(stimulusPane.querySelectorAll('.tv-mark-wrong'));
+  const selected = new Set();
+  let disabled = false;
+
+  const values = () => Array.from(selected).sort((a, b) => a - b);
+  const paint = () => {
+    buttons.forEach(button => {
+      const step = Number(button.dataset.markStep);
+      const on = selected.has(step);
+      button.hidden = false;
+      button.disabled = disabled;
+      button.setAttribute('aria-pressed', String(on));
+      button.querySelector('.tv-mark-label').textContent = on ? 'Marked wrong' : 'Mark wrong';
+      button.querySelector('.tv-mark-plus').textContent = on ? '✓' : '+';
+      button.closest('.tv-journey-row')?.classList.toggle('is-marked-wrong', on);
+    });
+    onChange?.(values());
+  };
+
+  const cleanups = buttons.map(button => {
+    const click = (event) => {
+      // The containing row opens its screenshot. This click means "mark", not "open".
+      event.stopPropagation();
+      const step = Number(button.dataset.markStep);
+      if (!Number.isFinite(step)) return;
+      if (selected.has(step)) selected.delete(step);
+      else selected.add(step);
+      paint();
+    };
+    button.addEventListener('click', click);
+    return () => button.removeEventListener('click', click);
+  });
+
+  paint();
+  return {
+    values,
+    clear() { selected.clear(); paint(); },
+    setDisabled(next) { disabled = !!next; paint(); },
+    focusFirst() {
+      const first = buttons[0];
+      try { first?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { /* ignore */ }
+      first?.focus({ preventScroll: true });
+    },
+    destroy() {
+      cleanups.forEach(cleanup => cleanup());
+    },
+  };
+}
+
+/** The question pane for a Guide task: verdict first, then step localization for a No. */
 function renderGuideV2Questions(task, record, arm) {
   const { idx, queue } = S.state;
   const goal = task?.goal || task?.question || record?.goal || record?.title || '';
   const answerText = record?.arms?.[arm]?.answer || record?.arms?.grounding?.answer || '';
   const startedAt = Date.now();
   let answerTimer = null;
+  let verdictChoiceMs = null;
   let submitted = false;
   let clocks = null;
 
@@ -1188,6 +1280,13 @@ function renderGuideV2Questions(task, record, arm) {
           : '<b>No</b><small>It did not finish the job, <b>or</b> its answer claims something that did not happen.</small>'))}
       </div>
 
+      <div class="q-card q-guide-localize" id="q-guide-localize" hidden>
+        <div class="q-card-head"><span class="q-badge">Q2</span>
+          <p class="q-text">Which step or steps went wrong?${window.QForm.requiredMark()}</p></div>
+        <p class="q-sub">In <b>View Journey</b>, select <b>Mark wrong</b> beside every step where the problem occurred.</p>
+        <p class="q-guide-step-status" id="q-guide-step-status" aria-live="polite">No steps marked yet.</p>
+      </div>
+
       <div class="q-error-msg" id="q-error-msg" hidden></div>
       <div class="q-actions">
         <button class="q-btn q-btn-primary" id="q-find-submit"${IS_FIND_V2 ? ' disabled' : ''}>Submit →</button>
@@ -1199,19 +1298,39 @@ function renderGuideV2Questions(task, record, arm) {
   const errorEl = $q('q-error-msg');
   const showError = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
   const clearError = () => { errorEl.hidden = true; };
+  const stepMarkers = bindGuideStepMarkers((steps) => {
+    const status = $q('q-guide-step-status');
+    if (status) status.textContent = steps.length
+      ? `${steps.length === 1 ? 'Step' : 'Steps'} ${steps.join(', ')} marked wrong.`
+      : 'No steps marked yet.';
+    if (steps.length) {
+      window.QForm.markMissing($q('q-guide-localize'), false);
+      window.QForm.refreshError();
+    }
+  });
 
   const finish = async (answerValue) => {
     if (submitted) return;
     submitted = true;
     clearInterval(answerTimer);
+    const answerElapsed = Math.max(0, Date.now() - startedAt);
+    // A timed-out participant may still have marked steps before choosing a verdict. Preserve what
+    // they actually did; only an explicit Yes clears the contradictory localization response.
+    const markedWrongSteps = answerValue === 'yes' ? [] : stepMarkers.values();
+    stepMarkers.setDisabled(true);
     await submitGuideV2Result(task, {
       answer: answerValue,
       claimText: answerText,
+      markedWrongSteps,
+      stepScores: guideStepScores(record, markedWrongSteps, answerValue),
       // Read off the record that is on screen, not off the queue: `guide_ground_truth` rides along
       // with the trajectory fetch, and the classification has to describe the run as it was shown.
       failureMode: window.FindV2GuideKey.failureMode(record?.guide_ground_truth, task?.agentCompleted),
-      answerElapsed: Math.max(0, Date.now() - startedAt),
-      answerChoiceMs: answerValue == null ? null : Math.max(0, Date.now() - startedAt),
+      answerElapsed,
+      answerChoiceMs: answerValue == null ? null : (verdictChoiceMs ?? answerElapsed),
+      // Step marking now overlaps verdict formation by design, so there is no honest separate
+      // localization duration. Total and verdict time remain recorded; the dedicated field is null.
+      localizationElapsed: null,
       interactionSummary: taskInteractionSummary(),
     });
   };
@@ -1231,7 +1350,22 @@ function renderGuideV2Questions(task, record, arm) {
     clocks.tick(elapsed);
   }, 250);
 
-  S.state.detachInstrument = () => clearInterval(answerTimer);
+  S.state.detachInstrument = () => {
+    clearInterval(answerTimer);
+    stepMarkers.destroy();
+  };
+
+  questionPane.querySelectorAll('input[name="q-find-answer"]').forEach(input => {
+    input.addEventListener('change', () => {
+      if (verdictChoiceMs == null) verdictChoiceMs = Math.max(0, Date.now() - startedAt);
+      const localizing = input.checked && input.value === 'no';
+      $q('q-guide-localize').hidden = !localizing;
+      if (!localizing) {
+        stepMarkers.clear();
+        window.QForm.markMissing($q('q-guide-localize'), false);
+      }
+    });
+  });
 
   $q('q-find-submit').onclick = async () => {
     window.QForm.clearMissing(questionPane);
@@ -1239,6 +1373,11 @@ function renderGuideV2Questions(task, record, arm) {
     if (!sel) {
       window.QForm.flagMissing([$q('q-find-answer')]);
       return showError('Please answer the highlighted question: did the agent successfully complete the task?');
+    }
+    if (sel.value === 'no' && !stepMarkers.values().length) {
+      window.QForm.markMissing($q('q-guide-localize'));
+      stepMarkers.focusFirst();
+      return showError('Mark at least one wrong step in View Journey before submitting.');
     }
     clearError();
     clocks.settle();
