@@ -403,6 +403,71 @@ function panelMessage(html) {
   questionPane.innerHTML = `<div class="q-body">${html}</div>`;
 }
 
+/**
+ * Seed a one-task queue for `task=<id>` and play it.
+ *
+ * Reads the pool with `listAllGuideTasks` rather than `listStudyGuideTasks` on purpose: a researcher
+ * previewing a run is very often previewing one that is NOT live yet — that is what they are
+ * deciding about — and the live-only query would answer "no such task" for exactly the tasks the
+ * button is most useful on.
+ *
+ * The arm comes from the URL and defaults to grounded, so the button can open either side without
+ * the card needing two of them.
+ */
+async function previewOneGuideTask(id) {
+  const params = new URLSearchParams(location.search);
+  const arm = params.get('arm') === 'nongrounding' ? 'nongrounding' : 'grounding';
+
+  let rows = [];
+  try { rows = await DB.listAllGuideTasks(); }
+  catch (error) {
+    return panelMessage(`<p class="q-text">Could not load the Guide tasks: ${
+      String(error?.message || error)}</p>`);
+  }
+  const row = (Array.isArray(rows) ? rows : []).find(r => r.id === id);
+  if (!row) {
+    return panelMessage(`<p class="q-text">No Guide task with id <code>${
+      String(id).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}</code>.</p>`);
+  }
+
+  Object.assign(S.state, {
+    participantId: 'ADMIN-PREVIEW',
+    sessionId: null,
+    runId: '',
+    assignmentSlot: null,
+    group: row.task_style === 'guide_visual' ? 'B' : 'A',
+    arm,
+    // Nothing is written and nothing is resumed: this must not land in the localStorage key a
+    // participant's real run uses, which is why dryRun is set before showTask rather than after.
+    dryRun: true,
+    adminReview: false,
+    tutorial: null,
+    previewNav: false,
+    queue: [{
+      id: row.id,
+      taskType: 'guide',
+      studyVersion: 'find-v2',
+      style: row.task_style || 'guide_text',
+      title: row.title || '',
+      goal: row.goal || row.title || '',
+      question: row.goal || row.title || '',
+      arm,
+      agentCompleted: typeof row.agent_completed === 'boolean' ? row.agent_completed : null,
+      claimCorrect: row.agent_completed === true,
+      variantKey: window.FindV2Variants.variantKey(row.agent_completed !== false, arm),
+      assignedOrder: 0,
+    }],
+    idx: 0,
+    results: [],
+    startedAt: Date.now(),
+    studyVersion: 'find-v2',
+    // The protocol switches the study is actually set to, so the preview is the screen a participant
+    // would get rather than a screen assembled from defaults.
+    flags: await DB.getStudyFlags(),
+  });
+  return showTask();
+}
+
 async function boot() {
   // The walkthrough on its own, from the admin panel. No session, no assignment, no queue — it needs
   // none of them, since the practice material is local, and claiming a slot to check some wording
@@ -410,6 +475,21 @@ async function boot() {
   if (new URLSearchParams(location.search).get('tutorial') === 'preview') {
     return window.Tutorial.preview();
   }
+
+  // ONE GUIDE TASK, ON THE REAL TASK SCREEN. What Admin -> Guide tasks' View button opens.
+  //
+  // The Inspect panel beside it shows a researcher's view of a run — both arms' answers, the
+  // evidence keyed to their steps, the recorded errors. Useful, and not what a participant sees:
+  // it is a table of the material rather than the screen the material is presented on. This plays
+  // the actual task through showTask, so the two panes, the condition banner, the journey, the
+  // answer card, the opening lock and the walk are all the real ones.
+  //
+  // A DRY RUN in every sense that matters: no session row is claimed, no assignment slot is spent,
+  // and saveStudyResult refuses to write because `dryRun` is set. Answering it through to the end
+  // is therefore safe, which is the point — a preview you cannot finish cannot tell you whether
+  // finishing works.
+  const previewTaskId = new URLSearchParams(location.search).get('task');
+  if (previewTaskId) return previewOneGuideTask(previewTaskId);
 
   // The final screen on its own, from the admin panel. Same reasoning as the walkthrough preview: it
   // needs no session and no queue, and the alternative — answering eight tasks to find out whether
@@ -763,10 +843,30 @@ function questionHtml(question) {
  * @param {Function} [opts.showError] - where the grace countdown is written
  * @param {Function} [opts.clearError]
  */
+/**
+ * Whether this task is on the clock at all.
+ *
+ * THE WALKTHROUGH IS NOT. A practice task is where somebody learns what the journey is, what a
+ * milestone flag means, that a step opens, and what "No" covers — and a countdown turns that into a
+ * test of how fast they can read it. Worse, the cutoff fires: a practice run could be submitted with
+ * no verdict, which teaches the participant that the study takes answers away from them before they
+ * are ready, and does it in the one place where nothing is being measured and there is no reason to
+ * hurry. The five-second opening lock STAYS in practice — that one is about reading before answering,
+ * which is exactly what the practice exists to rehearse.
+ *
+ * Named here rather than tested inline in three places, because the timer chip, the cutoff and the
+ * per-tick repaint all have to agree: a chip counting down over a cutoff that will never fire is a
+ * threat the study does not intend to carry out.
+ */
+function taskIsTimed() {
+  return IS_FIND_V2 && !S.state.tutorial?.active;
+}
+
 function verdictClocks({ pane, radioName, submit, liveButton, onExpire, showError, clearError }) {
   let unlocked = !IS_FIND_V2;   // V1 has never had an opening lock
   let deadline = 'running';     // running -> grace -> done
   let expiredAt = null;
+  const timed = taskIsTimed();
 
   const $ = (id) => pane.querySelector(`#${id}`);
   const verdict = () => pane.querySelector(`input[name="${radioName}"]:checked`)?.value || null;
@@ -847,7 +947,7 @@ function verdictClocks({ pane, radioName, submit, liveButton, onExpire, showErro
         if (elapsed >= ANSWER_LOCK_MS) unlock();
         else paintLock(elapsed);
       }
-      if (IS_FIND_V2) enforce(elapsed);
+      if (timed) enforce(elapsed);
     },
     verdict,
     /** The task is submitting by its own route; stop the cutoff from firing behind it. */
@@ -919,7 +1019,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
     <div class="q-progress${S.state.dryRun ? ' is-dry-run' : ''}">${esc(progressText() || `Task ${idx + 1}/${queue.length}`)}</div>
     <div class="q-body">
       <div class="q-task-card" id="q-task-card">
-        ${window.TaskTimer.html()}
+        ${taskIsTimed() ? window.TaskTimer.html() : ''}
         <div class="q-task-label">Question</div>
         ${questionHtml(task.question)}
       </div>
@@ -962,6 +1062,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   bindFindAnswerChips(canned, arm, cites);
 
   const $q = (id) => questionPane.querySelector(`#${id}`);
+
   const errorEl = $q('q-error-msg');
   const showError = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
   const clearError = () => { errorEl.hidden = true; };
@@ -986,7 +1087,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   // both counted in it, and a second's lag on either reads as a frozen page.
   answerTimer = setInterval(() => {
     const elapsed = Date.now() - startedAt;
-    window.TaskTimer.paint(questionPane, elapsed);
+    if (taskIsTimed()) window.TaskTimer.paint(questionPane, elapsed);
     clocks.tick(elapsed);
   }, 250);
 
@@ -1212,7 +1313,13 @@ async function showGuideV2Task(task, arm) {
     // THE TRAIL IS OFF BY DEFAULT. It is the agent's own story about the run, written afterwards,
     // and putting it above the record asks a participant to disconfirm a confident claim rather than
     // to check one. The journey, the two page states and the answer are what remains.
-    sections: { trail: S.studyFlags().showReasoningTrail },
+    // THE ANSWER MOVES TO THE RIGHT PANE. It is the claim being judged, so it belongs beside the
+    // question that asks about it — buried between the journey and the trail, a participant had to
+    // scroll away from the Yes/No to re-read the thing they were saying Yes or No about. Dropped
+    // from the stage here and rendered by renderGuideV2Questions, in BOTH arms: layout is not a
+    // condition, and a pane arrangement that differed by arm would be a second variable riding
+    // along with grounding.
+    sections: { trail: S.studyFlags().showReasoningTrail, answer: false },
     // THE WALK, AND HOW LONG ONE OF ITS PAGES TAKES TO COME UP. Offered in both arms — it is a
     // constant of the study rather than part of what separates them; see the note above
     // `allowBrowseSim` in app/stimulus.js. The delay is a study variable: it sets the cost of going
@@ -1312,7 +1419,17 @@ function bindGuideStepMarkers(onChange) {
 /** The question pane for a Guide task: verdict plus optional step localization. */
 function renderGuideV2Questions(task, record, arm) {
   const { idx, queue } = S.state;
-  const goal = task?.goal || task?.question || record?.goal || record?.title || '';
+  // THE FRESHLY-READ RECORD WINS. `task` is the queue snapshot — written into localStorage when the
+  // run was dealt and never re-read — so a task renamed in Supabase after a participant pressed
+  // Start went on showing them the old wording for the rest of their sitting, and a researcher
+  // fixing a typo had no way to reach the people it was confusing. `record` is fetched per task by
+  // showGuideV2Task, so it is whatever the database says right now.
+  //
+  // This is not the same decision as the queue snapshot itself, and the difference matters: WHICH
+  // run a participant is dealt must not change mid-sitting, because that would put two experiments
+  // in one session. What the task is CALLED is not the experiment — it is the instruction, and the
+  // current instruction is always the right one to show.
+  const goal = record?.goal || record?.title || task?.goal || task?.question || '';
   const answerText = record?.arms?.[arm]?.answer || record?.arms?.grounding?.answer || '';
   const startedAt = Date.now();
   let answerTimer = null;
@@ -1325,11 +1442,16 @@ function renderGuideV2Questions(task, record, arm) {
     <div class="q-progress${S.state.dryRun ? ' is-dry-run' : ''}">${esc(progressText() || `Task ${idx + 1}/${queue.length}`)}</div>
     <div class="q-body">
       <div class="q-task-card" id="q-task-card">
-        ${window.TaskTimer.html()}
+        ${taskIsTimed() ? window.TaskTimer.html() : ''}
         <div class="q-task-label">The task the agent was given</div>
         ${questionHtml(goal)}
       </div>
       ${conditionBannerHtml(arm, 'guide')}${groupChipHtml()}
+
+      <!-- Filled by app/stimulus.js after this pane exists: the markup is arm-dependent (chips and
+           linked phrases in the grounded arm, neither in the non-grounded one) and that rule has
+           exactly one home. See answerSectionHtml. -->
+      <div class="q-card q-answer-card" id="q-guide-answer"></div>
 
       <div class="q-card">
         <div class="q-card-head"><span class="q-badge">Q1</span>
@@ -1354,6 +1476,15 @@ function renderGuideV2Questions(task, record, arm) {
     </div>`;
 
   const $q = (id) => questionPane.querySelector(`#${id}`);
+
+  // The answer, rendered by the stimulus rather than here, so the two panes cannot disagree about
+  // what this arm shows — the chips and linked phrases are arm-dependent and that rule has one home.
+  const answerCard = $q('q-guide-answer');
+  if (answerCard) {
+    answerCard.innerHTML = window.Stimulus.answerSectionHtml();
+    window.Stimulus.bindAnswerNode(answerCard);
+  }
+
   const errorEl = $q('q-error-msg');
   const showError = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
   const clearError = () => { errorEl.hidden = true; };
@@ -1386,6 +1517,10 @@ function renderGuideV2Questions(task, record, arm) {
       // Step marking now overlaps verdict formation by design, so there is no honest separate
       // localization duration. Total and verdict time remain recorded; the dedicated field is null.
       localizationElapsed: null,
+      // WHAT WAS ON SCREEN, not what the queue was holding. Same reasoning as `claimText` beside it:
+      // a row has to say what this participant was actually asked, or a task renamed mid-study makes
+      // every earlier row ambiguous about which wording it was answered under.
+      goalText: goal,
       interactionSummary: withBrowseSim(taskInteractionSummary()),
     });
   };
@@ -1401,7 +1536,7 @@ function renderGuideV2Questions(task, record, arm) {
 
   answerTimer = setInterval(() => {
     const elapsed = Date.now() - startedAt;
-    window.TaskTimer.paint(questionPane, elapsed);
+    if (taskIsTimed()) window.TaskTimer.paint(questionPane, elapsed);
     clocks.tick(elapsed);
   }, 250);
 
@@ -4808,8 +4943,43 @@ function postSurveyEmbedUrl(url) {
  * to the short form would be dropped and the frame would render with Google's full page chrome
  * inside it. Resolved once, here, rather than at load in every participant's browser.
  */
-const FIND_V2_SURVEY_URL = window.FIND_V2_CONFIG?.POST_SURVEY_URL
-  || 'https://docs.google.com/forms/d/e/1FAIpQLSejro1c_gTdmCpBgjeDosaAilNviUkxVXlOW8l_2dW9CwuN5w/viewform';
+const FIND_V2_SURVEY_FALLBACK = window.FIND_V2_CONFIG?.POST_SURVEY_URL
+  || 'https://forms.gle/vKkiJhDwTD5nuXc68';
+
+/**
+ * The form this run should send people to.
+ *
+ * THREE SOURCES, most specific first: the Study settings field, then app/find_v2_config.js, then the
+ * address compiled in above. An empty setting means "fall through", never "no survey" — the last
+ * screen of the study must not be removable by clearing a text box, and a missing final step looks
+ * exactly like a finished study to everyone except the person reading the responses.
+ *
+ * READ AT THE END, not snapshotted at Start like the protocol flags. Those must not change mid-run
+ * because they change what a task asks; this is reached once, after the last task, and the right
+ * form is whichever one is current then — a run resumed days later must not post into a form that
+ * has since been replaced.
+ */
+function findV2SurveyUrl() {
+  try {
+    const chosen = String(S.studyFlags().postSurveyUrl || '').trim();
+    if (chosen) return chosen;
+  } catch (e) { /* no session yet — the preview path reaches here before one exists */ }
+  return FIND_V2_SURVEY_FALLBACK;
+}
+
+/**
+ * Whether this URL can be framed without Google's page chrome coming with it.
+ *
+ * `?embedded=true` is what strips the chrome, and a forms.gle link is a 302 — a redirect does not
+ * carry a query string forward, so the parameter is dropped and the frame renders the full Google
+ * Forms page inside it. It still WORKS, and a participant can still submit, which is why this only
+ * warns in Admin rather than refusing the URL. The long docs.google.com/forms/d/e/…/viewform
+ * address that the short link resolves to embeds cleanly, and Google offers it under Send → link
+ * with "Shorten URL" unticked.
+ */
+function surveyEmbedsCleanly(url) {
+  return !/^https:\/\/forms\.gle\//i.test(String(url || '').trim());
+}
 
 /** Find V2's own ending: the same two panes, with the questionnaire where the material was. */
 function finishFindV2({ preview = false } = {}) {
@@ -4839,7 +5009,7 @@ function finishFindV2({ preview = false } = {}) {
       <p class="q-survey-lead">You checked ${answered} agent claim${answered === 1 ? '' : 's'}. Thank
         you. Please fill in the questionnaire ${linkOnly ? 'linked below' : 'below'} to complete the
         study — it is the last thing we need from you.</p>
-      <a class="q-btn q-btn-primary q-btn-link q-survey-open" href="${esc(FIND_V2_SURVEY_URL)}"
+      <a class="q-btn q-btn-primary q-btn-link q-survey-open" href="${esc(findV2SurveyUrl())}"
         target="_blank" rel="noopener noreferrer">Open the survey in a new tab ↗</a>
     </header>`;
 
@@ -4851,7 +5021,7 @@ function finishFindV2({ preview = false } = {}) {
       </div>`
     : `<div class="q-survey-stage">${surveyHead}
         <iframe class="q-survey" title="Post-study questionnaire"
-          src="${esc(postSurveyEmbedUrl(FIND_V2_SURVEY_URL))}"></iframe>
+          src="${esc(postSurveyEmbedUrl(findV2SurveyUrl()))}"></iframe>
       </div>`;
 
   questionPane.innerHTML = `

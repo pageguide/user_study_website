@@ -184,7 +184,7 @@ project that has only ever run `supabase_find_v2.sql`, run these in order in the
 | `supabase_v2_reasoning_trail.sql` | `show_reasoning_trail` — whether a Guide task shows the agent's own account of the run (off by default) |
 | `supabase_v2_step_marks.sql` | `marked_wrong_steps` — step numbers a participant marks while reviewing a Guide task |
 | `supabase_v2_recruit_quota.sql` | `slot_quota` and `pageguide_find_v2_class_counts` — recruiting to a per-class target instead of plain round-robin (see below) |
-| `supabase_v2_task_picker.sql` | the `guide_visual_4` queue (four fixed Guide × Visual runs, no round robin), `task_selection` for the per-cell picker behind it, and `allow_browse_sim` / `browse_sim_delay_ms` for the browse simulator (see below). Safe to re-run: it drops each earlier arity of the flags writer before recreating it |
+| `supabase_v2_task_picker.sql` | the `guide_visual_4` queue (four fixed Guide × Visual runs, no round robin), `task_selection` for the per-cell picker behind it, `allow_browse_sim` / `browse_sim_delay_ms` for the browse simulator, and `post_survey_url` for the questionnaire (all below). Safe to re-run: it drops each earlier arity of the flags writer before recreating it |
 | `supabase_v2_local_time.sql` | views that read `created_at` in Alabama local time — optional, changes no data |
 
 **"Could not find the function … in the schema cache"** on Save means exactly one thing: the browser
@@ -287,6 +287,23 @@ that are still the old ones. Only rows that actually changed are written, and a 
 full first (`getClaim`) because the claim writer replaces the whole row and the list query leaves out
 `page_html`.
 
+### Admin → Guide tasks → **View** — one run on the real task screen
+
+Each Guide task card carries **View ↗** and **non-grounded ↗** beside Save and Inspect. They open
+`study.html?task=<id>&arm=<arm>`, which plays that one run through `showTask` — the real two panes,
+the condition banner, the journey, the answer card in the question pane, the opening lock, the walk.
+
+It is not what **Inspect** shows, and both are worth having. Inspect is a researcher's table of the
+material: both arms' answers side by side, the evidence keyed to its steps, the recorded errors —
+the right view for *keying* a task. View answers the different question of what a participant will
+actually be looking at.
+
+A dry run in every sense that matters: no session row, no assignment slot, and `saveStudyResult`
+refuses to write because `dryRun` is set. It can therefore be answered through to the end, which is
+the point — a preview you cannot finish cannot tell you whether finishing works. It reads the pool
+with `listAllGuideTasks` rather than the live-only query, because a run being previewed is very often
+one that is not live yet; that is usually what is being decided.
+
 ### Admin → The four cells — the fixed queue, previewed as it is dealt
 
 **Only on the tab strip when `queue_design` is `guide_visual_4`**, and that is the point rather than
@@ -353,6 +370,74 @@ within each task type), and a cell is confounded with its position (a correct-an
 trial is always task 1). Removing either means a reversed cell order — an eight-class design — which
 is not what is shipped.
 
+## The answer sits in the question pane
+
+The agent's answer used to be a section in the left pane, between the journey and the trail. It is
+the claim being judged, so it now sits in the **right pane, directly above Q1** — a participant
+re-reading the sentence they are about to say Yes or No to no longer has to scroll away from the Yes
+and the No to do it.
+
+**In both arms.** Layout is not a condition, and a pane arrangement that differed by arm would be a
+second variable riding along with grounding.
+
+It is still rendered by `app/stimulus.js` (`answerSectionHtml` / `bindAnswerNode`), not rebuilt in
+`study.js`, because the markup is arm-dependent in a way that is easy to get subtly wrong: the
+grounded arm numbers the surviving `[ev:…]` markers into chips and underlines the linked phrases, and
+the non-grounded arm does neither. A second copy of that rule in the question pane is a second thing
+to get wrong, and the two would disagree silently. The chips stay live in their new home — the hover
+card and the step walk work there exactly as they did beside the journey.
+
+The two single-pane admin views (**Guide arms**, **The four cells**, and `guide-arm.html` generally)
+still draw the answer inside the stage, because they have no second pane to put it in.
+
+## A step shows the page it produced, not the page before it
+
+The recorder captures each step's screenshot as the page it was looking at **when it decided to
+act**, so `steps[i].screenshot` is the state *before* step i runs. Rendered next to step i's own
+instruction that read as an off-by-one, and not subtly: *"Click on the search icon to search for RBD
+Library"* sat beside a picture of the Samford Hall panel, which is where the previous step had left
+the page.
+
+A step now displays the **next** step's capture — the same pixels the recorder took one moment
+later, which is the page once this action had landed. The last step falls back to `final_state`,
+which is exactly the page after the last action, so the shift closes cleanly at both ends rather than
+leaving the final step blank. The walk applies the same shift (a walk labelling its pages differently
+from the rows they were reached from would be worse than the bug it fixed), and drops its trailing
+"After the agent finished" frame when the last step already displays that image.
+
+**Nothing is re-saved** — this is a display rule and only a display rule, in `shotAt`/`shotForStep`.
+The stored trajectory is untouched and this is revertible by deleting one function. It assumes
+pre-action capture throughout; a run recorded post-action would be pushed one the other way, which is
+worth checking on any trajectory imported from a different recorder.
+
+## Editing a task's wording mid-study
+
+A task renamed in Supabase shows up everywhere on the next read. Three things make that true, and
+each of them used to be false in a different way:
+
+- **The task screen prefers the freshly-fetched record over the queue snapshot.** `showGuideV2Task`
+  re-reads the trajectory for every task, so `record.goal` is whatever the database says right now;
+  the queue in `localStorage` was written when the run was dealt and never re-read. The snapshot used
+  to win, so a participant who pressed Start before an edit saw the old wording for the rest of their
+  sitting and a researcher fixing a typo could not reach the people it was confusing.
+
+  This is deliberately *not* the same decision as the queue snapshot itself. **Which** run a
+  participant is dealt must not change mid-sitting — that would put two experiments in one session.
+  What the task is *called* is not the experiment; it is the instruction, and the current instruction
+  is always the right one to show. The result row stores the goal **as displayed** (`goalText`), so a
+  rename cannot make earlier rows ambiguous about which wording they were answered under.
+
+- **Admin re-reads on every tab open.** *Session preview* and *Guide arms* used to fetch once and
+  keep the list for the life of the page, so a renamed task kept its old title until somebody
+  happened to reload — in the two tabs whose whole job is showing what a participant will see. The
+  query is list columns only (no `arms`, so no screenshots), so paying for it each visit costs
+  nothing worth saving.
+
+- **Every cached read is dropped on Leave Admin.** Admin is where the database is *changed*, so a
+  list that outlives one visit is a list that can describe the study as it was before the last edit.
+
+Requests already send `cache: 'no-store'`, so nothing is served from the HTTP cache.
+
 ## What the arms differ in
 
 The grounded arm is the **checkable journey**, and everything that makes a step checkable travels
@@ -363,6 +448,7 @@ together:
 | **Milestone flags** | the steps the trail narrates are marked, with a legend saying those can be checked instead of the whole journey | none |
 | **Hover a step** | the page it was looking at when it acted | nothing |
 | **Click a step** | that page full size **and paged from there** — Back and Next walk the run without leaving the overlay, with no delay — plus a line under the legend saying so | nothing |
+| **The agent's answer** | in the **right pane**, above Q1 | in the right pane too — layout is not a condition |
 | **Evidence chips in the answer** | numbered, and they open what the agent saw | none, and the `[ev:…]` markers are stripped from the prose |
 | **Before / after page states** | shown in **both** — the arms differ in whether each *action* can be checked, not in whether the outcome is known | |
 | **Steps, order, wording, answer, trail, browse simulator** | identical | |
@@ -520,6 +606,31 @@ wrong correctness when a style's pool has none of the wanted one, which would un
 half without moving any class count. Any cell that disagrees with its class is named. Recruiting
 cannot fix that one; authoring the missing run can.
 
+## The post-study questionnaire
+
+The form the final screen links to and embeds. It used to be a constant in `app/study.js` with an
+`app/find_v2_config.js` override, so changing it meant a code edit and a deploy — the wrong shape for
+the one URL most likely to change while a study is running. It is now `post_survey_url` in the
+settings row, with a field in **Admin → Study settings**.
+
+**Blank means "use the built-in", never "no survey".** An empty box falls through to the config file
+and then to the address compiled into the page, so the last step of the study cannot be removed by
+clearing a text field — a missing final step looks exactly like a finished study to everyone except
+the person reading the responses.
+
+**It is read at the end, not snapshotted at Start.** The protocol flags must not change mid-run
+because they change what a task asks; this is reached once, after the last task, and the right form is
+whichever one is current then. A run resumed days later must not post into a form that has since been
+replaced. That is the one setting on that tab whose change reaches people already answering, and the
+save confirmation says so.
+
+**Prefer the long address over a `forms.gle` short link.** `?embedded=true` is what strips Google's
+page chrome from the frame, and a short link is a 302 — a redirect does not carry a query string
+forward, so the parameter is dropped and the final screen embeds the full Google Forms page inside
+itself. It still works and a participant can still submit, which is why Admin *warns* rather than
+refusing: it is a cosmetic cost with an easy fix. Google offers the long form under
+**Send → the link tab → untick "Shorten URL"**.
+
 ## The walkthrough
 
 Offered once, before task 1, on a browser that has not seen it — and skippable from anywhere. Two
@@ -572,10 +683,22 @@ is a run that finishes, sounds certain, and reports a booking reference its own 
 Admin → Study settings has **Preview the walkthrough** (`study.html?tutorial=preview&design=…`, which
 claims no assignment slot) and a button to clear the "already seen" mark on that browser.
 
-The walkthrough **does** rehearse the browse simulator, and gets it for free: both practice tasks are
-grounded, and the walk is offered in both arms, so the Guide practice carries the same button the
-real tasks do. That was not true when the button was non-grounded-only — the practice would have
-been silent about a control half the queue carries.
+**There are three practice tasks now: Find, Guide × grounded, and Guide × non-grounded.** The
+non-grounded arm used to be explained in a sentence and met for the first time on a scored task, so a
+participant's first encounter with a journey that has no screenshots was one where their answer
+counted. It is a *different run*, not the same one with the pictures removed — showing one trajectory
+twice would let the second answer be recalled rather than worked out.
+
+It also fails in a way that arm can actually catch. The grounded practice misreports what a
+screenshot shows, which is the right lesson there and an unfair one without the screenshot; the
+non-grounded practice claims an action it never took, and the step list says so in words (four steps,
+none of them a calendar). The correct verdict is reachable from the text alone, which is exactly the
+skill the non-grounded arm asks for. Grounded comes first, so the arm *with* the evidence is met
+before the one without it — otherwise the missing screenshots read as a fault rather than as the
+condition. Under `guide_visual_4` the Find practice drops and the two Guide practices remain.
+
+The walkthrough also rehearses the browse simulator, for free: the walk is offered in both arms, so
+every Guide practice carries the same button the real tasks do.
 
 Switching designs mid-study splits the collected rows into two experiments. `queue_design` defaults
 to the crossed design for every project, including one that has already collected sittings under the

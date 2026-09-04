@@ -74,6 +74,18 @@
 --    one that retraced the whole run.
 --
 --    Default ON, because a project applying this migration is applying it to get the button.
+--
+-- 4. post_survey_url text — the questionnaire the last screen sends people to
+--    ----------------------------------------------------------------------
+--    It was a constant in app/study.js with an app/find_v2_config.js override, so changing the form
+--    meant a code edit and a deploy. That is the wrong shape for the one URL most likely to change
+--    while a study is running — a form gets rebuilt, or a pilot and the real run want different
+--    ones — so it moves into the settings row and gets a field in Admin.
+--
+--    EMPTY MEANS "USE THE BUILT-IN", not "no survey". A blank column falls through to the config
+--    override and then to the address compiled into the page, so a project that never touches this
+--    keeps the form it already had and a mistyped clear cannot silently drop the last step of the
+--    study.
 
 alter table public.pageguide_find_v2_settings
   add column if not exists task_selection jsonb not null default '{}'::jsonb;
@@ -84,11 +96,17 @@ alter table public.pageguide_find_v2_settings
 alter table public.pageguide_find_v2_settings
   add column if not exists browse_sim_delay_ms integer not null default 500;
 
+alter table public.pageguide_find_v2_settings
+  add column if not exists post_survey_url text not null default '';
+
 comment on column public.pageguide_find_v2_settings.task_selection is
   'Which task fills each cell of a queue, keyed by queue_design. A design with no groups stores one array of task ids indexed by cell; a design that still varies by group stores {"A": [...], "B": [...]}. null or absent means the cell is not pinned and falls back to that design''s rotation. Not a foreign key on purpose: a withdrawn task must read as a visible gap in Admin, not as a failed write.';
 
 comment on column public.pageguide_find_v2_settings.allow_browse_sim is
   'Whether a Guide task offers the browse simulator — a button that opens the run as a stepped slideshow of its page states, starting at the last and walking back. Offered in BOTH arms, so it is a constant of the study rather than part of what separates them; what the arms differ in is the checkable journey — milestone flags, hover and click all belong to the grounded one. Usage lands in interaction_summary.browse_sim on each result row.';
+
+comment on column public.pageguide_find_v2_settings.post_survey_url is
+  'The post-study questionnaire the final screen links to and embeds. Empty means fall through to app/find_v2_config.js and then to the address compiled into app/study.js, so a blank cannot silently drop the last step. Prefer the long docs.google.com/forms/d/e/.../viewform address over a forms.gle short link: the short link is a 302 and a redirect does not carry ?embedded=true forward, so an embedded short link renders with Google''s full page chrome inside the frame.';
 
 comment on column public.pageguide_find_v2_settings.browse_sim_delay_ms is
   'How long one page of the browse simulator takes to come up, in milliseconds (0-5000, default 500). Browsing is not instant, and with no delay the buttons scrub past pages faster than they can be read. A setting rather than a constant because it is what sets the COST of looking, which is the difference between evidence being available and being worth going to get; 0 switches the delay off.';
@@ -133,7 +151,8 @@ returns table (
   slot_quota integer,
   task_selection jsonb,
   allow_browse_sim boolean,
-  browse_sim_delay_ms integer
+  browse_sim_delay_ms integer,
+  post_survey_url text
 )
 language plpgsql
 security definer
@@ -143,7 +162,8 @@ begin
   return query
     select s.collect_evidence, s.collect_followup, s.task_limit_seconds,
            s.queue_design, s.show_group_chip, s.flag_milestones, s.show_reasoning_trail,
-           s.slot_quota, s.task_selection, s.allow_browse_sim, s.browse_sim_delay_ms
+           s.slot_quota, s.task_selection, s.allow_browse_sim, s.browse_sim_delay_ms,
+           s.post_survey_url
     from public.pageguide_find_v2_settings s
     where s.singleton = true;
 end;
@@ -163,7 +183,8 @@ create or replace function public.save_pageguide_find_v2_flags(
   p_slot_quota integer default null,
   p_task_selection jsonb default null,
   p_allow_browse_sim boolean default null,
-  p_browse_sim_delay_ms integer default null
+  p_browse_sim_delay_ms integer default null,
+  p_post_survey_url text default null
 )
 returns table (
   collect_evidence boolean,
@@ -176,7 +197,8 @@ returns table (
   slot_quota integer,
   task_selection jsonb,
   allow_browse_sim boolean,
-  browse_sim_delay_ms integer
+  browse_sim_delay_ms integer,
+  post_survey_url text
 )
 language plpgsql
 security definer
@@ -217,6 +239,14 @@ begin
       p_browse_sim_delay_ms;
   end if;
 
+  -- SCHEME ONLY, and empty is allowed because empty means "fall back to the built-in". Which form
+  -- is the right one is not a question this function can answer, but "somebody pasted a page title
+  -- into the URL field" is, and that one would take the last screen of the study down silently.
+  if p_post_survey_url is not null and btrim(p_post_survey_url) <> ''
+     and p_post_survey_url !~* '^https://' then
+    raise exception 'The post-study survey URL must be an https:// address (got %).', p_post_survey_url;
+  end if;
+
   update public.pageguide_find_v2_settings s
   set collect_evidence = coalesce(p_collect_evidence, false),
       collect_followup = coalesce(p_collect_followup, false),
@@ -231,13 +261,15 @@ begin
       task_selection = coalesce(p_task_selection, s.task_selection),
       allow_browse_sim = coalesce(p_allow_browse_sim, s.allow_browse_sim),
       browse_sim_delay_ms = coalesce(p_browse_sim_delay_ms, s.browse_sim_delay_ms),
+      post_survey_url = coalesce(p_post_survey_url, s.post_survey_url),
       updated_at = now()
   where s.singleton = true;
 
   return query
     select s.collect_evidence, s.collect_followup, s.task_limit_seconds,
            s.queue_design, s.show_group_chip, s.flag_milestones, s.show_reasoning_trail,
-           s.slot_quota, s.task_selection, s.allow_browse_sim, s.browse_sim_delay_ms
+           s.slot_quota, s.task_selection, s.allow_browse_sim, s.browse_sim_delay_ms,
+           s.post_survey_url
     from public.pageguide_find_v2_settings s
     where s.singleton = true;
 end;
@@ -249,8 +281,9 @@ $$;
 -- expected, and without that drop the second run would leave two live overloads.
 drop function if exists public.save_pageguide_find_v2_flags(text, boolean, boolean, integer, text, boolean, boolean, boolean, integer);
 drop function if exists public.save_pageguide_find_v2_flags(text, boolean, boolean, integer, text, boolean, boolean, boolean, integer, jsonb, boolean);
+drop function if exists public.save_pageguide_find_v2_flags(text, boolean, boolean, integer, text, boolean, boolean, boolean, integer, jsonb, boolean, integer);
 
-grant execute on function public.save_pageguide_find_v2_flags(text, boolean, boolean, integer, text, boolean, boolean, boolean, integer, jsonb, boolean, integer) to anon;
+grant execute on function public.save_pageguide_find_v2_flags(text, boolean, boolean, integer, text, boolean, boolean, boolean, integer, jsonb, boolean, integer, text) to anon;
 
 -- PostgREST caches function signatures as well as table shapes.
 notify pgrst, 'reload schema';

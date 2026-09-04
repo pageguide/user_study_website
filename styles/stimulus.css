@@ -633,33 +633,38 @@ body {
   padding: 14px 16px;
   text-align: left;
   cursor: pointer;
-  border: 1px solid #4c2fb8;
+  border: 1px solid #7d1c15;
   border-radius: 10px;
-  /* A SHADE DOWN FROM THE RAW ACCENT (#7857ff), and the reason is contrast rather than taste: the
-     subtitle sat at 3.88:1 against that lighter violet, under AA for 12.5px text, and a two-line
-     button whose second line is only legible over half its own width is not louder, just harder to
-     read. #6945f2 → #4f31c4 keeps the same hue and puts both lines clear of AA end to end. */
-  background: linear-gradient(135deg, #6945f2 0%, #4f31c4 100%);
+  /* RED, AND A DEEP ONE. The lighter reds that read as "red" at a glance (#d64545 and up) put the
+     subtitle at 3.80:1, under AA for 12.5px text — a two-line button whose second line is legible
+     over only half its own width is not louder, just harder to read. #c0392b → #8e2119 is still
+     unmistakably red and clears AA for both lines across the whole sweep.
+
+     Worth knowing what red brings with it: in this pane amber already means "milestone" and purple
+     means "interactive", so red is the one unused hue and cannot be confused with either — but red
+     also carries a warning reading, and this control is neither an error nor a destructive action.
+     The wording under the title is what settles that, which is why it stays. */
+  background: linear-gradient(135deg, #c0392b 0%, #8e2119 100%);
   color: #fff;
   font: inherit;
-  box-shadow: 0 4px 14px rgba(88, 62, 214, 0.32);
+  box-shadow: 0 4px 14px rgba(142, 33, 25, 0.30);
   transition: box-shadow .15s ease, transform .15s ease, filter .15s ease;
 }
 
 .tv-browse-open:hover {
   filter: brightness(1.07);
-  box-shadow: 0 7px 20px rgba(88, 62, 214, 0.42);
+  box-shadow: 0 7px 20px rgba(142, 33, 25, 0.40);
   transform: translateY(-1px);
 }
 
 .tv-browse-open:active {
   transform: translateY(0);
-  box-shadow: 0 3px 10px rgba(88, 62, 214, 0.35);
+  box-shadow: 0 3px 10px rgba(142, 33, 25, 0.33);
 }
 
 /* The keyboard route has to be as findable as the pointer one, and `filter` is not a focus ring. */
 .tv-browse-open:focus-visible {
-  outline: 3px solid rgba(88, 62, 214, 0.45);
+  outline: 3px solid rgba(192, 57, 43, 0.50);
   outline-offset: 2px;
 }
 
@@ -685,8 +690,9 @@ body {
 .tv-browse-open-text { display: grid; gap: 2px; }
 .tv-browse-open-text b { font-size: 14.5px; }
 /* Not rgba(255,255,255,.75): over a gradient that lands near 4:1, which is under AA for small text.
-   A flat near-white keeps the subtitle readable across the whole sweep of the button. */
-.tv-browse-open-text small { font-size: 12.5px; color: #efeaff; line-height: 1.45; }
+   A flat near-white, warmed to sit on red rather than to fight it, keeps the subtitle readable
+   across the whole sweep of the button. */
+.tv-browse-open-text small { font-size: 12.5px; color: #ffe9e6; line-height: 1.45; }
 
 /* The walk itself. BELOW .tv-lightbox (z-index 60), because clicking the page on screen opens the
    full-size view ON TOP of the walk rather than instead of it — a participant reading page 9 of 14
@@ -738,7 +744,7 @@ body {
 /* How far through the run this page is. The position is also written out in words beside the
    title — the bar is the glance, the count is the answer. */
 .tv-browse-bar { height: 3px; background: rgba(0, 0, 0, 0.08); }
-.tv-browse-bar-fill { display: block; height: 100%; background: #7857ff; transition: width .15s ease; }
+.tv-browse-bar-fill { display: block; height: 100%; background: #c0392b; transition: width .15s ease; }
 
 /* The picture scrolls inside its own box rather than growing the dialog: a tall page state would
    otherwise push Back and Next off the bottom of the viewport, which is where they are needed. */
@@ -796,8 +802,10 @@ body {
   cursor: pointer;
 }
 
+/* The walk's own chrome follows the button that opens it, so the overlay reads as that control's
+   space rather than as a second, unrelated feature. */
 .tv-browse-back:hover:not(:disabled),
-.tv-browse-next:hover:not(:disabled) { border-color: #7857ff; color: #5b3fd6; }
+.tv-browse-next:hover:not(:disabled) { border-color: #c0392b; color: #8e2119; }
 
 /* Disabled at the ends rather than wrapping: a walk that loops has no beginning, and whether the
    first page was reached is one of the two things the instrument measures. Also disabled for the
@@ -817,7 +825,7 @@ body {
 }
 
 .tv-browse.is-loading .tv-browse-bar-fill {
-  background: linear-gradient(90deg, #7857ff 0%, #c9bcff 50%, #7857ff 100%);
+  background: linear-gradient(90deg, #c0392b 0%, #f0b4ac 50%, #c0392b 100%);
   background-size: 200% 100%;
   animation: tv-browse-loading .4s linear infinite;
 }

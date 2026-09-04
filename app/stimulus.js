@@ -190,6 +190,47 @@ function mountStimulus(record, armName, mount, options) {
   bindStates();
   bindPreviews();
   bindBrowseSim();
+
+  // The answer, into whichever node the caller gave for it. Rendered after the stage so a caller
+  // that supplies one gets the same arm-dependent markup the stage would have drawn.
+  if (els.answer) {
+    els.answer.innerHTML = answerSectionHtml();
+    bindAnswerNode(els.answer);
+    bindHintsOn(els.answer);
+  }
+}
+
+/**
+ * The agent's answer, rendered exactly as the left pane would render it.
+ *
+ * FOR THE QUESTION PANE. The answer is the claim being judged, and it belongs beside the question
+ * that asks about it rather than buried between the journey and the trail, where a participant had
+ * to scroll away from the Yes/No to re-read the thing they were saying Yes or No about.
+ *
+ * Built here rather than in study.js because the rendering is arm-dependent and non-trivially so:
+ * `richText` numbers the surviving [ev:…] markers into chips and underlines the linked phrases in
+ * the grounded arm, and does neither in the non-grounded one. A second copy of that rule in the
+ * question pane is a second thing to get wrong, and the two would disagree silently.
+ */
+function answerSectionHtml() {
+  if (!arm) return '';
+  return `
+    ${sectionTitle('Agent answer', showShots
+      ? 'What the agent reported back when it finished — the claim you are being asked to judge. A numbered chip marks a claim the agent backed with something it saw; hover it to see what.'
+      : 'What the agent reported back when it finished — the claim you are being asked to judge.')}
+    <div class="tv-answer">${richText(arm.answer)}</div>`;
+}
+
+/**
+ * Wire hover and click on an answer rendered outside the stage.
+ *
+ * The chips only mean anything if they open what they point at, and bindPreviews listens on the
+ * stage — so an answer moved to the question pane would render its chips and then do nothing when
+ * they were pressed, which is worse than not drawing them.
+ */
+function bindAnswerNode(node) {
+  if (!node || !showShots) return;
+  bindPreviewsOn(node);
 }
 
 /** The steps this trajectory shows, for the step buttons in the question pane. */
@@ -199,9 +240,14 @@ function stimulusSteps() {
 
 /** The ⓘ toggles. Bound in both arms — knowing what a section is called is not grounding. */
 function bindHints() {
-  if (els.stage.dataset.bound === '1') return;   // the stage is reused across tasks
-  els.stage.dataset.bound = '1';
-  els.stage.addEventListener('click', (e) => {
+  bindHintsOn(els.stage);
+}
+
+/** The ⓘ toggles for one container — the stage, or the answer wherever it was mounted. */
+function bindHintsOn(host) {
+  if (!host || host.dataset.bound === '1') return;   // the node is reused across tasks
+  host.dataset.bound = '1';
+  host.addEventListener('click', (e) => {
     const btn = e.target.closest('.tv-info');
     if (!btn) return;
     const hint = btn.parentElement.querySelector('.tv-hint');
@@ -434,7 +480,7 @@ function render() {
   // different thing: milestones are which steps are worth checking, this is how to check one. Tying
   // it to the milestone flag would mean switching that study variable off also hid how to use the
   // journey, which is not a trade either setting is meant to make.
-  const canPeek = showShots && steps.some(st => st.screenshot);
+  const canPeek = showShots && steps.some((st, i) => shotAt(arm, i));
 
   const journeyHtml = `
       ${sectionTitle('View Journey', showShots
@@ -449,8 +495,8 @@ function render() {
             are the important steps. You can check <b>these</b> rather than viewing the entire journey.</p>` : ''}
           ${canPeek ? `<p class="tv-key-legend tv-peek-legend">You can
             <span class="tv-peek-word">click</span> the steps to view it fully.</p>` : ''}
-          ${steps.map(step => {
-            const live = showShots && !!step.screenshot;
+          ${steps.map((step, i) => {
+            const live = showShots && !!shotAt(arm, i);
             const key = marking && keySteps.has(Number(step.n));
             return `
             <div class="tv-journey-row${live ? ' is-shot' : ''}${key ? ' is-key' : ''}"
@@ -466,7 +512,7 @@ function render() {
               </span>
             </div>`;
           }).join('')}
-          ${showShots && steps.length && !steps.some(st => st.screenshot) ? `
+          ${showShots && steps.length && !steps.some((st, i) => shotAt(arm, i)) ? `
             <p class="tv-warn">No step screenshots were saved with this trajectory, so there is nothing to preview. Re-capture it from the run to add them.</p>` : ''}
         </div>
       </details>`;
@@ -526,6 +572,42 @@ function stepAt(n) {
 }
 
 /**
+ * THE SCREENSHOT TO SHOW FOR A STEP — the page AFTER it acted, not before.
+ *
+ * The recorder captures each step's screenshot as the page it was looking at when it decided to
+ * act, so `steps[i].screenshot` is the state BEFORE step i runs. Rendered next to step i's own
+ * instruction that reads as an off-by-one, and not subtly: "Click on the search icon to search for
+ * RBD Library" sat beside a picture of the Samford Hall panel, which is where the PREVIOUS step had
+ * left the page. A participant checking whether the agent did what it said is comparing a sentence
+ * against the screen from before the sentence happened.
+ *
+ * So a step displays the NEXT step's capture, which is the same pixels the recorder took one moment
+ * later — the page once this action had landed. The last step has no next capture and falls back to
+ * `final_state`, which is exactly the page after the last action, so the shift closes cleanly at
+ * both ends rather than leaving the final step blank.
+ *
+ * NOTHING IS RE-SAVED. This is a display rule and only a display rule: the stored trajectory is
+ * untouched, so it stays whatever the recorder wrote and this can be reverted by deleting one
+ * function. It assumes pre-action capture throughout; a run recorded post-action would be pushed
+ * one the other way, which is worth checking on any trajectory imported from a different recorder.
+ *
+ * @param {object} armObj - the arm holding the steps and the bookends
+ * @param {number} i - position in `armObj.steps`, not the step's printed number
+ */
+function shotAt(armObj, i) {
+  const steps = (armObj && armObj.steps) || [];
+  if (i < 0 || i >= steps.length) return null;
+  if (i + 1 < steps.length) return steps[i + 1].screenshot || null;
+  return (armObj && armObj.final_state && armObj.final_state.screenshot) || null;
+}
+
+/** The same rule, addressed by the step's printed number rather than its position. */
+function shotForStep(armObj, n) {
+  const steps = (armObj && armObj.steps) || [];
+  return shotAt(armObj, steps.findIndex(st => Number(st.n) === Number(n)));
+}
+
+/**
  * What a hovered row, chip or milestone should show.
  *
  * A milestone resolves to its step's own picture when no saved evidence names that step — which is
@@ -536,8 +618,9 @@ function stepAt(n) {
 function previewFor(el) {
   if (el.dataset.step != null) {
     const step = stepAt(el.dataset.step);
-    if (!step?.screenshot) return null;
-    return { shot: step.screenshot, title: `Step ${step.n}`, note: step.instruction || '', url: step.url || '' };
+    const shot = shotForStep(arm, el.dataset.step);
+    if (!step || !shot) return null;
+    return { shot, title: `Step ${step.n}`, note: step.instruction || '', url: step.url || '' };
   }
 
   const items = arm.answer_evidence || [];
@@ -553,8 +636,9 @@ function previewFor(el) {
     return { shot: evidence.screenshot, title: `Step ${n}`, note: evidence.note || evidence.key || '', url: '' };
   }
   const step = stepAt(n);
-  if (!step?.screenshot) return null;
-  return { shot: step.screenshot, title: `Step ${step.n}`, note: step.instruction || '', url: step.url || '' };
+  const shot = shotForStep(arm, n);
+  if (!step || !shot) return null;
+  return { shot, title: `Step ${step.n}`, note: step.instruction || '', url: step.url || '' };
 }
 
 /**
@@ -580,7 +664,7 @@ function stepNumberOf(el) {
 function milestoneHasShot(step) {
   if (step == null) return false;
   const named = (arm.answer_evidence || []).some(ev => Number(ev.step) === Number(step) && ev.screenshot);
-  return named || !!stepAt(step)?.screenshot;
+  return named || !!shotForStep(arm, step);
 }
 
 /**
@@ -593,8 +677,19 @@ function milestoneHasShot(step) {
  */
 function bindPreviews() {
   if (!showShots) return;   // no card, no lightbox, nothing to click: that is the arm.
-  if (els.stage.dataset.previewsBound === '1') return;
-  els.stage.dataset.previewsBound = '1';
+  bindPreviewsOn(els.stage);
+}
+
+/**
+ * The hover/click wiring, for one container.
+ *
+ * Was hard-wired to the stage. It takes a node now because the answer lives in the OTHER pane, and
+ * its chips have to behave the same as the ones that used to sit beside the journey — same dwell,
+ * same card, same lightbox — without the question pane knowing anything about how that works.
+ */
+function bindPreviewsOn(host) {
+  if (!host || host.dataset.previewsBound === '1') return;
+  host.dataset.previewsBound = '1';
   // Held, not merely crossed. Reading the journey sweeps the pointer over every row on the way down.
   let dwellTimer = null;
   let dwellFor = null;
@@ -604,7 +699,7 @@ function bindPreviews() {
   const hideNow = () => { cancelHide(); document.getElementById('tv-pop')?.remove(); };
   const scheduleHide = () => { cancelHide(); hideTimer = setTimeout(hideNow, 220); };
 
-  els.stage.addEventListener('mouseover', (e) => {
+  host.addEventListener('mouseover', (e) => {
     const anchor = e.target.closest('[data-step], [data-ev-key], [data-ev-step]');
     if (!anchor) { if (!e.target.closest('#tv-pop')) { cancelDwell(); scheduleHide(); } return; }
     cancelHide();
@@ -645,12 +740,12 @@ function bindPreviews() {
     position(pop, anchor);
   });
 
-  els.stage.addEventListener('mouseout', (e) => {
+  host.addEventListener('mouseout', (e) => {
     if (e.target.closest('[data-step], [data-ev-key], [data-ev-step]')) { cancelDwell(); scheduleHide(); }
   });
 
   // Clicking the row itself opens the big view too — the card is a preview, not a toll gate.
-  els.stage.addEventListener('click', (e) => {
+  host.addEventListener('click', (e) => {
     const anchor = e.target.closest('[data-step], [data-ev-key], [data-ev-step]');
     if (!anchor) return;
     // One handler for .tv-chip, .tv-ref, journey rows and trail rows alike — the four ways a Guide
@@ -750,17 +845,26 @@ function browseSimFrames() {
       step: null,
     });
   }
-  (Array.isArray(source.steps) ? source.steps : []).forEach(step => {
-    if (!step?.screenshot) return;
+  (Array.isArray(source.steps) ? source.steps : []).forEach((step, i) => {
+    // The same one-step shift the journey uses, for the same reason — see shotAt. A walk that
+    // labelled its pages differently from the rows they were reached from would be worse than the
+    // off-by-one it was fixing.
+    const shot = shotAt(source, i);
+    if (!shot) return;
     frames.push({
-      shot: step.screenshot,
+      shot,
       title: `Step ${step.n}`,
       note: step.instruction || '',
       url: step.url || '',
       step: Number(step.n),
     });
   });
-  if (source.final_state?.screenshot) {
+  // The last step now DISPLAYS the final state — it is the page that step produced — so appending the
+  // bookend as well would put the same picture on two consecutive pages of the walk, once as "Step
+  // 12" and once as "After the agent finished". Kept only when it differs, which is the case when the
+  // run's last step had no capture of its own to be shifted onto.
+  const last = frames[frames.length - 1];
+  if (source.final_state?.screenshot && last?.shot !== source.final_state.screenshot) {
     frames.push({
       shot: source.final_state.screenshot,
       title: 'After the agent finished',
@@ -1074,4 +1178,4 @@ function openLightbox(item) {
   document.body.appendChild(overlay);
 }
 
-window.Stimulus = { mountStimulus, stimulusSteps, browseSimStats, stepWalkStats, REFERENCE_DWELL_MS };
+window.Stimulus = { mountStimulus, stimulusSteps, browseSimStats, stepWalkStats, answerSectionHtml, bindAnswerNode, REFERENCE_DWELL_MS };

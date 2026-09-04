@@ -237,6 +237,119 @@
   };
 
 
+  // ── The non-grounded Guide practice ────────────────────────────────────────────────────────────
+  //
+  // THE SECOND ARM, REHEARSED RATHER THAN DESCRIBED. The practice above is grounded, and until now
+  // the non-grounded arm was explained in a sentence and met for the first time on a scored task —
+  // so a participant's first encounter with a journey that has no screenshots was one where their
+  // answer counted. That is the wrong way round: the one thing practice is for is meeting the screen
+  // before it matters.
+  //
+  // A DIFFERENT RUN, not this one with the pictures taken away. Showing the same trajectory twice
+  // would let the second answer be recalled rather than worked out, which is exactly what a practice
+  // must not teach.
+  //
+  // AND A FAILURE THIS ARM CAN ACTUALLY CATCH. The grounded practice misreports what a screenshot
+  // shows — the right lesson there, and an unfair one here, because the screenshot is gone. This run
+  // claims an action it never took, and the step list says so in words: four steps, none of which is
+  // a calendar. A participant can reach the correct verdict from the text alone, which is precisely
+  // the skill the non-grounded arm asks for.
+  //
+  // The recorded arm is still the GROUNDED one, with screenshots. _stripGuideArm derives the
+  // non-grounded rendering from it at display time — the same rule the real tasks follow — and the
+  // browse simulator reads it too, so the practice also rehearses the walk.
+
+  const NG_ROWS = [
+    'Sat 06:30 — Early lanes (4 free)',
+    'Sat 07:00 — Lane swim (2 free)',
+    'Sun 07:00 — Lane swim (6 free)',
+    'Sat 09:00 — Teaching pool (full)',
+  ];
+
+  function ngShot(step, highlight) {
+    return window.FakePage.drawFakePage({
+      title: `Larkspur Pool — lane bookings (step ${step})`,
+      rows: NG_ROWS,
+      highlight,
+      host: 'larkspurpool.example.org',
+    });
+  }
+
+  let ngGuideRecord = null;
+
+  function buildNgGuideRecord() {
+    return {
+      id: 'TUTORIAL-V2-GUIDE-NG',
+      goal: 'Book the Saturday 06:30 early lanes session, then add it to my calendar.',
+      title: 'Saturday early lanes, and a calendar entry',
+      guide_ground_truth: {
+        correct: false,
+        correctness: 'failure',
+        problems: ['incomplete'],
+        problem: 'It booked the session but never added anything to a calendar.',
+        // The booking itself is fine. Step 4 is where the run stops and the answer keeps going.
+        errors: [{ type: 'mismatch', steps: [4] }],
+        no_error: false,
+      },
+      arms: {
+        grounding: {
+          initial_state: { screenshot: ngShot(0, -1), url: 'https://larkspurpool.example.org' },
+          final_state: { screenshot: ngShot(4, 0), url: 'https://larkspurpool.example.org/book?session=sat-0630' },
+          steps: [
+            { n: 1, instruction: "Open the Larkspur pool's lane booking page.", screenshot: ngShot(1, -1) },
+            { n: 2, instruction: 'Find the Saturday 06:30 early lanes session.', screenshot: ngShot(2, 0) },
+            { n: 3, instruction: 'Select the Saturday 06:30 session.', screenshot: ngShot(3, 0) },
+            { n: 4, instruction: 'Confirm the booking.', screenshot: ngShot(4, 0) },
+          ],
+          // NO MARKERS AND NO LINKED PHRASES. This run is dealt non-grounded, where _stripGuideArm
+          // removes both — authoring them would be authoring something nobody is shown, and the
+          // first thing to drift the day somebody re-keys this task to the other arm.
+          answer: 'Done. I booked the Saturday 06:30 early lanes session and added it to your calendar.',
+          answer_evidence: [],
+          answer_segments: [],
+          trail: {
+            summary: 'I opened the booking page, found the 06:30 early lanes session and booked it.',
+            milestones: [
+              { step: 2, text: 'Found the early lanes session.' },
+              { step: 3, text: 'Selected it.' },
+            ],
+          },
+        },
+        nongrounding: null,
+      },
+    };
+  }
+
+  const NG_GUIDE_TASK = {
+    taskType: 'guide',
+    id: 'TUTORIAL-V2-GUIDE-NG',
+    isTutorial: true,
+    studyVersion: 'find-v2',
+    arm: 'nongrounding',
+    style: 'guide_visual',
+    type: 'GUIDE × VISUAL',
+    title: 'Saturday early lanes, and a calendar entry',
+    goal: 'Book the Saturday 06:30 early lanes session, then add it to my calendar.',
+    question: 'Book the Saturday 06:30 early lanes session, then add it to my calendar.',
+    agentCompleted: false,
+    claimCorrect: false,
+    variantKey: 'incorrect_nongrounding',
+  };
+
+  const NG_GUIDE_DEBRIEF = {
+    verdict: 'no',
+    wrongSteps: [4],
+    answer: 'No — it booked the session, but it never touched a calendar.',
+    why: 'The task asked for two things. The run has four steps and all four are about the booking; '
+      + 'nothing in it opens a calendar, yet the answer says one was added.',
+    where: 'This one needs no screenshots. <b>Read the step list against the task.</b> That is what '
+      + 'the non-grounded condition asks of you: the steps are there in words, and a job only half '
+      + 'done shows up as a step that is missing rather than as a picture that disagrees.',
+    closing: 'Some tasks show you a screenshot for every step and some show none. Both ask the same '
+      + 'question, and “I could not tell” is a real answer — say No only when the run actually '
+      + 'supports it.',
+  };
+
   // ── The data source ────────────────────────────────────────────────────────────────────────────
   // The same interface study.js calls on StudyDB, so a practice task travels the ordinary code path
   // and never touches the network. The writers exist and deliberately do nothing: a practice answer
@@ -244,8 +357,14 @@
 
   window.TutorialSource = {
     isTutorialTask(task) { return !!task?.isTutorial; },
-    tasks() { return [FIND_TASK, GUIDE_TASK]; },
-    debrief(taskId) { return taskId === FIND_TASK.id ? FIND_DEBRIEF : GUIDE_DEBRIEF; },
+    // Grounded first, then non-grounded: a participant should meet the arm WITH the evidence before
+    // the one without it, or the missing screenshots read as a fault rather than as the condition.
+    tasks() { return [FIND_TASK, GUIDE_TASK, NG_GUIDE_TASK]; },
+
+    debrief(taskId) {
+      if (taskId === FIND_TASK.id) return FIND_DEBRIEF;
+      return taskId === NG_GUIDE_TASK.id ? NG_GUIDE_DEBRIEF : GUIDE_DEBRIEF;
+    },
 
     async getCannedResponse(taskId, condition) {
       if (taskId !== FIND_TASK.id) return null;
@@ -259,9 +378,14 @@
       return { task_id: taskId, url: FIND_TASK.url, title: 'Larkspur Community Pool', html: FIND_PAGE_HTML };
     },
     async getGuideTrajectory(id) {
+      // Both built once, for the same reason: the screenshots are drawn onto a canvas, and redrawing
+      // them on every render would rebuild five JPEGs each time somebody steps back through the
+      // walkthrough.
+      if (id === NG_GUIDE_TASK.id) {
+        if (!ngGuideRecord) ngGuideRecord = buildNgGuideRecord();
+        return ngGuideRecord;
+      }
       if (id !== GUIDE_TASK.id) return null;
-      // Built once. The screenshots are drawn onto a canvas, and redrawing them on every render
-      // would rebuild five JPEGs each time the participant steps back through the walkthrough.
       if (!guideRecord) guideRecord = buildGuideRecord();
       return guideRecord;
     },

@@ -4167,6 +4167,42 @@ body.welcome-body { display: block; height: auto; }
   background: rgba(120, 87, 255, 0.05);
 }
 
+/* Shut by default — see orientationHtml. The summary carries the one line that must not be behind a
+   click ("nothing here is recorded"), and the marker is the affordance saying the rest is still
+   there. */
+.tut-orient-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tut-orient-summary::-webkit-details-marker { display: none; }
+
+.tut-orient-line {
+  flex: 1 1 auto;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+/* A chevron of its own, since the native marker is off: it has to turn, and it has to sit on the
+   summary's first line rather than wherever a list-item marker would land. */
+.tut-orient-summary::after {
+  content: '⌄';
+  flex: 0 0 auto;
+  margin-left: 2px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--muted);
+  transform: translateY(-1px);
+  transition: transform .15s ease;
+}
+
+.tut-orient[open] .tut-orient-summary::after { transform: rotate(180deg) translateY(1px); }
+.tut-orient[open] .tut-orient-summary { margin-bottom: 4px; }
+
 .tut-orient-list {
   margin: 10px 0 0;
   padding-left: 18px;
@@ -4177,6 +4213,236 @@ body.welcome-body { display: block; height: auto; }
 
 .tut-orient-list li { margin-bottom: 7px; }
 .tut-orient-list b { color: var(--ink); }
+
+/* The invitation, above the list of things to try. Weighted like body text rather than like the
+   grey list under it: it is the sentence that gives permission to press things, and a participant
+   who reads only one line of this card should read this one. */
+.tut-orient-invite {
+  margin: 9px 0 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: rgba(0, 0, 0, 0.78);
+}
+
+/* ── The condition explainers ──────────────────────────────────────────────────
+   One screen per arm, shown before the test task in it. Built on .tut-hero, which supplies the
+   column width and the padding; everything here is the parts the welcome screen does not have.
+
+   THE TWO ARMS ARE COLOURED APART but neither is coloured as the broken one. Grounded takes the
+   site accent, non-grounded a neutral slate — not a red, which would read as an error state and
+   teach exactly the thing these screens exist to prevent. */
+/* Room for the walkthrough's fixed bar at the bottom of the window: this screen is long enough to
+   scroll to its own primary button, and at .tut-hero's padding the bar sat on top of it. */
+.tut-explain { max-width: 660px; padding-bottom: 108px; }
+
+.tut-explain-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid;
+  font: 800 11.5px/1.2 inherit;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.tut-explain-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+.tut-explain-badge.is-grounded {
+  color: var(--accent-dark);
+  border-color: rgba(120, 87, 255, 0.35);
+  background: rgba(120, 87, 255, 0.09);
+}
+
+.tut-explain-badge.is-nongrounded {
+  color: #4a4a58;
+  border-color: rgba(0, 0, 0, 0.18);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* ── The deck of annotated screens ─────────────────────────────────────────────
+   Wider than the welcome hero: these are full captures of a two-pane interface with handwritten
+   labels over them, and at the hero's 620px the labels stop being readable, which makes the picture
+   decoration. The column widens for the picture and the prose stays short enough not to need it. */
+.tut-deck { max-width: 1040px; }
+
+/* A PICTURE SLIDE TAKES THE WINDOW. The captures are of both panes at once, so rendering one inside
+   the left pane shrinks a two-pane screenshot into two thirds of one pane and the annotations stop
+   being readable. On these slides the question panel has nothing on it to lose. */
+body.tut-wide .task-shell { grid-template-columns: minmax(0, 1fr); }
+body.tut-wide .task-panel { display: none; }
+body.tut-wide .task-stimulus { border-right: 0; }
+body.tut-wide .tut-deck { max-width: 1560px; padding-left: 40px; padding-right: 40px; }
+
+.tut-deck-step {
+  margin: 0 0 4px;
+  font: 800 12px/1.2 inherit;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tut-deck-title { font-size: 24px; line-height: 1.2; margin: 0 0 8px; }
+
+.tut-deck-caption {
+  margin: 0 0 16px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: rgba(0, 0, 0, 0.78);
+  max-width: 720px;
+}
+
+.tut-deck-figure {
+  margin: 0 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card);
+  line-height: 0;
+}
+
+.tut-deck-figure img { width: 100%; height: auto; display: block; }
+
+/* ── The primer: the two conditions, side by side ──────────────────────────────
+   The pairing is the content, so the two cells are equal and adjacent — stacked they would read as
+   two unrelated pictures, and at unequal widths as one being the point and the other an aside. */
+/* MATCHED ON HEIGHT, NOT ON WIDTH. The two figures have different aspect ratios — one is a tall
+   two-example column, the other a shorter one — so equal columns rendered them at visibly different
+   heights and the taller one read as the more important of the pair. The comparison is the content
+   here, so the shared dimension has to be the one the eye uses to size them against each other:
+   both are given the same height and take whatever width that leaves them. */
+.tut-primer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-start;
+  margin: 8px 0 0;
+}
+
+.tut-primer-cell {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Viewport-relative so the pair fits above the fold on a laptop, capped so it does not become a
+   billboard on a large monitor. */
+.tut-primer-cell .tut-deck-figure {
+  height: min(58vh, 620px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tut-primer-cell .tut-deck-figure img {
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+/* Stacked below the two-column point, where a side-by-side pair is narrower than either figure is
+   readable at. Height stops being the shared dimension there, so it goes back to width. */
+@media (max-width: 900px) {
+  .tut-primer { flex-direction: column; }
+  .tut-primer-cell .tut-deck-figure { height: auto; }
+  .tut-primer-cell .tut-deck-figure img { height: auto; width: 100%; }
+}
+
+/* The label is the only word on this screen that the figures do not carry themselves, so it is
+   loud: it is the whole thing being taught. Coloured the same way the condition badge is, and for
+   the same reason — neither arm is the broken one. */
+.tut-primer-label {
+  display: inline-flex;
+  /* The cell is a flex column, which stretches its children — without this the pill spans the whole
+     figure and stops reading as a label. */
+  align-self: flex-start;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid;
+  font: 800 13px/1.2 inherit;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.tut-primer-cell.is-on .tut-primer-label {
+  color: var(--accent-dark);
+  border-color: rgba(120, 87, 255, 0.35);
+  background: rgba(120, 87, 255, 0.09);
+}
+
+.tut-primer-cell.is-off .tut-primer-label {
+  color: #4a4a58;
+  border-color: rgba(0, 0, 0, 0.18);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* A picture that did not load says which file it wanted. To a participant a broken image icon is a
+   broken study; to whoever is setting this up it is a silent one. */
+.tut-deck-figure.is-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  padding: 24px;
+  text-align: center;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.03);
+  border-style: dashed;
+}
+
+.tut-deck-figure.is-missing code { font-size: 12.5px; color: var(--ink); }
+
+/* Back on the left, the position dots in the middle, the primary Next on the right — the shape of
+   every slideshow, so nobody has to be told which button advances. */
+.tut-deck-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+/* .welcome-btn is a full-width block on its own screen; in this row it is one of three controls,
+   so it stops stretching and sits at the end. */
+.tut-deck-nav .welcome-btn {
+  margin: 0 0 0 auto;
+  width: auto;
+  flex: 0 0 auto;
+  min-width: 210px;
+  white-space: nowrap;
+}
+
+.tut-deck-btn {
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  font: 700 13px/1.2 inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.tut-deck-btn { white-space: nowrap; flex: 0 0 auto; }
+.tut-deck-btn:hover { border-color: var(--accent); color: var(--accent-dark); }
+
+.tut-deck-dots { display: flex; gap: 6px; }
+
+.tut-deck-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.tut-deck-dot.is-on { background: var(--accent); }
 
 .tut-debrief-answer { margin: 6px 0 10px; font-weight: 700; }
 
@@ -4513,4 +4779,73 @@ body.welcome-body { display: block; height: auto; }
   min-height: 440px;
   border: 0;
   border-top: 1px solid var(--line);
+}
+
+/* ── The agent's answer, in the question pane ─────────────────────────────────
+   It used to sit in the left pane between the journey and the trail, which put the claim being
+   judged a scroll away from the question asking about it: to re-read the sentence you were about to
+   say Yes or No to, you left the Yes and the No behind. Here it sits directly above them.
+
+   The card brings the stimulus stylesheet's own classes with it (.tv-answer, .tv-section-title,
+   .tv-chip), because it is rendered by app/stimulus.js — the same markup the left pane drew, so the
+   two panes cannot disagree about what this arm shows. Only the frame around it belongs here. */
+/* TEAL-GREEN, so the claim being judged is findable in a pane of otherwise identical white cards.
+   The question pane is a stack of .q-card boxes on a near-white ground; the answer is the one of
+   them the participant keeps coming back to, and a card that looks like its neighbours has to be
+   found by reading rather than by glancing.
+
+   Tinting the OUTER card and leaving `.tv-answer` white keeps the prose on white — the answer is
+   read closely and compared against a trajectory, and that is not work to do on a coloured ground.
+   Teal-green is also the one hue not already spoken for here: purple means interactive, amber means
+   milestone, red is the walk button.
+
+   #dcf0e8 rather than a paler tint: against the pane's own #f4f4f8 the lighter candidates came out
+   at 1.01-1.03:1, which is not a distinction at all. The border carries the rest of the separation,
+   since a fill this light cannot. */
+.q-answer-card {
+  padding-top: 12px;
+  background: #dcf0e8;
+  border-color: #a8d6c5;
+}
+.q-answer-card:empty { display: none; }
+
+.q-answer-card .tv-section-title { margin-top: 0; }
+
+/* The answer is prose to be read closely, not a caption. It keeps the stimulus pane's reading size
+   rather than shrinking to the question pane's, which is narrower — the same sentence set smaller
+   AND narrower is materially harder to check against a trajectory. */
+.q-answer-card .tv-answer {
+  font-size: 14.5px;
+  line-height: 1.6;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+/* The second, quieter half of a pair of links — "View ↗" and the arm beside it. Same control, same
+   size, less weight: they are one decision (look at this run) with a modifier (in which arm), and
+   two equally loud chips would read as two unrelated actions. */
+.admin-chip-quiet {
+  opacity: 0.72;
+  font-weight: 600;
+}
+.admin-chip-quiet:hover { opacity: 1; }
+
+/* A setting whose value is a URL: the label reads as a row like its neighbours, and the field goes
+   underneath at full width rather than squeezed into the narrow value column the numeric settings
+   use. A 90-character Google Forms address in a 90-pixel box cannot be checked by eye, and checking
+   it by eye is the whole reason it is on screen. */
+.admin-setting-wide { margin-bottom: 6px; }
+.admin-settings > #v2-survey-url {
+  width: 100%;
+  margin-bottom: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+.admin-settings > #v2-survey-note { margin: 0 0 8px; }
+
+/* "Open the form" with nothing to open. Left in place rather than hidden: a control that vanishes
+   as you clear a field draws the eye to the wrong thing. */
+.admin-chip.is-disabled {
+  opacity: .4;
+  pointer-events: none;
 }

@@ -67,6 +67,10 @@
       browseSimDelayMs: Number.isFinite(Number(f.browseSimDelayMs))
         ? Math.min(5000, Math.max(0, Math.round(Number(f.browseSimDelayMs))))
         : 500,
+      // NOT snapshotted in spirit, even though it rides in the same object: the final screen is
+      // reached once, at the end, and the form it should open is whichever one is current then. A
+      // run resumed days later must not post to a form that has since been replaced.
+      postSurveyUrl: String(f.postSurveyUrl || '').trim(),
       // CARRIED, not dropped. saveLocal writes `flags: studyFlags()`, so anything this function
       // omits is gone from the saved run — and the welcome screen reads `saved.flags.queueDesign` to
       // decide whether a resumed run was dealt under the design now set. Omitting it made every
@@ -342,7 +346,9 @@
       // non-grounded arm does not need the column backfilled.
       condition: taskArm(task),
       variant_key: window.FindV2Variants.variantKey(expected !== false, taskArm(task)),
-      goal: task?.goal || task?.question || '',
+      // The goal AS SHOWN — see the note on `goalText` in app/study.js. Falls back to the queue
+      // snapshot for a caller that does not supply one, so an older payload still records something.
+      goal: payload.goalText || task?.goal || task?.question || '',
       answer_text_snapshot: payload.claimText || '',
       answer_correct_snapshot: expected,
       // WHY this run is keyed incorrect — none / misreported / incomplete / could_not_complete /

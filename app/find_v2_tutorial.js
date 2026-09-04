@@ -71,10 +71,24 @@
   // guess from the panes.
   const tut = {
     active: false, idx: 0, queue: [], previewOnly: false, answers: [],
-    stage: null,   // {kind: 'welcome' | 'practice' | 'debrief', idx}
+    stage: null,   // {kind: 'welcome' | 'explain' | 'practice' | 'debrief', idx}
   };
 
   const S = () => window.StudySession;
+
+  /**
+   * The deck's picture slides take the whole window.
+   *
+   * WHY THE PANEL GOES. These are full captures of BOTH panes with handwritten labels over them, so
+   * a slide shown inside the left pane is a picture of a two-pane screen squeezed into two thirds of
+   * one — the labels shrink to the point where the picture stops being readable and becomes
+   * decoration. There is also nothing on the right worth keeping: during a picture the panel has no
+   * question on it. The one-sentence opening slide keeps it, because there the panel is saying which
+   * pane is which, which is exactly the orientation that slide is for.
+   */
+  function setWide(on) {
+    document.body.classList.toggle('tut-wide', !!on);
+  }
   const stimulusPane = () => document.getElementById('stimulus-pane');
   const questionPane = () => document.getElementById('question-pane');
 
@@ -88,6 +102,7 @@
 
   function renderWelcome() {
     stopTour();
+    setWide(false);
     window.detachQuestionPane?.();
     document.body.classList.add('tut-on');
     document.body.classList.remove('tv-nogrounding');
@@ -97,12 +112,21 @@
     // describing "a saved webpage" and then never met one — which reads as something having gone
     // wrong with the study rather than as a study that does not contain Find tasks.
     const withFind = dealsFindTasks();
+    // COUNTED OFF THE QUEUE, not off `withFind`. Dropping the Find practice does not leave one task:
+    // the Guide-only design still rehearses both conditions, so it leaves two. The old copy read the
+    // Find flag as the count and promised "One practice task" in front of a two-task walkthrough.
+    const count = practiceQueue().length;
+    const COUNT_WORDS = ['No', 'One', 'Two', 'Three', 'Four'];
+    const countWord = COUNT_WORDS[count] || String(count);
 
     stimulusPane().innerHTML = `
       <div class="tut-hero">
         <p class="tut-eyebrow">Before you start</p>
         <h1 class="tut-title">A quick walkthrough</h1>
-        <p class="tut-lead">${withFind ? 'Two practice tasks' : 'One practice task'}. Nothing here is recorded.</p>
+        <p class="tut-lead">${countWord} test task${count === 1 ? '' : 's'}. Nothing here is recorded.</p>
+        <p class="tut-kinds-lead">Each one opens with the <b>condition</b> it is in — what you are
+          shown and what is withheld — and then hands you a <b>test task</b> to try it on. The test
+          tasks are a playground: no clock, nothing scored, every control there to be pressed.</p>
 
         <div class="tut-kinds${withFind ? '' : ' is-single'}">
           ${withFind ? `<div class="tut-kind">
@@ -186,7 +210,7 @@
     tut.queue = practiceQueue();
     S().state.tutorial = tut;
     document.body.classList.remove('tut-on');
-    window.showTask();
+    goToTask(0);
   }
 
   /**
@@ -217,6 +241,7 @@
   /** Leave the walkthrough, from the intro or from the bar. */
   function skipAll() {
     stopTour();
+    setWide(false);
     tut.active = false;
     tut.queue = [];
     S().state.tutorial = null;
@@ -225,6 +250,313 @@
     if (tut.previewOnly) { location.href = 'index.html'; return; }
     markDone();
     window.showTask();       // idx is untouched, so this is task 1 of 4
+  }
+
+  // ── What the condition means: a deck of annotated screens ──────────────────────────────────────
+  //
+  // WHY A SCREEN OF ITS OWN. The two arms are the experiment, and a participant used to meet them as
+  // a chip at the top of a task — "GROUNDED", "NON-GROUNDED" — with the difference explained behind
+  // an ⓘ that most people never press. So the first time somebody discovered that hovering a step
+  // does nothing was on a task whose clock was running, and the honest reading of that screen ("no
+  // evidence here, and that is the point") competed with the obvious one ("this page is broken").
+  //
+  // WHY A DECK OF PICTURES RATHER THAN A TOUR. This was briefly a set of coachmarks walking the live
+  // screen, and the live screen is the wrong teacher for a gesture: a card can point AT the chips in
+  // the answer, but it cannot show what pressing one does without the participant pressing it, and
+  // half of them pressed Next instead. The annotated screenshots show the RESULT of each gesture —
+  // the popup open, the evidence on screen — which is the part that has to be recognised later.
+  //
+  // ONE SENTENCE, THEN THE PICTURES. The opening slide says what the condition IS and nothing else;
+  // everything procedural is a numbered picture behind it. A screen of prose read before any of it
+  // means anything is a screen that gets skimmed to the button.
+  //
+  // ONE DECK PER ARM, BEFORE THE FIRST TEST TASK IN IT, and computed from the queue rather than
+  // remembered in a flag: Back has to be able to land on these screens again, and a "seen it" flag
+  // would mean stepping back past a test task silently changed what came after it.
+  //
+  // THE IMAGES ARE FILES, NOT DRAWINGS. They are annotated captures of this very interface, kept in
+  // figures/tutorial/ and listed by name below, so replacing one after a layout change is dropping a
+  // file rather than editing this module. A missing file renders as a labelled placeholder naming
+  // the path it wants: a walkthrough that has lost a picture must say which one, not show a broken
+  // image icon to a participant mid-study.
+
+  // THE PICTURES ARE FILES ON DISK, in instructions/, annotated over this very interface. Kept out
+  // of this module deliberately: after a layout change the fix is to re-capture a PNG and drop it
+  // in, not to edit a walkthrough. The names are the running order — instruction_1 through
+  // instruction_5 for the grounded arm, nongrounding_mode for the other — and lowercase because a
+  // case-sensitive host will not find a capital that macOS happily served locally.
+  const SHOT_DIR = 'instructions/';
+
+  /**
+   * THE PRIMER: what the two conditions ARE, before either of them is a condition.
+   *
+   * The decks that follow teach the SCREEN — where the chips are, what hovering a step does. That is
+   * a different question from what the study is actually about, which is whether an agent's answer
+   * can be checked against the page it came from at all. A participant who has only met "grounded"
+   * as a purple chip at the top of a task reads it as a mode of the website; the point is that it is
+   * a property of the ANSWER, and it exists outside this study.
+   *
+   * TWO PICTURES AND FOUR WORDS. Both figures carry their own headings and their own worked
+   * examples, so anything written around them is a third telling of what they already show. The one
+   * thing this screen adds is the pairing: these two, side by side, are the two conditions.
+   *
+   * SHOWN ONCE, on the first deck of the sitting, because it is about the study rather than about
+   * the arm — repeating it before the second condition would say the same thing to somebody who has
+   * just spent a test task inside one half of it.
+   */
+  const PRIMER = {
+    title: 'What this study is about',
+    left: {
+      file: 'what_is_nongrounded.png',
+      label: 'Non-grounded',
+      alt: 'An agent answers a question and acts on a page without marking any evidence on it.',
+    },
+    right: {
+      file: 'what_is_grounded.png',
+      label: 'Grounded',
+      alt: 'The same answers, with every claim anchored to a highlighted or boxed region of the page.',
+    },
+  };
+
+  const DECKS = {
+    grounding: {
+      badge: 'Grounded',
+      title: 'Grounded mode',
+      // ONE SENTENCE. Everything else this arm has to say is in the five pictures behind it.
+      lead: 'Every step the agent took comes with the page it was looking at when it took it — so '
+        + 'everything it claims can be checked against what it actually saw.',
+      shots: [
+        {
+          file: 'instruction_1.png',
+          title: 'What is on the screen',
+          caption: 'The task the agent was given and the answer it reported back are on the right. '
+            + 'Its steps are on the left, and above them the button that replays the browsing.',
+        },
+        {
+          file: 'instruction_2.png',
+          title: 'Click a numbered chip in the answer',
+          caption: 'The chips mark claims the agent backed with something it saw. Click [1] and the '
+            + 'evidence behind that claim opens beside it.',
+        },
+        {
+          file: 'instruction_3.png',
+          title: 'Hover or click any step',
+          caption: 'A popup shows the screenshot taken at that step, so you can check what the step '
+            + 'says against the page it acted on.',
+        },
+        {
+          file: 'instruction_4.png',
+          title: 'Simulate the browsing',
+          caption: 'Opens the run as a slideshow. It starts on the page the agent finished on, and '
+            + 'Back walks you towards the first step.',
+        },
+        {
+          file: 'instruction_5.png',
+          title: 'Make your choice',
+          caption: 'After seeing the evidence, decide whether the agent’s answer is correct — and '
+            + 'optionally use Mark wrong beside any step that went astray.',
+        },
+      ],
+    },
+    nongrounding: {
+      badge: 'Non-grounded',
+      title: 'Non-grounded mode',
+      lead: 'The same kind of run and the same question — but the evidence behind each step is '
+        + 'withheld. Nothing is missing or broken: that is the condition.',
+      shots: [
+        {
+          file: 'nongrounding_mode.png',
+          title: 'What you have, and what you do not',
+          caption: 'You still have the agent’s answer, every step it took, and the button that '
+            + 'replays the browsing. What you cannot do is hover or click a step to see the '
+            + 'screenshot behind it — there is none. Decide from what is here.',
+        },
+      ],
+    },
+  };
+
+  /** The arm of the first deck this sitting will show — the one that carries the primer. */
+  function firstDeckArm() {
+    for (let i = 0; i < tut.queue.length; i++) {
+      const arm = explainerArmFor(i);
+      if (arm) return arm;
+    }
+    return null;
+  }
+
+  /**
+   * A deck's slides, in order: the primer (first deck only), the one-sentence opening, the screens.
+   *
+   * Built rather than indexed by hand so that the numbering a participant reads — "3 of 5" — counts
+   * the annotated screens and nothing else. The primer and the opening sentence are not step 1 and
+   * step 2 of anything, and numbering them as such would make the five instructions look like seven.
+   */
+  function slidesOf(armName) {
+    const deck = DECKS[armName];
+    const slides = [];
+    if (armName === firstDeckArm()) slides.push({ kind: 'compare' });
+    slides.push({ kind: 'intro' });
+    deck.shots.forEach((shot, i) => slides.push({ kind: 'shot', shot, n: i + 1 }));
+    return slides;
+  }
+
+  function armOf(task) {
+    return task?.arm === 'nongrounding' ? 'nongrounding' : 'grounding';
+  }
+
+  /**
+   * The condition deck that opens test task `i`, or null when it opens with the task.
+   *
+   * GUIDE ONLY, and the first task of its arm. The decks are pictures of a trajectory screen; in
+   * front of a Find practice they would annotate a screen the participant is not looking at, which
+   * is the same failure as a walkthrough that teaches a task the study never deals. A Find task's
+   * own condition banner still names its arm.
+   */
+  function explainerArmFor(i) {
+    const task = tut.queue[i];
+    if (!task || task.taskType !== 'guide') return null;
+    const arm = armOf(task);
+    for (let j = 0; j < i; j++) {
+      const earlier = tut.queue[j];
+      if (earlier?.taskType === 'guide' && armOf(earlier) === arm) return null;
+    }
+    return arm;
+  }
+
+  /** Move to test task `i`, through its condition deck when it has one. */
+  function goToTask(i) {
+    tut.idx = i;
+    const arm = explainerArmFor(i);
+    if (arm) return renderExplainer(arm, 0);
+    setWide(false);
+    document.body.classList.remove('tut-on');
+    window.showTask();
+  }
+
+  /** Straight into the task the deck was explaining. */
+  function leaveExplainer() {
+    setWide(false);
+    document.body.classList.remove('tut-on');
+    window.showTask();
+  }
+
+  /**
+   * One slide of a condition deck.
+   *
+   * The deck's own Back/Next move within it; the bar's Back does the same thing from outside, so a
+   * participant who reaches for either finds the same behaviour rather than one of them jumping out
+   * of the deck entirely.
+   */
+  function renderExplainer(armName, slide) {
+    stopTour();
+    window.detachQuestionPane?.();
+    document.body.classList.add('tut-on');
+    document.body.classList.remove('tv-nogrounding');
+
+    const deck = DECKS[armName];
+    const slides = slidesOf(armName);
+    const at = Math.max(0, Math.min(Number(slide) || 0, slides.length - 1));
+    const here = slides[at];
+    const withheld = armName === 'nongrounding';
+    const last = at === slides.length - 1;
+    // The primer is two full figures side by side and wants the window as much as a capture does.
+    setWide(here.kind !== 'intro');
+
+    const body = here.kind === 'compare' ? primerHtml()
+      : here.kind === 'shot' ? shotHtml(deck, here)
+      : `
+          <h1 class="tut-title">${esc(deck.title)}</h1>
+          <p class="tut-lead">${esc(deck.lead)}</p>
+          <p class="tut-fine">Next: ${deck.shots.length} annotated screen${deck.shots.length === 1
+            ? '' : 's'} showing what that means, then a test task to try it on.</p>`;
+
+    stimulusPane().innerHTML = `
+      <div class="tut-hero tut-explain tut-deck">
+        ${here.kind === 'compare' ? '' : `
+          <p class="tut-eyebrow">Test task ${tut.idx + 1} of ${tut.queue.length} · the condition</p>
+          <div class="tut-explain-badge ${withheld ? 'is-nongrounded' : 'is-grounded'}">
+            <span class="tut-explain-dot" aria-hidden="true"></span>${esc(deck.badge)}</div>`}
+
+        ${body}
+
+        <div class="tut-deck-nav">
+          <button class="tut-deck-btn" id="tut-v2-deck-back"${at === 0 ? ' hidden' : ''}>← Back</button>
+          <div class="tut-deck-dots" aria-hidden="true">
+            ${slides.map((unused, i) =>
+              `<span class="tut-deck-dot${i === at ? ' is-on' : ''}"></span>`).join('')}
+          </div>
+          <button class="welcome-btn tut-deck-next" id="tut-v2-deck-next">${last
+            ? 'Try it on the test task →' : 'Next →'}</button>
+        </div>
+      </div>`;
+
+    questionPane().innerHTML = `
+      <div class="q-head"><span class="q-title">📘 ${esc(deck.title)}</span></div>
+      <div class="q-body">
+        <p class="q-sub">The task, the agent’s answer and the Yes/No appear on this side. The
+          agent’s run appears on the left.</p>
+      </div>`;
+
+    tut.stage = { kind: 'explain', idx: tut.idx, arm: armName, slide: at };
+    renderNav(here.kind === 'compare'
+      ? 'Before you start · grounded and non-grounded'
+      : `Test task ${tut.idx + 1} of ${tut.queue.length} · what this condition means`);
+    stimulusPane().scrollTop = 0;
+    bindMissingShots();
+
+    document.getElementById('tut-v2-deck-next').onclick = () =>
+      (last ? leaveExplainer() : renderExplainer(armName, at + 1));
+    const back = document.getElementById('tut-v2-deck-back');
+    if (back) back.onclick = () => renderExplainer(armName, at - 1);
+  }
+
+  /** The two figures, side by side, labelled. Deliberately almost wordless — see PRIMER. */
+  function primerHtml() {
+    const cell = (side, tone) => `
+      <figure class="tut-primer-cell ${tone}">
+        <figcaption class="tut-primer-label">${esc(side.label)}</figcaption>
+        <div class="tut-deck-figure" data-figure>
+          <img src="${esc(SHOT_DIR + side.file)}" alt="${esc(side.alt)}"
+            data-shot="${esc(SHOT_DIR + side.file)}">
+        </div>
+      </figure>`;
+    return `
+      <p class="tut-eyebrow">Before you start</p>
+      <h1 class="tut-title">${esc(PRIMER.title)}</h1>
+      <div class="tut-primer">
+        ${cell(PRIMER.left, 'is-off')}
+        ${cell(PRIMER.right, 'is-on')}
+      </div>`;
+  }
+
+  function shotHtml(deck, here) {
+    const src = SHOT_DIR + here.shot.file;
+    return `
+      <p class="tut-deck-step">${esc(deck.title)} · ${here.n} of ${deck.shots.length}</p>
+      <h1 class="tut-deck-title">${esc(here.shot.title)}</h1>
+      <p class="tut-deck-caption">${esc(here.shot.caption)}</p>
+      <div class="tut-deck-figure" data-figure>
+        <img src="${esc(src)}" alt="${esc(here.shot.title)}" data-shot="${esc(src)}">
+      </div>
+      <p class="tut-fine"><a href="${esc(src)}" target="_blank" rel="noopener">Open this picture
+        full size ↗</a></p>`;
+  }
+
+  /**
+   * A PLACEHOLDER, NAMED. The pictures are files on disk, and a file that has not been dropped in
+   * yet must say which one it is waiting for — to a participant a broken image icon is a broken
+   * study, and to whoever is setting this up it is a silent one.
+   */
+  function bindMissingShots() {
+    stimulusPane().querySelectorAll('img[data-shot]').forEach(img => {
+      img.onerror = () => {
+        const figure = img.closest('[data-figure]');
+        if (!figure) return;
+        figure.classList.add('is-missing');
+        figure.innerHTML = `<span>Picture not found — expected at
+          <code>${esc(img.dataset.shot)}</code></span>`;
+      };
+    });
   }
 
   // ── The bar ────────────────────────────────────────────────────────────────────────────────────
@@ -265,6 +597,13 @@
     const stage = tut.stage;
     if (!stage || stage.kind === 'welcome') return '';
     if (stage.kind === 'debrief') return 'Back to the task';
+    // Inside a condition deck the bar's Back is the deck's Back, so the two controls on the screen
+    // do not mean different things.
+    if (stage.kind === 'explain' && stage.slide > 0) return 'Back';
+    // A task that was opened by a condition deck goes back to it rather than past it: the screens
+    // behind this one are the ones that say what the missing screenshots mean, and that is what
+    // somebody stepping back on a non-grounded task is most likely reaching for.
+    if (stage.kind === 'practice' && explainerArmFor(stage.idx)) return 'Back to what this means';
     return stage.idx === 0 ? 'Back to the start' : 'Back to the last answer';
   }
 
@@ -278,9 +617,22 @@
     // Back onto a practice task RE-RENDERS it from scratch, which restarts its clocks and clears the
     // answer that was given. That is the honest thing for practice — the alternative is a task that
     // looks live but is holding a stopped timer — and none of it is recorded either way.
+    setWide(false);
     if (stage.kind === 'debrief') {
       tut.idx = stage.idx;
+      // Straight to the task, not through the explainer again: Back from an answer screen means
+      // "let me look at that task again", and re-reading the condition is one more press from there.
+      document.body.classList.remove('tut-on');
       return window.showTask();
+    }
+    if (stage.kind === 'explain' && stage.slide > 0) {
+      return renderExplainer(stage.arm, stage.slide - 1);
+    }
+    // Back onto the LAST slide of the deck, not its first: the screen behind the task is the last
+    // thing that was on screen before it, and restarting the deck would make Back feel like a reset.
+    if (stage.kind === 'practice' && explainerArmFor(stage.idx)) {
+      const arm = explainerArmFor(stage.idx);
+      return renderExplainer(arm, slidesOf(arm).length - 1);
     }
     if (stage.idx === 0) {
       tut.active = false;
@@ -288,6 +640,7 @@
       return renderWelcome();
     }
     tut.idx = stage.idx - 1;
+    document.body.classList.remove('tut-on');
     return showDebrief(tut.queue[tut.idx], tut.answers[tut.idx]);
   }
 
@@ -299,8 +652,11 @@
     return tut.queue[tut.idx] || null;
   }
 
+  // "Test task", not "practice". The screens call it a test set and a playground; a bar that then
+  // says "practice" is a second name for the same thing, and a participant has to work out that
+  // they are the same thing rather than reading either.
   function progressLabel() {
-    return `Practice ${tut.idx + 1} of ${tut.queue.length} · not recorded`;
+    return `Test task ${tut.idx + 1} of ${tut.queue.length} · not recorded`;
   }
 
   // ── Orientation ────────────────────────────────────────────────────────────────────────────────
@@ -325,17 +681,54 @@
     ['“No” covers two cases', 'It did not finish, or it claims something that did not happen.'],
   ];
 
+  // THE SAME CARD, SAYING WHAT THIS ARM ACTUALLY DOES. The grounded line above promises a page
+  // behind every step, and printing it over a non-grounded task told a participant to hover
+  // something that does not respond — which is the one lesson this walkthrough exists to prevent.
+  const GUIDE_POINTS_NG = [
+    ['Read View Journey', 'Every step it took, in words. There is no page behind them in this condition.'],
+    ['Simulate the browsing', 'The pages are still reachable here, as a stepped-back slideshow.'],
+    ['Optional step marks', 'Use Mark wrong when you can identify an incorrect step.'],
+    ['“No” covers two cases', 'It did not finish, or it claims something that did not happen.'],
+  ];
+
+  /**
+   * The card that opens a practice task — and says outright that this one is the test set.
+   *
+   * A PLAYGROUND, NAMED AS ONE. "Practice · not recorded" was accurate and read as a formality: it
+   * told a participant what the screen was FOR without telling them what they were allowed to DO on
+   * it, and the observed result was people answering the practice task the way they would answer a
+   * scored one — straight to Yes/No, without ever hovering a step, clicking a chip or opening the
+   * simulator. They then met those controls for the first time on task 1, which is exactly the cost
+   * the walkthrough exists to remove.
+   *
+   * So the card gives permission explicitly: nothing is recorded, no clock is running, and the
+   * invitation is to try every control on the screen before answering. The list underneath is the
+   * things to try, in the arm that actually has them.
+   */
   function orientationHtml(task) {
     const find = task?.taskType === 'find';
-    const points = find ? FIND_POINTS : GUIDE_POINTS;
+    const points = find ? FIND_POINTS
+      : (armOf(task) === 'nongrounding' ? GUIDE_POINTS_NG : GUIDE_POINTS);
+    const arm = find ? '' : (armOf(task) === 'nongrounding' ? 'Non-grounded' : 'Grounded');
+    // FOLDED SHUT. By the time this card is on screen the participant has just read the whole
+    // condition deck, so open it took a third of the question pane to say again what they were told
+    // a moment ago — and pushed the task, the answer and the Yes/No down below the fold, which is
+    // the material the test task exists to let them play with. What has to stay visible is the one
+    // line that says nothing here counts; the rest is there for somebody who wants it back.
     return `
-      <div class="q-card tut-orient">
-        <div class="q-card-head"><span class="q-badge">Practice</span>
-          <p class="q-text">${find ? 'A FIND task' : 'A GUIDE task'} — not recorded.</p></div>
+      <details class="q-card tut-orient">
+        <summary class="tut-orient-summary">
+          <span class="q-badge">Test set</span>
+          <span class="tut-orient-line">${find ? 'A FIND task' : 'A GUIDE task'}${arm
+            ? ` · <b>${esc(arm)}</b>` : ''} — a playground. Nothing is recorded, and no clock
+            is running.</span>
+        </summary>
+        <p class="tut-orient-invite">Now you have the chance to test this task out. <b>Try everything
+          on the screen</b> before you answer — you cannot get it wrong here.</p>
         <ul class="tut-orient-list">
           ${points.map(([name, body]) => `<li><b>${esc(name)}</b> — ${body}</li>`).join('')}
         </ul>
-      </div>`;
+      </details>`;
   }
 
   function onTaskRendered(task) {
@@ -348,10 +741,14 @@
     // AFTER A TICK. The snapshot iframe mounts and marks its highlights asynchronously, so a tour
     // started in the same frame as the render finds no `.pageguide-highlight` and drops the step
     // that is arguably the most useful one on a Find task.
+    // NO COACHMARKS ON A TASK A DECK HAS ALREADY EXPLAINED. The Guide test tasks now open behind an
+    // annotated deck that shows every gesture and its result; running a spotlight over the same
+    // five things afterwards says everything twice and puts an overlay between the participant and
+    // the screen they were just invited to play with. The Find practice has no deck, so it keeps
+    // its tour.
+    if (task?.taskType !== 'find') return;
     setTimeout(() => {
-      if (tut.active && tut.stage?.kind === 'practice') {
-        startTour(task?.taskType === 'find' ? findTourSteps() : guideTourSteps());
-      }
+      if (tut.active && tut.stage?.kind === 'practice') startTour(findTourSteps());
     }, 400);
   }
 
@@ -560,45 +957,6 @@
     ];
   }
 
-  function guideTourSteps() {
-    return [
-      {
-        target: '#q-task-card',
-        title: 'The task the agent was given',
-        body: 'What it was supposed to do. Everything on the left is what it actually did.',
-      },
-      {
-        target: '.tv-journey',
-        title: 'The journey',
-        body: 'Every action it took, in order. <b>Hover a step</b> to see the page it was looking at when it acted, and click for a full-size view.',
-      },
-      {
-        target: '.tv-mark-wrong',
-        title: 'Optionally mark a wrong step',
-        body: 'You do not need to choose Yes or No first. Select <b>Mark wrong</b> when you can identify an incorrect step. You can mark more than one, undo a mark, or leave all steps unmarked.',
-      },
-      {
-        // The legend, not a flagged row: it is the thing that explains what the flags mean, and it
-        // is at the top of the list, so a card placed against it does not sit on top of the steps
-        // the participant is being told to look at. Dropped when the flag is off — startTour skips
-        // a step whose target is not on the screen.
-        target: '.tv-key-legend',
-        title: 'The milestones',
-        body: 'Some steps are marked <b>milestone</b>. Those are the important steps — you can check those rather than reading the whole journey.',
-      },
-      {
-        target: '.tv-answer',
-        title: 'What it reported back',
-        body: 'The claim you are judging. The numbered marks are references — click one to see the step it rests on. An agent can finish, sound certain, and describe something its own steps do not show.',
-      },
-      {
-        target: '#q-find-answer',
-        title: 'Your verdict',
-        body: 'Did it complete the task? <b>“No”</b> covers two cases: it did not finish, <b>or</b> it claims something that did not happen. Step marking is optional, including after you choose No.',
-      },
-    ];
-  }
-
   // ── The debrief ────────────────────────────────────────────────────────────────────────────────
 
   /**
@@ -639,9 +997,9 @@
       && markedSteps.every((step, i) => step === expectedSteps[i]));
     const stepList = steps => steps.length ? `step${steps.length === 1 ? '' : 's'} ${steps.join(', ')}` : 'no steps';
 
-    renderNav(`Practice ${tut.idx + 1} of ${tut.queue.length} · the answer`);
+    renderNav(`Test task ${tut.idx + 1} of ${tut.queue.length} · the answer`);
     questionPane().innerHTML = `
-      <div class="q-head"><span class="q-title">✅ Practice ${tut.idx + 1} done</span></div>
+      <div class="q-head"><span class="q-title">✅ Test task ${tut.idx + 1} done</span></div>
       <div class="q-body">
         <div class="tut-debrief">
           ${timedOut
@@ -668,14 +1026,16 @@
         </div>
         <div class="q-actions">
           <button class="q-btn q-btn-primary" id="tut-v2-next">${last
-            ? 'Done — start task 1 →' : 'Next practice task →'}</button>
+            ? 'Done — start task 1 →'
+            : explainerArmFor(tut.idx + 1) === 'nongrounding' ? 'Next: the non-grounded condition →'
+            : explainerArmFor(tut.idx + 1) ? 'Next: the grounded condition →'
+            : 'Next test task →'}</button>
         </div>
       </div>`;
 
     document.getElementById('tut-v2-next').onclick = () => {
       if (last) return endTutorial();
-      tut.idx++;
-      window.showTask();
+      goToTask(tut.idx + 1);
     };
   }
 
@@ -686,6 +1046,7 @@
 
   function endTutorial() {
     stopTour();
+    setWide(false);
     document.body.classList.remove('tv-nogrounding');
     removeNav();
     tut.active = false;

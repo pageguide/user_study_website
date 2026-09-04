@@ -845,7 +845,13 @@
       // Save would write them against whatever the pool is by then, including rows another admin has
       // since changed. Dropping them costs a re-tick; keeping them can silently move a study.
       pickerDraft = null;
+      // Every cached read goes with the session. Admin is where the database is CHANGED, so a list
+      // that outlives one visit is a list that can describe the study as it was before the last edit.
       pickerTasks = null;
+      previewTasks = null;
+      armsTasks = null;
+      cellsTasks = null;
+      adminClaims = [];
       adminPanel.hidden = true;
       adminPanel.innerHTML = '';
     };
@@ -1243,13 +1249,16 @@
     }
 
     content.innerHTML = '<div class="viz-loading">Loading the Guide tasks…</div>';
-    if (!previewTasks) {
-      try { previewTasks = (await DB.listAllGuideTasks()).filter(row => row.in_study); }
-      catch (error) {
-        previewTasks = null;
-        content.innerHTML = `<p class="welcome-status welcome-status-bad">${esc(error.message || String(error))}</p>`;
-        return;
-      }
+    // RE-READ EVERY TIME THIS TAB IS OPENED. It used to fetch once and keep the list for the life of
+    // the page, so a task renamed or re-keyed in Supabase went on showing its old title here until
+    // somebody happened to reload — and the one thing this tab is for is checking what a participant
+    // will see. The query is the list columns only (no `arms`, so no screenshots), which is why
+    // paying for it on every visit costs nothing worth saving.
+    try { previewTasks = (await DB.listAllGuideTasks()).filter(row => row.in_study); }
+    catch (error) {
+      previewTasks = null;
+      content.innerHTML = `<p class="welcome-status welcome-status-bad">${esc(error.message || String(error))}</p>`;
+      return;
     }
 
     if (!previewTasks.length) {
@@ -1952,6 +1961,31 @@
         </label>
       </div>
 
+      <h3 class="admin-subtitle">The post-study questionnaire</h3>
+      <p class="viz-note">The form the final screen links to and embeds, asked once after the last
+        task. <b>Leave it blank to use the built-in form</b> — an empty box falls back to
+        <code>app/find_v2_config.js</code> and then to the address compiled into the page, so the
+        last step of the study cannot be removed by clearing a text field. Changing it takes effect
+        for everyone immediately, including runs already in progress: the final screen is reached
+        once, at the end, and the right form is whichever one is current then.</p>
+      <div class="admin-settings">
+        <label class="q-opt q-opt-rich admin-setting admin-setting-wide">
+          <span class="q-opt-body"><span><b>Survey URL</b><small>Prefer the long
+            <code>docs.google.com/forms/d/e/…/viewform</code> address over a
+            <code>forms.gle</code> short link — see the note below if you paste a short
+            one.</small></span></span>
+        </label>
+        <input class="welcome-input" id="v2-survey-url" type="url" spellcheck="false"
+          placeholder="https://docs.google.com/forms/d/e/…/viewform"
+          value="${esc(flags.postSurveyUrl || '')}">
+        <p class="welcome-status" id="v2-survey-note"></p>
+        <div class="preview-chips">
+          <a class="admin-chip" id="v2-survey-open" target="_blank" rel="noopener"
+            href="${esc(flags.postSurveyUrl || '')}">Open the form ↗</a>
+          <a class="admin-chip" href="study.html?finish=preview" target="_blank" rel="noopener">Preview the final screen ↗</a>
+        </div>
+      </div>
+
       <h3 class="admin-subtitle">The walkthrough</h3>
       <p class="viz-note">Two practice tasks, one Find and one Guide, offered once before task 1 and
         skippable. The material is invented — a pool timetable — and nothing about it is in the
@@ -1991,6 +2025,44 @@
       tutorialStatus.className = 'welcome-status';
     };
 
+    // THE SHORT-LINK WARNING, live rather than on save. `?embedded=true` is what strips Google's page
+    // chrome from the frame, and a forms.gle link is a 302 — a redirect does not carry a query string
+    // forward, so the parameter is dropped and the final screen embeds the full Google Forms page
+    // inside itself. It still works and a participant can still submit, which is why this warns
+    // instead of refusing: it is a cosmetic cost with an easy fix, not a broken study.
+    const surveyInput = content.querySelector('#v2-survey-url');
+    const surveyNote = content.querySelector('#v2-survey-note');
+    const surveyOpen = content.querySelector('#v2-survey-open');
+    const paintSurveyNote = () => {
+      const value = String(surveyInput.value || '').trim();
+      surveyOpen.href = value;
+      surveyOpen.classList.toggle('is-disabled', !value);
+      if (!value) {
+        surveyNote.textContent = 'Blank — the built-in form is used.';
+        surveyNote.className = 'welcome-status';
+        return;
+      }
+      if (!/^https:\/\//i.test(value)) {
+        surveyNote.textContent = 'The survey URL must start with https://.';
+        surveyNote.className = 'welcome-status welcome-status-bad';
+        return;
+      }
+      if (/^https:\/\/forms\.gle\//i.test(value)) {
+        surveyNote.innerHTML = '<b>This is a forms.gle short link.</b> It works, and participants '
+          + 'can submit — but a short link is a redirect, and a redirect drops the '
+          + '<code>?embedded=true</code> the final screen appends, so the form is framed with '
+          + 'Google’s full page chrome inside it. For a clean embed, open the form → <b>Send</b> → '
+          + 'the link tab → untick <b>Shorten URL</b>, and paste the long '
+          + '<code>…/viewform</code> address here instead.';
+        surveyNote.className = 'welcome-status welcome-status-bad';
+        return;
+      }
+      surveyNote.textContent = 'Looks embeddable.';
+      surveyNote.className = 'welcome-status';
+    };
+    surveyInput.oninput = paintSurveyNote;
+    paintSurveyNote();
+
     const statusEl = document.getElementById('v2-settings-status');
     const setStatus = (message, bad = false) => {
       statusEl.textContent = message;
@@ -2017,6 +2089,11 @@
           button.disabled = false;
           return setStatus('The simulated page load must be between 0 and 5000 milliseconds.', true);
         }
+        const surveyUrl = String(surveyInput.value || '').trim();
+        if (surveyUrl && !/^https:\/\//i.test(surveyUrl)) {
+          button.disabled = false;
+          return setStatus('The survey URL must be an https:// address, or blank for the built-in form.', true);
+        }
         const saved = await DB.saveStudyFlags(adminPassword, {
           collectEvidence: document.getElementById('v2-collect-evidence').checked,
           collectFollowup: document.getElementById('v2-collect-followup').checked,
@@ -2028,6 +2105,7 @@
           slotQuota: Math.round(quota),
           allowBrowseSim: document.getElementById('v2-allow-browse-sim').checked,
           browseSimDelayMs: Math.round(delay),
+          postSurveyUrl: surveyUrl,
         });
         // Reflect what the SERVER stored, not what the boxes said — the two differ if a write is
         // rejected, and a panel that reports its own optimism is how a pilot runs the wrong protocol.
@@ -2049,8 +2127,13 @@
           + `${saved.showReasoningTrail ? 'shown' : 'hidden'} · recruiting: `
           + `${saved.slotQuota > 0 ? `${saved.slotQuota} per class` : 'round-robin'} · browse `
           + `simulator: ${saved.allowBrowseSim
-            ? `offered, ${saved.browseSimDelayMs}ms per page` : 'off'}.`
-          + ' Runs already in progress keep the protocol they started with.');
+            ? `offered, ${saved.browseSimDelayMs}ms per page` : 'off'} · survey: `
+          + `${saved.postSurveyUrl ? saved.postSurveyUrl : 'the built-in form'}.`
+          // TWO DIFFERENT RULES, said apart because they really are different. The protocol flags
+          // are snapshotted at Start, so a run under way keeps them; the survey URL is read at the
+          // END, so a change reaches everyone including people already answering.
+          + ' Runs already in progress keep the protocol they started with —'
+          + ' except the survey, which is read when the final screen is reached.');
       } catch (error) {
         setStatus(error.message || String(error), true);
       }
@@ -2096,13 +2179,13 @@
     const content = document.getElementById('find-v2-admin-content');
     content.innerHTML = '<div class="viz-loading">Loading the Guide runs…</div>';
 
-    if (!armsTasks) {
-      try { armsTasks = await DB.listAllGuideTasks(); }
-      catch (error) {
-        armsTasks = null;
-        content.innerHTML = `<p class="welcome-status welcome-status-bad">${esc(error.message || String(error))}</p>`;
-        return;
-      }
+    // Re-read on every open, for the reason given in renderSessionPreview: a cached list is a list
+    // that can disagree with the database, and this tab exists to show what the database holds.
+    try { armsTasks = await DB.listAllGuideTasks(); }
+    catch (error) {
+      armsTasks = null;
+      content.innerHTML = `<p class="welcome-status welcome-status-bad">${esc(error.message || String(error))}</p>`;
+      return;
     }
     if (!armsTasks.length) {
       content.innerHTML = `<p class="viz-note">No Guide run exists yet. Run
@@ -3484,6 +3567,19 @@
           </label>
           <button class="admin-chip" data-guide-save="${esc(id)}">Save</button>
           <button class="admin-chip" data-guide-trail="${esc(id)}">Inspect</button>
+          <!-- THE PARTICIPANT'S SCREEN, not a description of it. Inspect beside this shows the run as
+               a researcher's table — both arms' answers, the evidence keyed to its steps, the
+               recorded errors — which is the right view for keying a task and the wrong one for
+               answering "what will they actually see?". View plays the real task page: two panes, the
+               condition banner, the journey, the answer card, the opening lock, the walk. It claims
+               no assignment slot and writes nothing, so it can be answered through to the end.
+               New tab, because this tab is holding an unsaved key. -->
+          <a class="admin-chip" target="_blank" rel="noopener"
+            href="${esc(`study.html?task=${encodeURIComponent(id)}&arm=grounding`)}"
+            title="Open this run on the real task screen, grounded — nothing is recorded">View ↗</a>
+          <a class="admin-chip admin-chip-quiet" target="_blank" rel="noopener"
+            href="${esc(`study.html?task=${encodeURIComponent(id)}&arm=nongrounding`)}"
+            title="The same run on the real task screen, non-grounded">non-grounded ↗</a>
         </div>
         <div class="admin-guide-trail" data-guide-trail-for="${esc(id)}" hidden></div>
         <p class="q-sub">Did the agent successfully complete the task? <b>This is the answer key</b>

@@ -464,6 +464,11 @@
     return Math.min(5000, Math.max(0, Math.round(value)));
   }
 
+  /** Trimmed, and '' when absent — empty means "fall through to the built-in", never "no survey". */
+  function postSurveyUrlOf(row) {
+    return String(row?.post_survey_url || '').trim();
+  }
+
   function taskSelectionOf(row) {
     const value = row?.task_selection;
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -498,6 +503,9 @@
       // anything on a non-grounded Guide task, and the code that reads it is deployed together.
       allowBrowseSim: true,
       browseSimDelayMs: DEFAULT_BROWSE_SIM_DELAY_MS,
+      // Empty, so an unmigrated project keeps whatever app/study.js and the config file already
+      // agreed on. A settings row cannot take the last screen of the study away by not existing.
+      postSurveyUrl: '',
     };
     let data;
     try { data = await rpc('pageguide_find_v2_study_flags', {}); }
@@ -518,6 +526,7 @@
       // Absent means on, matching the column default and the fallback above.
       allowBrowseSim: row.allow_browse_sim !== false,
       browseSimDelayMs: browseSimDelayOf(row),
+      postSurveyUrl: postSurveyUrlOf(row),
     };
   }
 
@@ -566,6 +575,12 @@
     if (Number.isFinite(Number(flags?.browseSimDelayMs))) {
       body.p_browse_sim_delay_ms = Math.round(Number(flags.browseSimDelayMs));
     }
+    // Sent whenever the caller has a string at all, INCLUDING an empty one — clearing the field is a
+    // real decision ("go back to the built-in form"), and a writer that dropped '' could never undo
+    // a URL once one had been saved.
+    if (typeof flags?.postSurveyUrl === 'string') {
+      body.p_post_survey_url = flags.postSurveyUrl.trim();
+    }
     // WHAT POSTGREST SAYS WHEN THE PROJECT IS BEHIND THE BROWSER, translated.
     //
     // Functions are resolved BY ARGUMENT NAME, so a browser that sends `p_task_selection` to a
@@ -584,7 +599,8 @@
     } catch (error) {
       const message = String(error?.message || error);
       if (/Could not find the function/i.test(message) && /save_pageguide_find_v2_flags/.test(message)) {
-        const missing = ['p_task_selection', 'p_allow_browse_sim', 'p_browse_sim_delay_ms']
+        const missing = ['p_task_selection', 'p_allow_browse_sim', 'p_browse_sim_delay_ms',
+          'p_post_survey_url']
           .filter(name => name in body);
         throw new Error('This Supabase project has not been migrated for these settings yet — its '
           + `save_pageguide_find_v2_flags does not take ${missing.join(', ') || 'these parameters'}. `
@@ -606,6 +622,7 @@
       taskSelection: taskSelectionOf(row),
       allowBrowseSim: row?.allow_browse_sim !== false,
       browseSimDelayMs: browseSimDelayOf(row),
+      postSurveyUrl: postSurveyUrlOf(row),
     };
   }
 
