@@ -15,11 +15,20 @@
 // trail. A participant judging that run should be looking at the same thing, or the study measures
 // how well people read a study interface.
 //
-// ONE LAYOUT, TWO ARMS. The arms differ in exactly one way: a grounded step row will show you its
-// screenshot, a non-grounded one is text and nothing else. That is the same rule the live panel
-// already applies in _buildGoalTimelineRow, which skips the hover/click wiring under
-// _isPanelNonGrounding(). Everything else — the order, the wording, the bookends, the answer, the
-// trail — is identical, because anything else that differs is a second variable nobody is measuring.
+// ONE LAYOUT, TWO ARMS. The grounded arm is the checkable one, and everything that makes a step
+// checkable travels together: the MILESTONE flags that say which steps are worth checking, the hover
+// that shows the page a step acted on, and the click that opens it full size. The non-grounded arm is
+// the same steps as text and nothing else. That is the same rule the live panel already applies in
+// _buildGoalTimelineRow, which skips the hover/click wiring under _isPanelNonGrounding().
+//
+// The flags used to render in BOTH arms, which made them a fifth thing the non-grounded participant
+// was handed — and a signpost to a door that is not there, since a flagged row it cannot open is a
+// line of text like every other row. Moving them into the grounded bundle makes the manipulation
+// wider than "the screenshots are missing", deliberately.
+//
+// Everything else — the order, the wording, the bookends, the answer, the trail, the browse
+// simulator — is identical, because anything else that differs is a second variable nobody is
+// measuring.
 //
 // Reads the published trajectory (study_guide_trajectories) rather than any live state: what a
 // participant sees has to be what the researcher authored, edits and uploaded screenshots included.
@@ -49,6 +58,49 @@ let layout = {
 // The two STATE shots are the exception and are shown in both arms — see _stripGuideArm. The arms
 // differ in whether each ACTION can be checked, not in whether the outcome is known.
 let showShots = true;
+
+// ── The browse simulator ──────────────────────────────────────────────────────
+//
+// WHAT IT IS. A non-grounded participant is shown what the agent did as text: step 7 says "clicked
+// Departures", and there is no way to see the page it was looking at when it did. The simulator
+// hands that back on request — a button that opens the run as a slideshow, one page state per step,
+// walked with Back and Next.
+//
+// OFFERED IN BOTH ARMS, and that is a deliberate reversal of how it started. It began as the
+// non-grounded arm's one way back to the pages, which made it part of what separated the conditions
+// — and a manipulation nobody had decided to run. As a constant it is cleaner: the arms now differ
+// ONLY in whether the evidence sits beside each claim (a grounded step is checkable with a hover, a
+// non-grounded one is text), and both get the same optional walk through the same pages. The
+// simulator's usage also becomes a measure that is directly comparable across the arms, which it
+// could never be while only one of them had the button.
+//
+// WHERE THE PICTURES COME FROM. In the non-grounded arm `arm` is the STRIPPED arm — _stripGuideArm
+// nulled every step screenshot, which is the definition of that arm and must not be undone. So the
+// simulator reads the untouched record instead, in both arms alike: if the grounded arm was never
+// recorded there is nothing to simulate and the button is not rendered.
+let sourceRecord = null;
+let allowBrowseSim = false;
+
+// HOW LONG A PAGE TAKES TO COME UP. The walk models browsing, and browsing is not instant — with no
+// delay at all the buttons scrub, and a participant can flick through fourteen pages in a second
+// without any of them having been on screen long enough to read. It also makes a held-down arrow
+// key advance at a readable rate instead of emptying the run in one press.
+//
+// SET PER MOUNT, from `browse_sim_delay_ms`, because it is the one number here that changes what
+// the instrument measures: the cost of looking is the whole difference between "the evidence was
+// available" and "the evidence was worth going to get". This is the fallback for a caller that
+// passes none, and it matches the column default.
+const BROWSE_STEP_DEFAULT_MS = 500;
+let browseStepMs = BROWSE_STEP_DEFAULT_MS;
+
+// Per mount. Reset with the task, because the question it answers — "did THIS participant open the
+// simulator on THIS task, and how far BACK did they walk it?" — is per task, and a running total
+// across a four-task queue would attribute task 1's looking to task 4.
+//
+// `nearest` is the LOWEST frame index reached, because the walk opens on the last page and travels
+// backwards — see openBrowseSim. It starts at Infinity rather than 0 so that "never moved" and
+// "walked all the way to the first page" are not the same number.
+let browseSim = { opens: 0, steps: 0, nearest: Infinity, firstOpenMs: null, mountedAt: 0 };
 
 function esc(value) {
   return String(value == null ? '' : value)
@@ -90,6 +142,15 @@ function mountStimulus(record, armName, mount, options) {
   };
   showShots = armName !== 'nongrounding';
   document.body.classList.toggle('tv-nogrounding', !showShots);
+  sourceRecord = record || null;
+  // BOTH ARMS. See the note above the declaration: the walk is a constant of the study now, not a
+  // non-grounded affordance, so the only thing gating it is whether the study offers it at all.
+  allowBrowseSim = options?.allowBrowseSim === true;
+  const delay = Number(options?.browseSimDelayMs);
+  browseStepMs = Number.isFinite(delay)
+    ? Math.min(5000, Math.max(0, Math.round(delay))) : BROWSE_STEP_DEFAULT_MS;
+  browseSim = { opens: 0, steps: 0, nearest: Infinity, firstOpenMs: null, mountedAt: Date.now() };
+  closeBrowseSim();
 
   if (!record) {
     els.goal.textContent = 'This task could not be loaded.';
@@ -118,6 +179,7 @@ function mountStimulus(record, armName, mount, options) {
   bindHints();
   bindStates();
   bindPreviews();
+  bindBrowseSim();
 }
 
 /** The steps this trajectory shows, for the step buttons in the question pane. */
@@ -338,7 +400,31 @@ function render() {
   // run is exactly where the discrepancy is not. Switchable per study (flag_milestones) so a
   // condition can be run without it; see supabase_v2_milestone_flag.sql.
   const keySteps = new Set(milestones.map(m => Number(m.step)).filter(n => Number.isFinite(n)));
-  const marking = layout.highlightMilestones && keySteps.size > 0;
+
+  // GROUNDED ONLY. The flags used to render in both arms, which made them a fifth thing the
+  // non-grounded participant was given and quietly widened what the arm meant. They belong with the
+  // evidence: a milestone flag says "this step is one of the ones worth checking", and in the
+  // non-grounded arm there is nothing to check it against — the row it points at is a line of text
+  // like every other row. Pointing at steps a participant cannot open is a signpost to a door that
+  // is not there.
+  //
+  // So the grounded arm is now the whole bundle — milestone flags, hover for the page, click for
+  // the full size — and the non-grounded arm is the steps as text. That is a WIDER manipulation
+  // than "the screenshots are missing", and deliberately so; `flag_milestones` still switches the
+  // flags off for the grounded arm when a condition wants the journey unmarked.
+  const marking = showShots && layout.highlightMilestones && keySteps.size > 0;
+
+  // THE CLICK AFFORDANCE, SAID OUT LOUD.
+  //
+  // The grounded arm IS the screenshot behind each step, and until now the only place that said so
+  // was the ⓘ beside "View Journey" — collapsed by default, so a participant who never pressed it
+  // was never told the rows open. That is the manipulation going unused for want of a sentence.
+  //
+  // NOT GATED ON `marking`. It sits under the milestone legend when there is one, but it is about a
+  // different thing: milestones are which steps are worth checking, this is how to check one. Tying
+  // it to the milestone flag would mean switching that study variable off also hid how to use the
+  // journey, which is not a trade either setting is meant to make.
+  const canPeek = showShots && steps.some(st => st.screenshot);
 
   const journeyHtml = `
       ${sectionTitle('View Journey', showShots
@@ -351,6 +437,8 @@ function render() {
         <div class="tv-journey-list">
           ${marking ? `<p class="tv-key-legend">The steps marked <span class="tv-key-flag">milestone</span>
             are the important steps. You can check <b>these</b> rather than viewing the entire journey.</p>` : ''}
+          ${canPeek ? `<p class="tv-key-legend tv-peek-legend">You can
+            <span class="tv-peek-word">click</span> the steps to view it fully.</p>` : ''}
           ${steps.map(step => {
             const live = showShots && !!step.screenshot;
             const key = marking && keySteps.has(Number(step.n));
@@ -415,6 +503,7 @@ function render() {
   els.stage.innerHTML = `
     <div class="tv-col">
       ${layout.sections.states ? statesSection() : ''}
+      ${browseSimButtonHtml()}
       ${ordered.join('')}
       ${ordered.every(part => !part) && !layout.sections.states
         ? '<div class="tv-empty">Every section is switched off — there is nothing here to judge from.</div>' : ''}
@@ -604,6 +693,255 @@ function position(pop, anchor) {
 }
 
 /** The full-size view. Same id and close behaviour as the panel's lightbox. */
+/**
+ * The frames the simulator walks: the run's page states, in the order the agent saw them.
+ *
+ * READ FROM THE RECORD, NEVER FROM `arm`. In the non-grounded arm `arm` is the stripped copy and its
+ * screenshots are all null by design — reading them here would give an empty slideshow, and
+ * un-stripping `arm` to fill it would put the screenshots back into the journey as well and quietly
+ * end the condition.
+ *
+ * THE BOOKENDS ARE PART OF THE WALK. "Before the agent started" and "After it finished" are already
+ * shown in both arms as their own section, so including them costs the condition nothing — and a
+ * slideshow that begins at step 1 asks the participant to judge a change from a state it never
+ * showed them. A step with no capture is skipped rather than rendered blank: the agent's own record
+ * is what it is, and a grey rectangle in the middle of the walk reads as a broken viewer.
+ */
+function browseSimFrames() {
+  const source = sourceRecord?.arms?.grounding;
+  if (!source) return [];
+  const frames = [];
+  if (source.initial_state?.screenshot) {
+    frames.push({
+      shot: source.initial_state.screenshot,
+      title: 'Before the agent started',
+      note: source.initial_state.url || '',
+      step: null,
+    });
+  }
+  (Array.isArray(source.steps) ? source.steps : []).forEach(step => {
+    if (!step?.screenshot) return;
+    frames.push({
+      shot: step.screenshot,
+      title: `Step ${step.n}`,
+      note: step.instruction || '',
+      url: step.url || '',
+      step: Number(step.n),
+    });
+  });
+  if (source.final_state?.screenshot) {
+    frames.push({
+      shot: source.final_state.screenshot,
+      title: 'After the agent finished',
+      note: source.final_state.url || '',
+      step: null,
+    });
+  }
+  return frames;
+}
+
+/**
+ * The button that opens it, or ''.
+ *
+ * ABOVE THE JOURNEY AND NOT INSIDE IT. Inside the steps list it would read as a control on one step;
+ * this is a control on the run. The wording says what it costs — the pages are there, going through
+ * them is work — rather than promising "see the evidence", which would make the non-grounded arm
+ * sound like a broken grounded one.
+ */
+function browseSimButtonHtml() {
+  if (!allowBrowseSim) return '';
+  const frames = browseSimFrames();
+  if (!frames.length) return '';
+  return `
+    <div class="tv-browse-offer">
+      <button type="button" class="tv-browse-open" id="tv-browse-open">
+        <span class="tv-browse-icon" aria-hidden="true">↩</span>
+        <span class="tv-browse-open-text">
+          <b>Simulate the browsing</b>
+          <small>Opens on the page the agent finished on, and steps back through the
+            ${frames.length} page${frames.length === 1 ? '' : 's'} it saw.</small>
+        </span>
+      </button>
+    </div>`;
+}
+
+/** One frame of the overlay, painted into an already-open shell. */
+function paintBrowseSim(overlay, frames, index) {
+  const frame = frames[index];
+  if (!frame) return;
+  overlay.querySelector('.tv-browse-shot').src = `data:image/jpeg;base64,${frame.shot}`;
+  overlay.querySelector('.tv-browse-shot').alt = frame.title;
+  overlay.querySelector('.tv-browse-title').textContent = frame.title;
+  overlay.querySelector('.tv-browse-note').textContent = frame.note || '';
+  overlay.querySelector('.tv-browse-url').textContent = frame.url || '';
+  overlay.querySelector('.tv-browse-pos').textContent = `${index + 1} of ${frames.length}`;
+  // DISABLED AT THE ENDS RATHER THAN WRAPPING. A walk that loops has no beginning, and "did you get
+  // back to the first page?" is one of the two things this instrument measures.
+  overlay.querySelector('.tv-browse-back').disabled = index === 0;
+  overlay.querySelector('.tv-browse-next').disabled = index === frames.length - 1;
+  const bar = overlay.querySelector('.tv-browse-bar-fill');
+  if (bar) bar.style.width = `${frames.length > 1 ? (index / (frames.length - 1)) * 100 : 100}%`;
+}
+
+function closeBrowseSim() {
+  document.getElementById('pageguide-browse-sim')?.remove();
+}
+
+/**
+ * Open the walk.
+ *
+ * Its own overlay rather than a mode of openLightbox: the lightbox shows ONE picture and closes on
+ * any click outside it, and both of those are wrong here. A walk has a position, a Back and a Next,
+ * and a participant who clicks slightly wide of the image on page 9 of 14 must not lose their place.
+ * So this closes on the ✕ and on Escape, and on nothing else.
+ */
+function openBrowseSim() {
+  const frames = browseSimFrames();
+  if (!frames.length) return;
+  closeBrowseSim();
+
+  // IT OPENS ON THE LAST PAGE AND TRAVELS BACKWARDS.
+  //
+  // The task is to judge a claim about an outcome, and the outcome is where the run ENDS. Starting
+  // at the first page asks a participant to replay the whole run forwards and hold it in their head
+  // until they reach something that bears on the answer; starting at the end puts the state the
+  // agent is describing on screen first, and every press of Back asks the question that actually
+  // matters — how did it get here, and does that support what it said?
+  //
+  // The buttons keep their ordinary meaning: Back is earlier in the run, Next is later. So opening
+  // at the end opens with Next already spent and Back the live control, which is the affordance
+  // this reading of the run wants, with no relabelling and nothing to explain.
+  let index = frames.length - 1;
+  let moving = false;
+  browseSim.opens += 1;
+  if (browseSim.firstOpenMs == null) browseSim.firstOpenMs = Date.now() - browseSim.mountedAt;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-browse-sim';
+  overlay.className = 'tv-browse';
+  overlay.innerHTML = `
+    <div class="tv-browse-dialog" role="dialog" aria-modal="true" aria-label="The pages the agent saw">
+      <div class="tv-browse-head">
+        <span class="tv-browse-title"></span>
+        <span class="tv-browse-pos"></span>
+        <button type="button" class="tv-browse-close" aria-label="Close">×</button>
+      </div>
+      <div class="tv-browse-bar"><span class="tv-browse-bar-fill"></span></div>
+      <div class="tv-browse-viewport"><img class="tv-browse-shot" alt=""></div>
+      <div class="tv-browse-foot">
+        <button type="button" class="tv-browse-back">← Back</button>
+        <div class="tv-browse-caption">
+          <span class="tv-browse-note"></span>
+          <span class="tv-browse-url"></span>
+        </div>
+        <button type="button" class="tv-browse-next">Next →</button>
+      </div>
+    </div>`;
+
+  /**
+   * Move one page, with the load in front of it.
+   *
+   * `moving` is the whole of the rate limit: a press that lands inside the delay is DROPPED, not
+   * queued. Queueing would let a held arrow key bank up a dozen moves that then play out after the
+   * key is released, which is the scrubbing this delay exists to stop, arriving late.
+   *
+   * The frame is repainted at the END of the delay rather than the start, so the page that is on
+   * screen during it is the one being left rather than the one arriving — a load shows you the old
+   * page, not the new one with a spinner over it.
+   */
+  const go = (next) => {
+    if (moving) return;
+    const clamped = Math.min(frames.length - 1, Math.max(0, next));
+    if (clamped === index) return;
+    moving = true;
+    overlay.classList.add('is-loading');
+    overlay.querySelector('.tv-browse-back').disabled = true;
+    overlay.querySelector('.tv-browse-next').disabled = true;
+    setTimeout(() => {
+      // The walk can have been closed, or the task changed, inside the delay. Touching a detached
+      // node would be harmless; painting over a LATER task's overlay would not.
+      if (document.getElementById('pageguide-browse-sim') !== overlay) return;
+      index = clamped;
+      browseSim.steps += 1;
+      browseSim.nearest = Math.min(browseSim.nearest, index);
+      overlay.classList.remove('is-loading');
+      paintBrowseSim(overlay, frames, index);
+      moving = false;
+    }, browseStepMs);
+  };
+
+  overlay.addEventListener('click', (event) => {
+    if (event.target.closest('.tv-browse-close')) return closeBrowseSim();
+    if (event.target.closest('.tv-browse-back')) return go(index - 1);
+    if (event.target.closest('.tv-browse-next')) return go(index + 1);
+    // The full-size view of the page currently on screen. The walk stays open behind it.
+    if (event.target.closest('.tv-browse-viewport')) openLightbox(frames[index]);
+  });
+
+  // Arrow keys as well as the buttons: this is a slideshow, and the two gestures are the two people
+  // reach for. Removed with the overlay so a later task's keystrokes do not reach a dead node.
+  const onKey = (event) => {
+    if (!document.getElementById('pageguide-browse-sim')) {
+      document.removeEventListener('keydown', onKey);
+      return;
+    }
+    if (event.key === 'Escape') { closeBrowseSim(); document.removeEventListener('keydown', onKey); }
+    else if (event.key === 'ArrowLeft') go(index - 1);
+    else if (event.key === 'ArrowRight') go(index + 1);
+  };
+  document.addEventListener('keydown', onKey);
+
+  document.body.appendChild(overlay);
+  paintBrowseSim(overlay, frames, index);
+  browseSim.nearest = Math.min(browseSim.nearest, index);
+}
+
+/** Guarded like bindHints, and for the same reason: the stage node can outlive one task. */
+function bindBrowseSim() {
+  if (!els.stage || els.stage.dataset.browseBound === '1') return;
+  els.stage.dataset.browseBound = '1';
+  els.stage.addEventListener('click', (event) => {
+    if (event.target.closest('.tv-browse-open')) openBrowseSim();
+  });
+}
+
+/**
+ * What the simulator was used for on this task, for the result row.
+ *
+ * NULL WHEN THE STUDY DOES NOT OFFER IT, and a zeroed object when it was offered and refused. The
+ * two are different facts and only one of them is about the participant: "this study had no button"
+ * and "this participant did not press it" would otherwise be the same row, and the second is the
+ * interesting one — a session that never opened the walk is a session that judged the run from what
+ * was on the page, which is the condition the study ran before the button existed.
+ *
+ * Now that BOTH arms offer it, these numbers are comparable across the arms rather than being a
+ * property of one of them: "did grounding change how much people went and looked?" is a question
+ * this can answer, and could not while only the non-grounded arm had the control.
+ */
+function browseSimStats() {
+  if (!allowBrowseSim) return null;
+  const frames = browseSimFrames().length;
+  const opened = browseSim.opens > 0 && Number.isFinite(browseSim.nearest);
+  return {
+    offered: frames > 0,
+    frames,
+    opens: browseSim.opens,
+    moves: browseSim.steps,
+    // MEASURED BACKWARDS, because that is the direction the walk runs. `nearest_page` is the
+    // earliest page reached, 1-based so it reads against `frames` with no offset to remember: it
+    // equals `frames` for somebody who opened the walk and never pressed Back, and 1 for somebody
+    // who retraced the whole run. `pages_back` is the same fact as a count of pages actually walked.
+    //
+    // These replace the old `furthest` / `reached_end` pair rather than reinterpreting it. The walk
+    // used to start at page 1 and those names meant the opposite thing; keeping them would leave
+    // every row ambiguous about which direction it was recorded under.
+    nearest_page: opened ? browseSim.nearest + 1 : 0,
+    pages_back: opened ? (frames - 1) - browseSim.nearest : 0,
+    reached_first: opened && browseSim.nearest === 0,
+    first_open_ms: browseSim.firstOpenMs,
+  };
+}
+
 function openLightbox(item) {
   document.getElementById('pageguide-memory-shot-lightbox')?.remove();
   const overlay = document.createElement('div');
@@ -627,4 +965,4 @@ function openLightbox(item) {
   document.body.appendChild(overlay);
 }
 
-window.Stimulus = { mountStimulus, stimulusSteps, REFERENCE_DWELL_MS };
+window.Stimulus = { mountStimulus, stimulusSteps, browseSimStats, REFERENCE_DWELL_MS };

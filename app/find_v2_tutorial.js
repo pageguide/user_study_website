@@ -92,21 +92,27 @@
     document.body.classList.add('tut-on');
     document.body.classList.remove('tv-nogrounding');
 
+    // THE INTRO PROMISES WHAT THE WALKTHROUGH DELIVERS. It used to name both kinds of task
+    // unconditionally, so under the Guide-only design a participant was shown a FIND card
+    // describing "a saved webpage" and then never met one — which reads as something having gone
+    // wrong with the study rather than as a study that does not contain Find tasks.
+    const withFind = dealsFindTasks();
+
     stimulusPane().innerHTML = `
       <div class="tut-hero">
         <p class="tut-eyebrow">Before you start</p>
         <h1 class="tut-title">A quick walkthrough</h1>
-        <p class="tut-lead">Two practice tasks. Nothing here is recorded.</p>
+        <p class="tut-lead">${withFind ? 'Two practice tasks' : 'One practice task'}. Nothing here is recorded.</p>
 
-        <div class="tut-kinds">
-          <div class="tut-kind">
+        <div class="tut-kinds${withFind ? '' : ' is-single'}">
+          ${withFind ? `<div class="tut-kind">
             <div class="tut-kind-head">FIND</div>
             <div class="tut-kind-body">
               <p class="tut-given"><b>Given:</b> a saved webpage, a question about it, and the
                 answer an agent gave.</p>
               <p class="tut-task"><b>Task:</b> decide whether that answer is correct.</p>
             </div>
-          </div>
+          </div>` : ''}
           <div class="tut-kind">
             <div class="tut-kind-head">GUIDE</div>
             <div class="tut-kind-body">
@@ -136,11 +142,48 @@
     removeNav();
   }
 
+  /**
+   * Does this sitting contain a Find task at all?
+   *
+   * READ OFF THE DEALT QUEUE, not off the design flag. The question the practice has to answer is
+   * "will this participant meet a Find task?", and the queue is that question's answer directly —
+   * it is what they are actually about to be shown. Going via `queue_design` would be a second
+   * derivation of the same fact, and it would be wrong for a run resumed from a session saved before
+   * the design was recorded, which is a real state on real browsers today.
+   *
+   * The admin preview is the one case with no dealt queue — it deliberately builds none — so there
+   * the design comes from the URL the Walkthrough tab built. An empty queue in any other
+   * circumstance means nothing has been dealt yet, and rehearsing both beats withholding one.
+   */
+  function dealsFindTasks() {
+    if (tut.previewOnly) {
+      return new URLSearchParams(location.search).get('design') !== 'guide_visual_4';
+    }
+    const queue = S().state.queue || [];
+    if (!queue.length) return true;
+    return queue.some(task => task?.taskType !== 'guide');
+  }
+
+  /**
+   * The practice tasks this sitting should rehearse.
+   *
+   * A WALKTHROUGH MUST NOT TEACH A SCREEN THE STUDY THEN WITHHOLDS — the same rule the milestone
+   * flag already follows. Under the Guide-only design there is no Find task in the queue, so the
+   * Find practice would spend a participant's first two minutes on a page layout, a question and a
+   * set of gestures they will never see again, and would leave them expecting a saved webpage that
+   * never arrives. Dropping it makes the walkthrough one practice task, and every count that reads
+   * `tut.queue.length` — the progress label, Back, the "Next practice task" button — follows.
+   */
+  function practiceQueue() {
+    const all = window.TutorialSource.tasks();
+    return dealsFindTasks() ? all : all.filter(task => task?.taskType === 'guide');
+  }
+
   function start() {
     tut.active = true;
     tut.idx = 0;
     tut.answers = [];
-    tut.queue = window.TutorialSource.tasks();
+    tut.queue = practiceQueue();
     S().state.tutorial = tut;
     document.body.classList.remove('tut-on');
     window.showTask();

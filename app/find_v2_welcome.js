@@ -20,13 +20,28 @@
   // what loadWelcome fetched, and beginStudy snapshots that into the session.
   let studyFlags = {
     collectEvidence: false, collectFollowup: false, taskLimitSeconds: 120,
-    queueDesign: 'balanced_2x2',
+    queueDesign: 'balanced_2x2', slotQuota: 0,
   };
   let adminPassword = '';
   let adminClaims = [];
   let editingClaim = null;
   let adminTab = 'claims';
   let variantTab = 'correct_grounding';
+  // The V2 Results tab joins these two tables into one participant view. Kept after the initial
+  // password-checked reads so excluding a participant can redraw every result without another RPC.
+  let adminFindResults = [];
+  let adminGuideResults = [];
+  let adminGuideResultsError = '';
+  // Per assignment_slot % 4 class, straight from the sessions table. Kept beside the result rows
+  // because the recruitment panel needs a denominator the result rows cannot supply: a sitting that
+  // pressed Start and answered nothing exists only there.
+  let adminClassCounts = [];
+  let excludedResultSessions = new Set();
+  let participantResultPickerOpen = false;
+  // A STANDING FILTER, not a bulk edit. "Exclude all incomplete" ticks off the incomplete sittings
+  // that exist at the moment it is pressed; this stays true across a reload, so a partial sitting
+  // that lands later is held out too and a cell's n cannot quietly grow by one abandoned session.
+  let completedResultsOnly = false;
 
   /**
    * A result's timestamp, read in the study's own timezone.
@@ -110,6 +125,36 @@
     { taskType: 'guide', arm: 'nongrounding' },
   ];
 
+  // ── The third design: four Guide × Visual runs, the same four for everyone ─
+  //
+  // NO ROUND ROBIN. The two designs above deal from a pool by slot, which is what makes them
+  // balanced: nobody chooses which claim lands in which cell, so nothing about the stimuli can
+  // covary with the condition by a researcher's preference. This one gives that up on purpose.
+  //
+  // Every participant is dealt the SAME four runs in the SAME order — all Guide, all VISUAL — one
+  // per cell of correctness × grounding:
+  //
+  //     1  Correct   × Grounded          3  Correct   × Non-grounded
+  //     2  Incorrect × Non-grounded      4  Incorrect × Grounded
+  //
+  // WHAT IS GAINED: both factors become fully within-subjects with no counterbalancing left over, so
+  // the n of every cell is just the number of completed sittings — no class can be short of another,
+  // and `slot_quota` has nothing left to level. WHAT IS GIVEN UP: the stimulus is no longer crossed
+  // with the condition, so a difference between cells is a difference between FOUR PARTICULAR RUNS
+  // as much as between four conditions, and the four have to be chosen to be comparable by hand.
+  // That choice is Admin → Study tasks, and it is the reason task_selection exists.
+  //
+  // The order is the one the design was specified in, and it is deliberately not
+  // correct/correct/incorrect/incorrect: consecutive tasks differ in correctness, so a participant
+  // cannot settle into answering the same way twice and cannot read the third cell's answer off the
+  // second's.
+  const GUIDE_VISUAL_CELLS = [
+    { taskType: 'guide', correct: true, arm: 'grounding' },
+    { taskType: 'guide', correct: false, arm: 'nongrounding' },
+    { taskType: 'guide', correct: true, arm: 'nongrounding' },
+    { taskType: 'guide', correct: false, arm: 'grounding' },
+  ];
+
   /**
    * Whether cell `index` shows a correct run in this sitting.
    *
@@ -143,7 +188,27 @@
       short: 'three Find + one Guide',
       tasks: 4,
     },
+    guide_visual_4: {
+      label: 'Four Guide × Visual runs — one per correctness × grounding cell, the same four for everyone',
+      short: 'four fixed Guide × Visual runs',
+      tasks: 4,
+    },
   };
+
+  /** The cells a design deals, in order. What the picker lists and what the queue walks. */
+  function cellsOf(design) {
+    if (design === 'guide_visual_4') return GUIDE_VISUAL_CELLS;
+    if (design === 'legacy_find3') {
+      return FIND_CELLS.map(cell => ({ taskType: 'find', correct: cell.correct, arm: cell.arm }))
+        .concat([{ taskType: 'guide', correct: null, arm: 'grounding' }]);
+    }
+    return CROSSED_CELLS.map(cell => ({ ...cell, correct: null }));
+  }
+
+  /** Whether every cell of this design is dealt to everyone, so pinning needs no group split. */
+  function designHasGroups(design) {
+    return design !== 'guide_visual_4';
+  }
 
   function designOf(value) {
     const key = String(value || '');
@@ -214,7 +279,7 @@
   }
 
   /** The crossed queue: one task per cell of task type × grounding, correctness alternating. */
-  function buildCrossedQueue(claims, guideTasks, slot) {
+  function buildCrossedQueue(claims, guideTasks, slot, selection) {
     const group = groupOf(slot);
     const styles = stylesFor(group);
     const cycle = Math.floor(Number(slot) / 2);
@@ -229,7 +294,11 @@
     CROSSED_CELLS.forEach((cell, index) => {
       const correct = crossedCorrect(cycle, index);
       if (cell.taskType === 'find') {
-        const task = picked[index];
+        // A PIN OVERRIDES THE WALK, and only for the cell it names. `picked[index]` is what the slot
+        // would have dealt; a pinned claim replaces it without disturbing the other cells, so the
+        // pool keeps being covered evenly by whatever is left unpinned.
+        const task = pinnedTask(findPool, pinAt(selection, 'balanced_2x2', group, index))
+          || picked[index];
         if (!task) return;
         queue.push({
           ...task,
@@ -241,7 +310,8 @@
         });
         return;
       }
-      const guide = pickGuideFor(guidePool, cycle, correct, takenGuides);
+      const guide = pinnedTask(guidePool, pinAt(selection, 'balanced_2x2', group, index))
+        || pickGuideFor(guidePool, cycle, correct, takenGuides);
       if (!guide) return;
       takenGuides.push(guide.id);
       queue.push({
@@ -260,15 +330,98 @@
     return queue;
   }
 
+  // ── The pins ──────────────────────────────────────────────────────────────
+  //
+  // `task_selection` names the task that fills a cell, and it is read the same way by the queue and
+  // by the picker that writes it. Keyed by design so switching designs to look at one does not throw
+  // the other's choices away, and by group where the design still has groups:
+  //
+  //     { "guide_visual_4": ["ms9j3200", …],
+  //       "balanced_2x2":   { "A": [null, …], "B": [ … ] } }
+  //
+  // A missing entry is not an error and not an empty cell — it means "not pinned", and that cell
+  // falls back to the rotation its design already had. So a half-filled selection degrades to the
+  // old behaviour rather than to a short queue, and the picker can be filled in one cell at a time.
+
+  /** The pinned ids for one design and group, as a sparse array indexed by cell. */
+  function pinsFor(selection, design, group) {
+    const all = selection && typeof selection === 'object' ? selection : {};
+    const forDesign = all[design];
+    if (!forDesign) return [];
+    if (Array.isArray(forDesign)) return forDesign;
+    if (!designHasGroups(design)) return [];
+    const forGroup = forDesign[group];
+    return Array.isArray(forGroup) ? forGroup : [];
+  }
+
+  /** The pinned id for one cell, or '' — normalized so a null, a 0 and a stray object all read alike. */
+  function pinAt(selection, design, group, index) {
+    const id = pinsFor(selection, design, group)[index];
+    return typeof id === 'string' ? id.trim() : '';
+  }
+
+  /**
+   * The task a pin names, or null if it names nothing the pool still has.
+   *
+   * A pin that no longer resolves is NOT an error here. Untick a task in Admin and every pin to it
+   * goes stale; failing the deal would take the study down over a checkbox, so the cell falls back
+   * to its rotation and the picker shows the stale pin as a named gap where it can be fixed.
+   */
+  function pinnedTask(pool, id) {
+    return id ? (pool.find(task => task.id === id) || null) : null;
+  }
+
+  /**
+   * The fixed queue: four Guide × Visual runs, the same four for everyone.
+   *
+   * The slot is not read. It still numbers the sitting — that is the session's identity and the
+   * recruitment counter's — but under this design it selects nothing, which is the whole point.
+   *
+   * A cell with no usable pin falls back to any live guide_visual task of the wanted correctness
+   * that is not already dealt. That fallback is an accommodation for a half-filled picker, not a
+   * rotation: it is deterministic, and Admin says which cells are relying on it.
+   */
+  function buildGuideVisualQueue(guideTasks, selection) {
+    const pool = guideTasks.filter(task => task.style === 'guide_visual');
+    const queue = [];
+    const taken = [];
+    GUIDE_VISUAL_CELLS.forEach((cell, index) => {
+      const pinned = pinnedTask(pool, pinAt(selection, 'guide_visual_4', '', index));
+      const spare = pool.find(task => task.agentCompleted === cell.correct && !taken.includes(task.id))
+        || pool.find(task => task.agentCompleted === cell.correct)
+        || null;
+      const task = pinned || spare;
+      if (!task) return;
+      taken.push(task.id);
+      queue.push({
+        ...task,
+        // Everyone is visual now, so there is no A/B split left to record. 'B' rather than '' keeps
+        // every consumer that reads a group — the chip, the dashboards — reading the modality that
+        // is actually on screen.
+        group: 'B',
+        arm: cell.arm,
+        // THE KEY IS THE TASK'S, NOT THE CELL'S, for the same reason it is in the crossed queue: a
+        // run is correct or not because of what the agent did. The cell says what this position
+        // ASKED for, and a fallback may have had to settle — scoring against the request rather than
+        // the recording would key an answer against a run nobody saw.
+        claimCorrect: task.agentCompleted,
+        variantKey: window.FindV2Variants.variantKey(task.agentCompleted !== false, cell.arm),
+        assignedOrder: queue.length,
+      });
+    });
+    return queue;
+  }
+
   /** The four tasks this slot is dealt, in order, under the design the study is set to. */
-  function buildQueue(claims, guideTasks, slot, design) {
-    return designOf(design) === 'legacy_find3'
-      ? buildLegacyQueue(claims, guideTasks, slot)
-      : buildCrossedQueue(claims, guideTasks, slot);
+  function buildQueue(claims, guideTasks, slot, design, selection) {
+    const key = designOf(design);
+    if (key === 'guide_visual_4') return buildGuideVisualQueue(guideTasks, selection);
+    if (key === 'legacy_find3') return buildLegacyQueue(claims, guideTasks, slot, selection);
+    return buildCrossedQueue(claims, guideTasks, slot, selection);
   }
 
   /** The original queue: three fixed Find cells, then one grounded Guide task. */
-  function buildLegacyQueue(claims, guideTasks, slot) {
+  function buildLegacyQueue(claims, guideTasks, slot, selection) {
     const group = groupOf(slot);
     const styles = stylesFor(group);
     const cycle = Math.floor(Number(slot) / 2);
@@ -276,8 +429,9 @@
     const findPool = claims.filter(task => task.style === styles.find);
     const guidePool = guideTasks.filter(task => task.style === styles.guide);
 
-    const queue = pickClaims(findPool, cycle, FIND_CELLS.length).map((task, index) => {
+    const queue = pickClaims(findPool, cycle, FIND_CELLS.length).map((walked, index) => {
       const cell = FIND_CELLS[index];
+      const task = pinnedTask(findPool, pinAt(selection, 'legacy_find3', group, index)) || walked;
       return {
         ...task,
         group,
@@ -288,7 +442,8 @@
       };
     });
 
-    const guide = pickGuideTask(guidePool, cycle);
+    const guide = pinnedTask(guidePool, pinAt(selection, 'legacy_find3', group, FIND_CELLS.length))
+      || pickGuideTask(guidePool, cycle);
     if (guide) {
       queue.push({
         ...guide,
@@ -364,8 +519,8 @@
     // Both designs deal four; what differs is how they are split between Find and Guide, which is a
     // researcher's concern and not something to put in front of a participant.
     const design = currentDesign();
-    const guideSlots = design === 'legacy_find3' ? 1 : 2;
-    const findSlots = design === 'legacy_find3' ? FIND_CELLS.length : 2;
+    const guideSlots = design === 'guide_visual_4' ? 4 : design === 'legacy_find3' ? 1 : 2;
+    const findSlots = design === 'guide_visual_4' ? 0 : design === 'legacy_find3' ? FIND_CELLS.length : 2;
     countChip.textContent = String(findSlots + (liveGuideTasks.length ? guideSlots : 0));
     // The limit chip reads the SETTING, not a number written into the page. A welcome screen
     // promising three minutes over a two-minute clock is worse than no promise at all.
@@ -374,6 +529,36 @@
       const seconds = Number(studyFlags.taskLimitSeconds) || 120;
       limitChip.textContent = seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
     }
+    // THE FIXED DESIGN DEALS NO FIND CLAIMS AT ALL, so an empty claim pool is not a reason to refuse
+    // to start under it — the old check would have held the study shut over a table it never reads.
+    if (design === 'guide_visual_4') {
+      const visual = liveGuideTasks.filter(task => task.style === 'guide_visual');
+      if (!visual.some(task => task.agentCompleted === true)
+        || !visual.some(task => task.agentCompleted === false)) {
+        say('This study deals four Guide × Visual runs and needs at least one keyed “completed” '
+          + 'and one keyed “did not complete”. Open Admin → Study tasks.', true);
+        count.textContent = `${visual.length} Guide × Visual task${visual.length === 1 ? '' : 's'} in the study.`;
+        return;
+      }
+      const dealt = buildGuideVisualQueue(liveGuideTasks, studyFlags.taskSelection);
+      // Cleared explicitly on the healthy path. `say` is the only thing that clears the "Loading
+      // Find V2…" the page ships with, so an early return that never calls it leaves a participant
+      // looking at a spinner's worth of words over a Start button that works.
+      say(dealt.length < GUIDE_VISUAL_CELLS.length
+        ? `Only ${dealt.length} of the four Guide × Visual cells can be filled. `
+          + 'Open Admin → Study tasks to choose a run for each.'
+        : '', dealt.length < GUIDE_VISUAL_CELLS.length);
+      countChip.textContent = String(dealt.length || GUIDE_VISUAL_CELLS.length);
+      // SILENT WHEN IT IS HEALTHY, like the path below. Which four runs everyone is dealt is a
+      // researcher's business — it is spelled out in Admin → Study tasks — and putting it on the
+      // welcome screen tells a participant what they are about to be shown before they are shown it.
+      count.textContent = '';
+      if (!dealt.length) return;
+      start.disabled = false;
+      start.onclick = beginStudy;
+      return;
+    }
+
     if (!liveTasks.length) {
       say('Find V2 is configured, but no claim is marked “Use in study” yet.', true);
       count.textContent = 'Open Admin to create or publish a claim.';
@@ -497,10 +682,14 @@
       // The session-level arm is vestigial now that every task carries its own; kept so a resumed
       // session and an older row still read the same field.
       arm: 'grounding',
-      group: groupOf(assignment.assignmentSlot),
+      // The fixed design has no A/B split — everyone is visual — so the group is a property of the
+      // DESIGN there, not of the slot. Reading the slot's parity would label half the sittings "A ·
+      // text" while dealing them four visual runs.
+      group: currentDesign() === 'guide_visual_4' ? 'B' : groupOf(assignment.assignmentSlot),
       // `admin` walks the same queue a participant gets, with ← → and nothing recorded.
       previewNav: S.isPreviewId(participantId),
-      queue: buildQueue(liveTasks, liveGuideTasks, assignment.assignmentSlot, currentDesign()),
+      queue: buildQueue(liveTasks, liveGuideTasks, assignment.assignmentSlot, currentDesign(),
+        studyFlags.taskSelection),
       idx: 0,
       results: [],
       startedAt: Date.now(),
@@ -593,17 +782,49 @@
   }
 
 
+  /**
+   * The tabs, and the one that only exists under one design.
+   *
+   * `The four cells` is DESIGN-CONDITIONAL, not always-present-and-empty. It previews the four runs
+   * a fixed queue deals, each in the arm that queue deals it in — under a rotating design there is
+   * no such thing, because which run fills a cell is decided per sitting by the slot. A tab that
+   * answered "it depends on the participant" would be worse than no tab: it is a screen people open
+   * to check what everyone is about to see, and the whole reason it can answer that is that the
+   * fixed design makes "everyone" a meaningful word.
+   */
+  function adminTabsHtml() {
+    const tabs = [
+      ['claims', 'Edit claims'],
+      ['results', 'Results'],
+      ['guide', 'Guide tasks'],
+      ['tasks', 'Study tasks'],
+      ['arms', 'Guide arms'],
+    ];
+    if (currentDesign() === 'guide_visual_4') tabs.push(['cells', 'The four cells']);
+    tabs.push(['preview', 'Session preview'], ['walkthrough', 'Walkthrough'], ['settings', 'Study settings']);
+    return tabs.map(([key, label]) => `<button class="admin-tab${
+      adminTab === key ? ' admin-tab-on' : ''}" data-v2-tab="${key}">${esc(label)}</button>`).join('');
+  }
+
+  /** Re-hang the click handlers after the strip is rebuilt in place. */
+  function bindAdminTabs() {
+    adminPanel.querySelectorAll('[data-v2-tab]').forEach(button => {
+      button.onclick = () => {
+        adminTab = button.dataset.v2Tab;
+        renderAdminShell();
+      };
+    });
+  }
+
   function renderAdminShell() {
+    // The design can change under a tab that only exists beneath one — switch to guide_visual_4,
+    // open The four cells, switch back. Falling back to the picker rather than to a blank pane keeps
+    // the admin on the screen that explains why the tab went away.
+    if (adminTab === 'cells' && currentDesign() !== 'guide_visual_4') adminTab = 'tasks';
+
     adminPanel.innerHTML = `
       <div class="admin-title">🔓 Find V2 Admin <span class="admin-warn">changes V2 only</span></div>
-      <div class="admin-tabs">
-        <button class="admin-tab${adminTab === 'claims' ? ' admin-tab-on' : ''}" data-v2-tab="claims">Edit claims</button>
-        <button class="admin-tab${adminTab === 'results' ? ' admin-tab-on' : ''}" data-v2-tab="results">Results</button>
-        <button class="admin-tab${adminTab === 'guide' ? ' admin-tab-on' : ''}" data-v2-tab="guide">Guide tasks</button>
-        <button class="admin-tab${adminTab === 'preview' ? ' admin-tab-on' : ''}" data-v2-tab="preview">Session preview</button>
-        <button class="admin-tab${adminTab === 'walkthrough' ? ' admin-tab-on' : ''}" data-v2-tab="walkthrough">Walkthrough</button>
-        <button class="admin-tab${adminTab === 'settings' ? ' admin-tab-on' : ''}" data-v2-tab="settings">Study settings</button>
-      </div>
+      <div class="admin-tabs">${adminTabsHtml()}</div>
       <div id="find-v2-admin-content"></div>
       <div class="admin-row admin-exit-row">
         <button class="admin-exit" id="find-v2-admin-exit">Leave Admin</button>
@@ -615,21 +836,25 @@
         <a class="admin-door" id="find-v1-link" href="find-v1.html">Original V1 study →</a>
       </div>`;
 
-    adminPanel.querySelectorAll('[data-v2-tab]').forEach(button => {
-      button.onclick = () => {
-        adminTab = button.dataset.v2Tab;
-        renderAdminShell();
-      };
-    });
+    bindAdminTabs();
     document.getElementById('find-v2-admin-exit').onclick = () => {
       forgetAdminPassword();
       editingClaim = null;
+      // THE PICKER'S UNSAVED TICKS GO WITH THE SESSION, like the half-edited claim above them. They
+      // are a draft against a pool that was read when the tab opened; coming back later and pressing
+      // Save would write them against whatever the pool is by then, including rows another admin has
+      // since changed. Dropping them costs a re-tick; keeping them can silently move a study.
+      pickerDraft = null;
+      pickerTasks = null;
       adminPanel.hidden = true;
       adminPanel.innerHTML = '';
     };
     if (adminTab === 'results') renderResults();
     else if (adminTab === 'settings') renderSettings();
     else if (adminTab === 'guide') renderGuideTasks();
+    else if (adminTab === 'tasks') renderTaskPicker();
+    else if (adminTab === 'arms') renderGuideArms();
+    else if (adminTab === 'cells') renderGuideVisualCells();
     else if (adminTab === 'preview') renderSessionPreview();
     else if (adminTab === 'walkthrough') renderWalkthroughTab();
     else renderClaims();
@@ -646,6 +871,20 @@
   // ADMIN-PREVIEW, builds no queue and never reaches the result path. Checking some wording must not
   // spend a participant's place in the round robin.
 
+  /**
+   * The walkthrough preview URL, carrying the design.
+   *
+   * THE PREVIEW HAS NO DEALT QUEUE — it builds none on purpose, so that checking some wording does
+   * not spend a participant's place in the round robin — and the queue is what the walkthrough
+   * normally reads to decide whether to rehearse a Find task. So the design has to be handed to it,
+   * and this tab is where it is known. Without it the preview would always show the two-task
+   * walkthrough, including for a study that deals no Find task at all — which is precisely the
+   * mismatch a preview exists to catch.
+   */
+  function walkthroughPreviewUrl() {
+    return `study.html?tutorial=preview&design=${encodeURIComponent(currentDesign())}`;
+  }
+
   function renderWalkthroughTab() {
     const content = document.getElementById('find-v2-admin-content');
     content.innerHTML = `
@@ -656,13 +895,13 @@
 
       <div class="preview-chips walkthrough-tools">
         <button class="admin-chip" id="v2-walk-reload">Restart it</button>
-        <a class="admin-chip" href="study.html?tutorial=preview" target="_blank" rel="noopener">Open full size ↗</a>
+        <a class="admin-chip" href="${esc(walkthroughPreviewUrl())}" target="_blank" rel="noopener">Open full size ↗</a>
         <span class="welcome-status" id="v2-walk-note"></span>
       </div>
 
       <div class="walkthrough-frame">
         <iframe id="v2-walk-frame" title="The Find V2 walkthrough"
-          src="study.html?tutorial=preview"></iframe>
+          src="${esc(walkthroughPreviewUrl())}"></iframe>
       </div>
 
       <p class="viz-note">The coachmarks are positioned against the elements the study renders, and
@@ -682,7 +921,7 @@
       const frame = document.getElementById('v2-walk-frame');
       // Re-assigned rather than reload()ed: the walkthrough marks itself done against the run it was
       // taken in, and a fresh document is the only way to start it from the first screen again.
-      frame.src = `study.html?tutorial=preview&t=${Date.now()}`;
+      frame.src = `${walkthroughPreviewUrl()}&t=${Date.now()}`;
       note.textContent = 'Restarted.';
       note.className = 'welcome-status';
     };
@@ -1604,12 +1843,13 @@
           + 'disconfirm a confident claim instead of checking the record. The View Journey, the two '
           + 'page states and the answer are shown either way.')}
         ${row('v2-flag-milestones', flags.flagMilestones,
-          'Flag the trail’s steps in the journey',
+          'Flag the trail’s steps in the grounded journey',
           'Marks the View Journey rows the reasoning trail accounts for as <b>milestone</b>, '
           + 'and counts them on the fold. On by default, and the walkthrough follows it. It is a real '
           + 'manipulation: it changes where a participant looks first, and it points at the steps the '
           + 'agent <em>chose</em> to narrate — which, for a run that misreports what it saw, is exactly '
-          + 'where the discrepancy is not.')}
+          + 'where the discrepancy is not. <b>Grounded tasks only</b>: a flag on a row that cannot be '
+          + 'opened points at a step a non-grounded participant has no way to check.')}
         ${row('v2-show-group', flags.showGroupChip,
           'Show participants their group',
           'Adds a <b>GROUP A · text</b> / <b>GROUP B · visual</b> chip beside the condition banner. '
@@ -1617,6 +1857,30 @@
           + 'and a label saying they are in a group invites them to wonder what the other group is '
           + 'getting. Useful for piloting and for screenshots. The condition banner is unaffected — '
           + 'that one says what is on the screen, which a participant does need.')}
+        ${row('v2-allow-browse-sim', flags.allowBrowseSim,
+          'Offer “simulate the browsing” on Guide tasks',
+          'A button above the journey that opens the run as a slideshow — one page state per step, '
+          + 'starting on the page the agent finished on and walked <b>backwards</b> with Back and '
+          + 'Next. <b>Offered in both arms</b>, so it is a constant of the study rather than part of '
+          + 'what separates them. What the arms differ in is the checkable journey — the milestone '
+          + 'flags, the hover and the click all belong to the grounded one — and both get the same '
+          + 'walk. Whether it was opened, and how far back it was walked, lands in each row\'s '
+          + '<code>interaction_summary.browse_sim</code> — comparable across the arms, and a session '
+          + 'that never pressed it can still be analysed as the condition that ran before it existed.')}
+        <label class="q-opt q-opt-rich admin-setting">
+          <span class="q-opt-body"><span><b>How long a simulated page takes to load</b><small>The
+            pause between pressing Back or Next and the next page appearing. Browsing is not
+            instant, and at <b>0</b> the buttons scrub — a fourteen-step run empties in a second and
+            no page is on screen long enough to read. This is the one number here that changes what
+            the walk <em>measures</em>: it sets the cost of going to look, which is the difference
+            between the evidence being available and being worth going to get. Between 0 and 5000
+            milliseconds.</small></span></span>
+          <span class="admin-limit">
+            <input type="number" id="v2-browse-delay" min="0" max="5000" step="50"
+              value="${Number.isFinite(Number(flags.browseSimDelayMs))
+                ? Math.round(Number(flags.browseSimDelayMs)) : 500}"> ms
+          </span>
+        </label>
         ${row('v2-collect-followup', flags.collectFollowup,
           'Ask the task follow-up',
           'Adds the confidence and usefulness scales and the optional note after each claim. While '
@@ -1649,6 +1913,16 @@
           + '<b>Guide × Non-grounded</b>, each alternating correct and incorrect. Group A is text '
           + 'throughout, group B visual. Task type and grounding are both within-subjects, so the '
           + 'grounding effect can be read for the Guide half as well as the Find half.')}
+        ${designOptionHtml('guide_visual_4', design,
+          'Four Guide × Visual runs — the same four for everyone',
+          'Four tasks, all Guide, all visual: <b>Correct × Grounded</b>, <b>Incorrect × '
+          + 'Non-grounded</b>, <b>Correct × Non-grounded</b>, <b>Incorrect × Grounded</b>, in that '
+          + 'order. <b>No round robin</b> — the slot no longer picks anything, so correctness and '
+          + 'grounding are both fully within-subjects and every cell\'s n is simply the number of '
+          + 'completed sittings. No Find claim is dealt, and there is no text group. In exchange the '
+          + 'stimulus stops being crossed with the condition: a difference between cells is a '
+          + 'difference between four particular runs as much as between four conditions, so the four '
+          + 'have to be chosen to be comparable. Choose them in <b>Study tasks</b>.')}
         ${designOptionHtml('legacy_find3', design,
           'Three Find cells + one grounded Guide task',
           'The original V2 queue: Find grounded/incorrect, Find non-grounded/correct, Find '
@@ -1658,6 +1932,26 @@
       </div>
       <div id="v2-dealt-tasks">${dealtTasksHtml(design)}</div>
 
+      <h3 class="admin-subtitle">Recruit to a target</h3>
+      <p class="viz-note">A slot's class — <code>assignment_slot % 4</code> — decides everything about
+        a sitting, so the number of <b>completed</b> sittings in a class is identically the n of four
+        Find cells <em>and</em> four Guide cells. The queue deals the four classes evenly; who
+        finishes does not, and plain round-robin preserves a shortfall instead of closing it. Set a
+        target above zero and each new sitting is dealt the class furthest from it. <b>0 is off</b> —
+        plain round-robin, exactly as before. The Results tab shows the standings.</p>
+      <div class="admin-settings">
+        <label class="q-opt q-opt-rich admin-setting">
+          <span class="q-opt-body"><span><b>Completed sittings wanted per class</b>
+            <small>Four classes, so the study is finished at four times this number. The counter only
+              ever skips <em>forward</em>: a slot also picks which claims are dealt, so rewinding it
+              would re-deal the same stimuli to a later participant.</small></span></span>
+          <span class="admin-limit">
+            <input type="number" id="v2-slot-quota" min="0" max="200" step="1"
+              value="${Number(flags.slotQuota) || 0}"> per class
+          </span>
+        </label>
+      </div>
+
       <h3 class="admin-subtitle">The walkthrough</h3>
       <p class="viz-note">Two practice tasks, one Find and one Guide, offered once before task 1 and
         skippable. The material is invented — a pool timetable — and nothing about it is in the
@@ -1665,7 +1959,7 @@
         browser that has not seen it, so a researcher who has already taken it needs the second
         button to be shown it again <b>on this browser</b>.</p>
       <div class="preview-chips">
-        <a class="admin-chip" href="study.html?tutorial=preview" target="_blank" rel="noopener">Preview the walkthrough ↗</a>
+        <a class="admin-chip" href="${esc(walkthroughPreviewUrl())}" target="_blank" rel="noopener">Preview the walkthrough ↗</a>
         <button class="admin-chip" id="v2-tutorial-reset">Show it again on this browser</button>
         <span class="welcome-status" id="v2-tutorial-status"></span>
       </div>
@@ -1713,6 +2007,16 @@
           button.disabled = false;
           return setStatus('Time per task must be between 30 and 900 seconds.', true);
         }
+        const quota = Number(document.getElementById('v2-slot-quota').value);
+        if (!Number.isFinite(quota) || quota < 0 || quota > 200) {
+          button.disabled = false;
+          return setStatus('The per-class recruitment target must be between 0 and 200 (0 is off).', true);
+        }
+        const delay = Number(document.getElementById('v2-browse-delay').value);
+        if (!Number.isFinite(delay) || delay < 0 || delay > 5000) {
+          button.disabled = false;
+          return setStatus('The simulated page load must be between 0 and 5000 milliseconds.', true);
+        }
         const saved = await DB.saveStudyFlags(adminPassword, {
           collectEvidence: document.getElementById('v2-collect-evidence').checked,
           collectFollowup: document.getElementById('v2-collect-followup').checked,
@@ -1721,22 +2025,708 @@
           showGroupChip: document.getElementById('v2-show-group').checked,
           flagMilestones: document.getElementById('v2-flag-milestones').checked,
           showReasoningTrail: document.getElementById('v2-show-trail').checked,
+          slotQuota: Math.round(quota),
+          allowBrowseSim: document.getElementById('v2-allow-browse-sim').checked,
+          browseSimDelayMs: Math.round(delay),
         });
         // Reflect what the SERVER stored, not what the boxes said — the two differ if a write is
         // rejected, and a panel that reports its own optimism is how a pilot runs the wrong protocol.
+        const designChanged = designOf(saved.queueDesign) !== designOf(studyFlags.queueDesign);
         studyFlags = saved;
+        // THE STRIP ONLY, not the whole shell. `The four cells` exists only under the fixed design,
+        // so saving a switch to it has to make the tab appear — but re-rendering the shell would
+        // throw away the settings pane and the "Saved…" line that says the switch landed, which
+        // reads as the save having failed.
+        if (designChanged) {
+          const strip = adminPanel.querySelector('.admin-tabs');
+          if (strip) { strip.innerHTML = adminTabsHtml(); bindAdminTabs(); }
+        }
         setStatus(`Saved. Evidence: ${saved.collectEvidence ? 'on' : 'off'} · Follow-up: `
           + `${saved.collectFollowup ? 'on' : 'off'} · ${saved.taskLimitSeconds}s per task · queue: `
           + `${DESIGNS[designOf(saved.queueDesign)].short} · group chip: `
           + `${saved.showGroupChip ? 'shown' : 'hidden'} · milestones: `
           + `${saved.flagMilestones ? 'flagged' : 'not flagged'} · trail: `
-          + `${saved.showReasoningTrail ? 'shown' : 'hidden'}.`
+          + `${saved.showReasoningTrail ? 'shown' : 'hidden'} · recruiting: `
+          + `${saved.slotQuota > 0 ? `${saved.slotQuota} per class` : 'round-robin'} · browse `
+          + `simulator: ${saved.allowBrowseSim
+            ? `offered, ${saved.browseSimDelayMs}ms per page` : 'off'}.`
           + ' Runs already in progress keep the protocol they started with.');
       } catch (error) {
         setStatus(error.message || String(error), true);
       }
       button.disabled = false;
     };
+  }
+
+  // ── Guide arms: the two conditions, side by side, both live ───────────────
+  //
+  // WHAT IT IS FOR. The grounded and non-grounded arms of a Guide run are the study's independent
+  // variable, and until now the only way to compare them was to render one, change a dropdown, and
+  // compare the second against your memory of the first. Everything that matters here is a
+  // difference — which chips survive, which step rows lose their screenshot, what the answer says
+  // once its [ev:] markers are stripped — and a difference is the one thing memory is worst at.
+  //
+  // BOTH PANES ARE REAL AND BOTH ARE LIVE. Hover a grounded step and its screenshot appears; press
+  // the non-grounded pane's simulate button and the walk opens. That is deliberate: this tab is
+  // where the simulator gets checked before a participant meets it.
+  //
+  // WHY IFRAMES. app/stimulus.js holds the mounted arm in module-level state and marks the
+  // non-grounded condition with a class on document.body — so two mounts in one document silently
+  // become one arm shown twice. A frame each gives both panes their own document and their own copy
+  // of the renderer, unchanged. See the note at the top of guide-arm.html.
+
+  let armsTasks = null;
+  let armsOpts = { id: '', trail: false, milestones: true, sim: true };
+
+  function armFrameUrl(id, arm) {
+    const params = new URLSearchParams({
+      task: id,
+      arm,
+      trail: armsOpts.trail ? '1' : '0',
+      milestones: armsOpts.milestones ? '1' : '0',
+      sim: armsOpts.sim ? '1' : '0',
+      // The study's own page delay, so the walk in this frame is timed the way a participant's is.
+      delay: String(Number.isFinite(Number(studyFlags.browseSimDelayMs))
+        ? Math.round(Number(studyFlags.browseSimDelayMs)) : 500),
+    });
+    return `guide-arm.html?${params.toString()}`;
+  }
+
+  async function renderGuideArms() {
+    const content = document.getElementById('find-v2-admin-content');
+    content.innerHTML = '<div class="viz-loading">Loading the Guide runs…</div>';
+
+    if (!armsTasks) {
+      try { armsTasks = await DB.listAllGuideTasks(); }
+      catch (error) {
+        armsTasks = null;
+        content.innerHTML = `<p class="welcome-status welcome-status-bad">${esc(error.message || String(error))}</p>`;
+        return;
+      }
+    }
+    if (!armsTasks.length) {
+      content.innerHTML = `<p class="viz-note">No Guide run exists yet. Run
+        <code>node scripts/migrate_guide_v2.mjs</code>, then key them in <b>Guide tasks</b>.</p>`;
+      return;
+    }
+    if (!armsTasks.some(task => task.id === armsOpts.id)) {
+      // Prefer one that is actually in the study: an admin opening this tab is nearly always
+      // checking something a participant will be shown, not something held out.
+      armsOpts.id = (armsTasks.find(task => task.in_study) || armsTasks[0]).id;
+    }
+
+    const chosen = armsTasks.find(task => task.id === armsOpts.id);
+    const key = typeof chosen?.agent_completed === 'boolean'
+      ? (chosen.agent_completed ? 'Completed' : 'Did not complete') : 'Not keyed';
+
+    content.innerHTML = `
+      <p class="viz-note">The same run under both conditions, at the same moment, both fully live.
+        The grounded pane shows a screenshot per step on hover; the non-grounded one shows the steps
+        as text. When the simulator is on, <b>both</b> panes carry it — it is offered in either arm,
+        so the difference this comparison is for is the per-step evidence rather than the walk.
+        <b>Nothing on this screen is recorded</b>, and the button's use here does not reach any
+        result row.</p>
+
+      <div class="preview-chips arms-tools">
+        <label class="q-sub" for="arms-task">Run</label>
+        <select class="welcome-input" id="arms-task">
+          ${armsTasks.map(task => `<option value="${esc(task.id)}"${task.id === armsOpts.id ? ' selected' : ''}>${
+            esc(task.title || task.goal || task.id)}${task.in_study ? '' : ' — held out'}</option>`).join('')}
+        </select>
+        <label class="picker-tick"><input type="checkbox" data-arms-opt="sim"${armsOpts.sim ? ' checked' : ''}> Simulate-browsing button</label>
+        <label class="picker-tick"><input type="checkbox" data-arms-opt="trail"${armsOpts.trail ? ' checked' : ''}> Reasoning trail</label>
+        <label class="picker-tick"><input type="checkbox" data-arms-opt="milestones"${armsOpts.milestones ? ' checked' : ''}> Flag milestones</label>
+      </div>
+      <p class="viz-note">${esc(chosen?.task_style === 'guide_visual' ? 'Visual' : 'Text')} ·
+        answer key <b>${esc(key)}</b> · ${chosen?.in_study ? 'in the study' : 'held out of the study'}.
+        ${chosen?.task_style === 'guide_text' ? '<b>A text-mode run was recorded with no step '
+          + 'screenshots at all</b>, so its grounded arm has nothing to show and the simulator has '
+          + 'nothing to walk — the two panes will look alike, and that is the recording rather than '
+          + 'a fault in this screen.' : ''}</p>
+
+      <div class="arms-frames">
+        <div class="arms-pane">
+          <div class="arms-label"><span class="v2-chip is-grounded">Grounded</span>
+            each step can be checked against the page it was taken on</div>
+          <iframe class="arms-frame" id="arms-grounding" title="The grounded arm"
+            src="${esc(armFrameUrl(armsOpts.id, 'grounding'))}"></iframe>
+        </div>
+        <div class="arms-pane">
+          <div class="arms-label"><span class="v2-chip is-nongrounded">Non-grounded</span>
+            the steps as text${armsOpts.sim ? ', plus the button that walks the pages' : ''}</div>
+          <iframe class="arms-frame" id="arms-nongrounding" title="The non-grounded arm"
+            src="${esc(armFrameUrl(armsOpts.id, 'nongrounding'))}"></iframe>
+        </div>
+      </div>
+
+      <div class="preview-chips">
+        <a class="admin-chip" id="arms-open-g" href="${esc(armFrameUrl(armsOpts.id, 'grounding'))}"
+          target="_blank" rel="noopener">Open the grounded arm full size ↗</a>
+        <a class="admin-chip" id="arms-open-n" href="${esc(armFrameUrl(armsOpts.id, 'nongrounding'))}"
+          target="_blank" rel="noopener">Open the non-grounded arm full size ↗</a>
+      </div>
+
+      <h3 class="admin-subtitle">What the two panes differ in</h3>
+      <p class="viz-note">Read from <code>_stripGuideArm</code> in
+        <code>vendor/guide_trajectories.js</code>, which is the definition of the non-grounded arm
+        rather than a description of it — so this cannot claim a difference the renderer does not
+        make.</p>
+      <div class="viz-table-wrap"><table class="viz-table">
+        <thead><tr><th></th><th>Grounded</th><th>Non-grounded</th></tr></thead>
+        <tbody>
+          <tr><td><b>Step screenshots</b></td><td>one per step, on hover and click</td><td>none — nulled by the strip</td></tr>
+          <tr><td><b>Milestone flags</b></td><td>the steps the trail narrates are marked, with a legend saying they can be checked instead of the whole journey</td><td>none — a flag pointing at a row that does not open is a signpost to a door that is not there</td></tr>
+          <tr><td><b>“You can click the steps”</b></td><td>shown under the legend</td><td>not shown — the rows do not open</td></tr>
+          <tr><td><b>Answer evidence chips</b></td><td>numbered, and they open what the agent saw</td><td>none, and the <code>[ev:…]</code> markers are removed from the prose</td></tr>
+          <tr><td><b>Linked phrases in the answer</b></td><td>underlined, and they open a screenshot</td><td>plain text</td></tr>
+          <tr><td><b>Before / after page states</b></td><td colspan="2">shown in <b>both</b> — the arms differ in whether each <em>action</em> can be checked, not in whether the outcome is known</td></tr>
+          <tr><td><b>Steps, order, wording, answer</b></td><td colspan="2">identical — the same run, renumbered only if the strip had to</td></tr>
+          <tr><td><b>Simulate browsing</b></td><td colspan="2">${armsOpts.sim
+            ? 'offered in <b>both</b> — the run as a slideshow, opening on the last page and walked '
+              + 'back one at a time. It is a constant of the study, not part of what separates the '
+              + 'arms; what it changes is how much work checking a step is, which is what the '
+              + 'grounded column above already gives away for free'
+            : 'switched off for this preview'}</td></tr>
+        </tbody>
+      </table></div>`;
+
+    content.querySelector('#arms-task').onchange = (event) => {
+      armsOpts.id = event.target.value;
+      renderGuideArms();
+    };
+    content.querySelectorAll('[data-arms-opt]').forEach(box => {
+      box.onchange = () => {
+        armsOpts[box.dataset.armsOpt] = box.checked;
+        renderGuideArms();
+      };
+    });
+  }
+
+  // ── The four cells: the fixed queue, previewed as it is dealt ─────────────
+  //
+  // ONLY UNDER `guide_visual_4`, and that is the point rather than a limitation. Under a rotating
+  // design "the four tasks" is not a thing that exists: the slot decides which run fills each cell,
+  // so the honest answer is per-participant and this screen could only lie about it. The fixed
+  // design is what makes "what is everyone about to see?" a question with one answer, and this is
+  // the screen that answers it.
+  //
+  // HOW IT DIFFERS FROM Guide arms. That tab takes one run and shows BOTH arms, to study the
+  // difference between the conditions. This one takes the four cells and shows each in THE ARM IT IS
+  // ACTUALLY DEALT IN — cell 1 grounded, cell 2 non-grounded, and so on. Nobody is ever shown the
+  // grid Guide arms draws; this is the four screens a participant really meets, in order.
+  //
+  // IT RESOLVES THROUGH buildGuideVisualQueue, the same function the study deals with, so a cell
+  // that is falling back to an unpinned run shows the run it will actually fall back to rather than
+  // the one somebody meant to pin.
+
+  let cellsTasks = null;
+  let cellsOpen = 0;          // which cell's frame is expanded; the rest are collapsed
+
+  /** One cell's frame, in the arm it is dealt in and under the study's own switches. */
+  function cellFrameUrl(task, cell) {
+    const params = new URLSearchParams({
+      task: task.id,
+      arm: cell.arm,
+      sim: studyFlags.allowBrowseSim ? '1' : '0',
+      delay: String(Math.round(Number(studyFlags.browseSimDelayMs) || 500)),
+      trail: studyFlags.showReasoningTrail ? '1' : '0',
+      milestones: studyFlags.flagMilestones ? '1' : '0',
+    });
+    return `guide-arm.html?${params.toString()}`;
+  }
+
+  async function renderGuideVisualCells() {
+    const content = document.getElementById('find-v2-admin-content');
+    content.innerHTML = '<div class="viz-loading">Resolving the four cells…</div>';
+
+    let flags;
+    try {
+      [cellsTasks, flags] = await Promise.all([DB.listStudyGuideTasks(), DB.getStudyFlags()]);
+    } catch (error) {
+      content.innerHTML = `<p class="welcome-status welcome-status-bad">${esc(error.message || String(error))}</p>`;
+      return;
+    }
+    studyFlags = flags;
+    // Read again after the await: the design is what puts this tab on the strip, and it can have
+    // been changed in another tab while this one was fetching.
+    if (currentDesign() !== 'guide_visual_4') return renderAdminShell();
+
+    const dealt = buildGuideVisualQueue(cellsTasks, flags.taskSelection);
+    const pins = pinsFor(flags.taskSelection, 'guide_visual_4', '');
+    cellsOpen = Math.min(cellsOpen, Math.max(0, dealt.length - 1));
+
+    const missing = GUIDE_VISUAL_CELLS.length - dealt.length;
+    const repeated = [...new Set(dealt.map(t => t.id).filter((id, i, all) => all.indexOf(id) !== i))];
+
+    content.innerHTML = `
+      <p class="viz-note">The four tasks <b>every participant</b> is dealt, in order, each rendered in
+        the arm it is dealt in — resolved through <code>buildGuideVisualQueue</code>, the same
+        function the study deals with, so a cell that is falling back shows the run it will really
+        fall back to. Which run fills each cell is chosen in <b>Study tasks</b>. Nothing here is
+        recorded.</p>
+
+      ${missing > 0 ? `<p class="welcome-status welcome-status-bad">${missing} of the four cells
+        cannot be filled at all — the pool has no live Guide × Visual run with the right answer key.
+        A participant starting now would be dealt ${dealt.length} task${dealt.length === 1 ? '' : 's'}.</p>` : ''}
+      ${repeated.length ? `<p class="welcome-status welcome-status-bad">${esc(repeated.join(', '))}
+        fill${repeated.length === 1 ? 's' : ''} more than one cell, so a participant reads the same
+        run twice and answers the second from the first.</p>` : ''}
+
+      <div class="cells-grid">
+        ${GUIDE_VISUAL_CELLS.map((cell, index) => {
+          const task = dealt[index];
+          const pinned = typeof pins[index] === 'string' ? pins[index].trim() : '';
+          const fellBack = !!task && (!pinned || pinned !== task.id);
+          const open = index === cellsOpen;
+          return `
+            <section class="cells-card${open ? ' is-open' : ''}">
+              <button type="button" class="cells-head" data-cell-open="${index}"
+                aria-expanded="${open ? 'true' : 'false'}">
+                <span class="cells-n">${index + 1}</span>
+                <span class="cells-chips">
+                  <span class="v2-chip ${cell.correct ? 'is-correct' : 'is-incorrect'}">${cell.correct ? 'Correct' : 'Incorrect'}</span>
+                  <span class="v2-chip ${cell.arm === 'nongrounding' ? 'is-nongrounded' : 'is-grounded'}">${
+                    cell.arm === 'nongrounding' ? 'Non-grounded' : 'Grounded'}</span>
+                </span>
+                <span class="cells-title">${task
+                  ? esc(task.title || task.goal || task.id)
+                  : '<em>nothing eligible in the pool</em>'}</span>
+                <span class="cells-toggle" aria-hidden="true">${open ? '▾' : '▸'}</span>
+              </button>
+              <p class="cells-note">${task ? `
+                <code>${esc(task.id)}</code> ·
+                ${pinned && pinned === task.id
+                  ? 'pinned in Study tasks'
+                  : `<b>not pinned</b> — this is the fallback${
+                      pinned ? `, because <code>${esc(pinned)}</code> is not in the pool for this cell` : ''}`}
+                ${studyFlags.allowBrowseSim
+                  ? ` · the walk is offered, ${Math.round(Number(studyFlags.browseSimDelayMs) || 500)}ms a page`
+                  : ' · the walk is switched off'}
+                ${task.agentCompleted === cell.correct ? '' :
+                  ' · <b class="cells-warn">its answer key does not match this cell</b>'}` : ''}
+              </p>
+              ${task && open ? `
+                <iframe class="cells-frame" title="Cell ${index + 1}"
+                  src="${esc(cellFrameUrl(task, cell))}"></iframe>
+                <div class="preview-chips">
+                  <a class="admin-chip" target="_blank" rel="noopener"
+                    href="${esc(cellFrameUrl(task, cell))}">Open full size ↗</a>
+                  <a class="admin-chip" target="_blank" rel="noopener"
+                    href="${esc(`guide-arm.html?task=${encodeURIComponent(task.id)}&arm=${
+                      cell.arm === 'nongrounding' ? 'grounding' : 'nongrounding'}`)}">See the other arm ↗</a>
+                </div>` : ''}
+            </section>`;
+        }).join('')}
+      </div>
+
+      <p class="viz-note">The frames follow the <b>Study settings</b> switches — the reasoning trail,
+        the milestone flags and the browse simulator are all shown here exactly as they are set, so
+        this is the screen as it will be dealt rather than a neutral rendering of the material.</p>`;
+
+    content.querySelectorAll('[data-cell-open]').forEach(button => {
+      button.onclick = () => {
+        // ONE FRAME AT A TIME. Each is a full copy of the renderer with a trajectory's worth of
+        // base64 screenshots behind it; four open at once is four of those in memory to look at one.
+        const next = Number(button.dataset.cellOpen);
+        cellsOpen = next === cellsOpen ? -1 : next;
+        renderGuideVisualCells();
+      };
+    });
+  }
+
+  // ── Study tasks: one screen for what the study is actually made of ────────
+  //
+  // WHY A TAB OF ITS OWN, when both pools already have one. "Edit claims" and "Guide tasks" are
+  // AUTHORING screens: they open one item at a time and the Use-in-study box sits at the bottom of a
+  // long form, next to the answer text. Deciding what the study contains is a different job done at
+  // a different moment — it is about the SET, not about any one item — and doing it in the authoring
+  // screens means opening eleven forms and holding the tally in your head.
+  //
+  // So this screen shows the set. Both pools as checklists, the cells the current design deals, and
+  // which task fills each cell, on one page that says what is missing before a participant finds out.
+  //
+  // TWO KINDS OF DECISION, kept visibly apart:
+  //
+  //   IN THE POOL   — `in_study` on the row. Under a rotating design this is the whole choice: the
+  //                   queue walks whatever is live, so ticking a box is how a task gets dealt.
+  //   IN THIS CELL  — a pin in `task_selection`. Only a fixed design needs one, and only a fixed
+  //                   design honours all four; under a rotating design a pin overrides one cell and
+  //                   leaves the rotation to fill the rest.
+  //
+  // Nothing here is written until Save is pressed, and the three writes it makes are separate rows
+  // in three different tables — so the status line says what landed rather than "Saved".
+
+  let pickerTasks = null;          // every guide task, judged or not
+  let pickerDraft = null;          // { inStudyClaims:Set, inStudyGuides:Set, pins:{} }
+  let pickerGroup = 'A';           // which group's cells the grouped designs are showing
+
+  /** The pins for the whole study, as a plain object safe to hand to the writer. */
+  function pinsObject(draft) {
+    return draft && draft.pins && typeof draft.pins === 'object' ? draft.pins : {};
+  }
+
+  /** Read one cell's pin out of the draft, in the shape the design stores. */
+  function draftPin(draft, design, group, index) {
+    return pinAt(pinsObject(draft), design, group, index);
+  }
+
+  /**
+   * Write one cell's pin into the draft, creating the shape the design needs.
+   *
+   * An empty id CLEARS the pin rather than storing '' — "not pinned" has to round-trip as absent, or
+   * a cleared cell would resolve to a task with no id and fall through to the fallback anyway while
+   * the picker went on showing it as pinned.
+   */
+  function setDraftPin(draft, design, group, index, id) {
+    const pins = pinsObject(draft);
+    const value = String(id || '').trim();
+    if (designHasGroups(design)) {
+      const byGroup = (pins[design] && !Array.isArray(pins[design])) ? { ...pins[design] } : {};
+      const list = Array.isArray(byGroup[group]) ? byGroup[group].slice() : [];
+      list[index] = value || null;
+      byGroup[group] = list;
+      pins[design] = byGroup;
+    } else {
+      const list = Array.isArray(pins[design]) ? pins[design].slice() : [];
+      list[index] = value || null;
+      pins[design] = list;
+    }
+    draft.pins = pins;
+  }
+
+  /** The label a cell carries in the picker and in the coverage readout. */
+  function cellLabel(cell, design) {
+    const kind = cell.taskType === 'find' ? 'Find' : 'Guide';
+    const style = design === 'guide_visual_4' ? 'Visual'
+      : (designHasGroups(design) && pickerGroup === 'B') ? 'Visual' : 'Text';
+    const arm = cell.arm === 'nongrounding' ? 'Non-grounded' : 'Grounded';
+    const correct = cell.correct === null ? 'alternates' : cell.correct ? 'Correct' : 'Incorrect';
+    return { kind, style, arm, correct };
+  }
+
+  /**
+   * The task styles a design can actually deal, per kind.
+   *
+   * WHAT THE PICKER IS ALLOWED TO OFFER. Listing every row in both tables was wrong under the fixed
+   * design in two different ways at once: it offered Find claims, which that design never deals at
+   * all, and it offered `guide_text` runs, which can never fill a Guide × Visual cell. Both are
+   * choices that cannot take effect, and a screen whose job is "decide what the study contains"
+   * must not present them — ticking one and seeing nothing change is how somebody concludes the
+   * picker is broken.
+   *
+   * An empty list means that kind is not dealt at all and its whole section is dropped.
+   */
+  function poolStylesFor(design) {
+    if (design === 'guide_visual_4') return { find: [], guide: ['guide_visual'] };
+    return { find: ['find_text', 'find_visual'], guide: ['guide_text', 'guide_visual'] };
+  }
+
+  /** Which tasks may fill this cell — the pool, narrowed by everything the cell already fixes. */
+  function eligibleFor(cell, design, group, claims, guides) {
+    if (cell.taskType === 'find') {
+      const style = design === 'guide_visual_4' ? 'find_visual' : stylesFor(group).find;
+      return claims.filter(row => row.task_style === style && row.in_study)
+        .map(row => ({ id: row.id, label: row.title || row.question || row.id }));
+    }
+    const style = design === 'guide_visual_4' ? 'guide_visual' : stylesFor(group).guide;
+    return guides
+      .filter(row => row.task_style === style && row.in_study)
+      // A CELL WITH A FIXED CORRECTNESS ONLY OFFERS RUNS OF THAT CORRECTNESS. The verdict is scored
+      // against the run's own key, so pinning a "did not complete" run into the Correct cell does
+      // not make it correct — it makes the cell a mislabel, and the mislabel is invisible in the
+      // results. Narrowing the list is the only place that can be caught.
+      .filter(row => cell.correct === null || row.agent_completed === cell.correct)
+      .map(row => ({ id: row.id, label: row.title || row.goal || row.id }));
+  }
+
+  function pickerCellRowHtml(cell, index, design, group, claims, guides, draft) {
+    const { kind, style, arm, correct } = cellLabel(cell, design);
+    const options = eligibleFor(cell, design, group, claims, guides);
+    const pinned = draftPin(draft, design, group, index);
+    // A pin that no longer names anything eligible is shown AS a stale pin rather than silently
+    // reset to "not pinned": the cell is not doing what the last person to touch it asked for, and
+    // that is worth a line of red rather than a quietly different study.
+    const stale = pinned && !options.some(option => option.id === pinned);
+    return `
+      <tr class="${stale ? 'is-stale' : ''}">
+        <td>${index + 1}</td>
+        <td><b>${esc(kind)} × ${esc(style)}</b></td>
+        <td><span class="v2-chip ${cell.correct === null ? '' : cell.correct ? 'is-correct' : 'is-incorrect'}">${esc(correct)}</span></td>
+        <td><span class="v2-chip ${cell.arm === 'nongrounding' ? 'is-nongrounded' : 'is-grounded'}">${esc(arm)}</span></td>
+        <td>
+          <select class="welcome-input picker-pick" data-pick-cell="${index}">
+            <option value="">${options.length
+              ? (design === 'guide_visual_4' ? '— pick a run —' : '— leave to the rotation —')
+              : '— nothing eligible —'}</option>
+            ${options.map(option => `<option value="${esc(option.id)}"${
+              option.id === pinned ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
+          </select>
+          ${stale ? `<p class="welcome-status welcome-status-bad">Pinned to <code>${esc(pinned)}</code>,
+            which is not in the pool for this cell any more — this cell is falling back.</p>` : ''}
+        </td>
+      </tr>`;
+  }
+
+  /** The pool checklist for one table. Both pools render through it; only the chips differ. */
+  function poolRowsHtml(rows, kind, selected) {
+    if (!rows.length) {
+      return `<tr><td colspan="4" class="q-sub">No ${esc(kind)} task exists yet.</td></tr>`;
+    }
+    return rows.map(row => {
+      const style = String(row.task_style || '');
+      const visual = style.endsWith('_visual');
+      const key = kind === 'Guide'
+        ? (typeof row.agent_completed === 'boolean'
+            ? (row.agent_completed ? 'Completed' : 'Did not complete') : 'Not keyed')
+        : `${window.FindV2Variants.KEYS.filter(k => V.variantOf(row, k).answer_text).length} of 4 written`;
+      const keyBad = kind === 'Guide' ? typeof row.agent_completed !== 'boolean'
+        : window.FindV2Variants.KEYS.some(k => !V.variantOf(row, k).answer_text);
+      return `
+        <tr>
+          <td><label class="picker-tick"><input type="checkbox" data-pool="${esc(kind)}"
+            data-pool-id="${esc(row.id)}"${selected.has(row.id) ? ' checked' : ''}> Include</label></td>
+          <td><b>${esc(row.title || row.goal || row.question || row.id)}</b>
+            <span class="q-sub">${esc(row.id)}</span></td>
+          <td><span class="v2-chip">${visual ? 'Visual' : 'Text'}</span></td>
+          <td><span class="v2-chip${keyBad ? ' is-incorrect' : ''}">${esc(key)}</span></td>
+        </tr>`;
+    }).join('');
+  }
+
+  async function renderTaskPicker() {
+    const content = document.getElementById('find-v2-admin-content');
+    content.innerHTML = '<div class="viz-loading">Loading the task pools…</div>';
+
+    let flags;
+    try {
+      [pickerTasks, flags] = await Promise.all([DB.listAllGuideTasks(), DB.getStudyFlags()]);
+      adminClaims = await DB.listAllClaims();
+    } catch (error) {
+      content.innerHTML = `<p class="welcome-status welcome-status-bad">${esc(error.message || String(error))}</p>`;
+      return;
+    }
+    studyFlags = flags;
+    const design = designOf(flags.queueDesign);
+
+    // THE DRAFT IS BUILT ONCE PER SAVE, not per render. Every repaint below re-reads it, so ticking
+    // a box, switching group and coming back shows the tick — a re-read from the server between
+    // those two would quietly discard it.
+    if (!pickerDraft) {
+      pickerDraft = {
+        inStudyClaims: new Set(adminClaims.filter(row => row.in_study).map(row => row.id)),
+        inStudyGuides: new Set(pickerTasks.filter(row => row.in_study).map(row => row.id)),
+        pins: JSON.parse(JSON.stringify(flags.taskSelection || {})),
+      };
+    }
+
+    paintTaskPicker(design);
+  }
+
+  function paintTaskPicker(design) {
+    const content = document.getElementById('find-v2-admin-content');
+    const draft = pickerDraft;
+    const guides = pickerTasks || [];
+    const cells = cellsOf(design);
+    const grouped = designHasGroups(design);
+    const group = grouped ? pickerGroup : '';
+
+    // The pools AS THE DRAFT HAS THEM, not as the server has them: every list, every eligibility
+    // check and every gap below reads the unsaved ticks, so the screen previews the study you are
+    // about to save rather than the one you already saved.
+    const claimPool = adminClaims.map(row => ({ ...row, in_study: draft.inStudyClaims.has(row.id) }));
+    const guidePool = guides.map(row => ({ ...row, in_study: draft.inStudyGuides.has(row.id) }));
+
+    // NARROWED TO WHAT THIS DESIGN DEALS. Everything below — the lists, the counts, the "N of M"
+    // headings — reads these rather than the raw pools, so the screen only ever shows decisions that
+    // can take effect. What is left out is counted and named rather than silently dropped.
+    const styles = poolStylesFor(design);
+    const findClaims = claimPool.filter(row => styles.find.includes(String(row.task_style || '')));
+    const guideRows = guidePool.filter(row => styles.guide.includes(String(row.task_style || '')));
+    const hiddenGuides = guidePool.length - guideRows.length;
+    const hiddenClaims = claimPool.filter(row => String(row.task_style || '').startsWith('find_')).length
+      - findClaims.length;
+    const guideIncluded = guideRows.filter(row => draft.inStudyGuides.has(row.id)).length;
+    const findIncluded = findClaims.filter(row => draft.inStudyClaims.has(row.id)).length;
+
+    const unfilled = cells.filter((cell, index) => {
+      const pinned = draftPin(draft, design, group, index);
+      const options = eligibleFor(cell, design, group, claimPool, guidePool);
+      if (pinned && options.some(option => option.id === pinned)) return false;
+      // An unpinned cell is filled by whatever is eligible — the rotation under a rotating design,
+      // the first matching run under the fixed one. Either way, nothing eligible means nothing
+      // fills it, and that is the only state worth a warning.
+      return !options.length;
+    });
+
+    // THE SAME RUN IN TWO CELLS. Legal, and occasionally what someone wants — the same trajectory
+    // shown grounded and non-grounded is a within-item comparison — but far more often it is a
+    // rotation quietly landing on a run that is also pinned somewhere else, and a participant who
+    // reads the same trajectory twice has answered the second one before they saw it.
+    const filling = cells.map((cell, index) => {
+      const pinned = draftPin(draft, design, group, index);
+      const options = eligibleFor(cell, design, group, claimPool, guidePool);
+      return pinned && options.some(option => option.id === pinned) ? pinned : '';
+    }).filter(Boolean);
+    const repeated = [...new Set(filling.filter((id, i) => filling.indexOf(id) !== i))];
+
+    content.innerHTML = `
+      <p class="viz-note">Everything the study is made of, on one screen: which tasks are in each
+        pool, and — for the design now set — which one fills each cell. <b>It lists only what this
+        design can actually deal</b>, so a task that could not reach a participant is not offered as
+        though it could. <b>Nothing is written until Save is pressed.</b> The queue design itself
+        lives in <b>Study settings</b>; this screen fills whichever one is chosen there.</p>
+
+      <h3 class="admin-subtitle">The cells this design deals</h3>
+      <p class="viz-note">${design === 'guide_visual_4'
+        ? 'This design has <b>no rotation</b>: the four runs named here are the four runs every '
+          + 'participant is shown, in this order. A cell left unpicked falls back to any eligible '
+          + 'run of the right key, which keeps the study running but means the stimulus is chosen '
+          + 'by whatever happens to be first in the pool rather than by you.'
+        : 'This design deals from the pool by assignment slot, so a cell left as '
+          + '<em>“leave to the rotation”</em> is the normal case and the balanced one. Pinning a '
+          + 'cell overrides the rotation <b>for that cell only</b> — useful for holding one stimulus '
+          + 'fixed while the rest still vary, and a thing to undo before the real run.'}</p>
+      ${grouped ? `
+        <div class="preview-chips">
+          <span class="q-sub">Cells for:</span>
+          ${['A', 'B'].map(g => `<button class="admin-chip${g === pickerGroup ? ' admin-chip-on' : ''}"
+            data-picker-group="${g}">Group ${g} · ${g === 'B' ? 'visual' : 'text'}</button>`).join('')}
+        </div>` : ''}
+      <div class="viz-table-wrap"><table class="viz-table picker-cells">
+        <thead><tr><th>#</th><th>Cell</th><th>Answer</th><th>Condition</th><th>Task</th></tr></thead>
+        <tbody>${cells.map((cell, index) =>
+          pickerCellRowHtml(cell, index, design, group, claimPool, guidePool, draft)).join('')}</tbody>
+      </table></div>
+      ${unfilled.length ? `<p class="welcome-status welcome-status-bad">${unfilled.length}
+        cell${unfilled.length === 1 ? '' : 's'} ${unfilled.length === 1 ? 'has' : 'have'} nothing
+        eligible in the pool. Tick a task below that matches the cell's style and answer key.</p>` : ''}
+      ${repeated.length ? `<p class="welcome-status welcome-status-bad">${
+        repeated.map(id => esc(id)).join(', ')} fill${repeated.length === 1 ? 's' : ''} more than one
+        cell, so a participant sees the same run twice — and answers the second one from the
+        first. Deliberate only if you meant a within-item comparison.</p>` : ''}
+
+      <h3 class="admin-subtitle">${design === 'guide_visual_4' ? 'Guide × Visual runs' : 'Guide runs'} in the pool
+        <span class="q-sub">${guideIncluded} of ${guideRows.length} included</span></h3>
+      <p class="viz-note">A run needs an answer key — <b>Completed</b> or <b>Did not complete</b> —
+        before it can be dealt. Key it in <b>Guide tasks</b>; this screen only decides whether a
+        keyed run is in the study.
+        ${hiddenGuides ? `<b>${hiddenGuides} Guide × Text run${hiddenGuides === 1 ? ' is' : 's are'}
+          not listed</b> — the design now set deals only visual runs, so including one could have no
+          effect. ${hiddenGuides === 1 ? 'It stays' : 'They stay'} in <b>Guide tasks</b>, and
+          ${hiddenGuides === 1 ? 'comes' : 'come'} back here if the design changes.` : ''}</p>
+      <div class="viz-table-wrap"><table class="viz-table">
+        <thead><tr><th></th><th>Run</th><th>Style</th><th>Answer key</th></tr></thead>
+        <tbody>${poolRowsHtml(guideRows, 'Guide', draft.inStudyGuides)}</tbody>
+      </table></div>
+
+      ${styles.find.length ? `
+        <h3 class="admin-subtitle">Find claims in the pool
+          <span class="q-sub">${findIncluded} of ${findClaims.length} included</span></h3>
+        <p class="viz-note">A claim is dealt in one of four correctness × grounding cells, so a live
+          claim wants all four answers written. Write them in <b>Edit claims</b>.</p>
+        <div class="viz-table-wrap"><table class="viz-table">
+          <thead><tr><th></th><th>Claim</th><th>Style</th><th>Variants</th></tr></thead>
+          <tbody>${poolRowsHtml(findClaims, 'Find', draft.inStudyClaims)}</tbody>
+        </table></div>`
+      : `<p class="viz-note"><b>No Find claims are listed, because this design deals none.</b> The
+          four cells above are all Guide × Visual. The claims are untouched and still editable in
+          <b>Edit claims</b>; switch the queue design in <b>Study settings</b> to bring them back.
+          ${hiddenClaims ? `There ${hiddenClaims === 1 ? 'is' : 'are'} ${hiddenClaims} of them.` : ''}</p>`}
+
+      <div class="admin-row">
+        <button class="welcome-btn" id="v2-picker-save">Save the task set</button>
+        <button class="admin-chip" id="v2-picker-revert">Discard my changes</button>
+      </div>
+      <div class="welcome-status" id="v2-picker-status"></div>`;
+
+    content.querySelectorAll('[data-picker-group]').forEach(button => {
+      button.onclick = () => { pickerGroup = button.dataset.pickerGroup; paintTaskPicker(design); };
+    });
+    content.querySelectorAll('[data-pick-cell]').forEach(select => {
+      select.onchange = () => {
+        setDraftPin(draft, design, group, Number(select.dataset.pickCell), select.value);
+        paintTaskPicker(design);
+      };
+    });
+    content.querySelectorAll('[data-pool-id]').forEach(box => {
+      box.onchange = () => {
+        const set = box.dataset.pool === 'Guide' ? draft.inStudyGuides : draft.inStudyClaims;
+        if (box.checked) set.add(box.dataset.poolId); else set.delete(box.dataset.poolId);
+        paintTaskPicker(design);
+      };
+    });
+    content.querySelector('#v2-picker-revert').onclick = () => {
+      pickerDraft = null;
+      renderTaskPicker();
+    };
+    content.querySelector('#v2-picker-save').onclick = () => saveTaskPicker(design);
+  }
+
+  /**
+   * The three writes, in the order a half-finished save can survive.
+   *
+   * POOL FIRST, PINS LAST. A pin is only meaningful if the task it names is in the pool, so writing
+   * the pins first and then failing on a pool row would leave the study pinned to a task it does not
+   * deal. This way a failure part-way leaves a pool that is right and pins that are still the old
+   * ones — which is the state the picker can show and a person can finish.
+   *
+   * Each pool row is written on its own, and only if it CHANGED. `save_pageguide_find_v2_claim`
+   * replaces the whole row, so an untouched claim is not round-tripped through the browser — that is
+   * how an unrelated edit made in another tab would get clobbered by this one.
+   */
+  async function saveTaskPicker(design) {
+    const draft = pickerDraft;
+    const button = document.getElementById('v2-picker-save');
+    const statusEl = document.getElementById('v2-picker-status');
+    const say2 = (message, bad = false) => {
+      statusEl.textContent = message;
+      statusEl.className = `welcome-status${bad ? ' welcome-status-bad' : ''}`;
+    };
+    button.disabled = true;
+    say2('Saving…');
+
+    const guideChanges = (pickerTasks || []).filter(row =>
+      row.in_study !== draft.inStudyGuides.has(row.id));
+    const claimChanges = adminClaims.filter(row =>
+      row.in_study !== draft.inStudyClaims.has(row.id));
+
+    try {
+      for (const row of guideChanges) {
+        await DB.saveGuideMeta(adminPassword, {
+          id: row.id,
+          taskStyle: row.task_style,
+          agentCompleted: typeof row.agent_completed === 'boolean' ? row.agent_completed : null,
+          inStudy: draft.inStudyGuides.has(row.id),
+          claimsCompletion: row.claims_completion,
+          taskIndex: Number(row.task_index) || 0,
+        });
+      }
+      for (const row of claimChanges) {
+        // THE WHOLE ROW, re-read. The list query leaves out `page_html` and the authored evidence,
+        // and the claim writer replaces the row it is given — saving the list shape back would erase
+        // the captured page of every claim toggled here.
+        const full = await DB.getClaim(row.id);
+        if (!full) throw new Error(`Claim ${row.id} no longer exists.`);
+        await DB.saveClaim(adminPassword, { ...full, in_study: draft.inStudyClaims.has(row.id) });
+      }
+      const saved = await DB.saveStudyFlags(adminPassword, { ...studyFlags, taskSelection: draft.pins });
+      studyFlags = saved;
+      pickerDraft = null;
+      await renderTaskPicker();
+      const parts = [];
+      if (guideChanges.length) parts.push(`${guideChanges.length} Guide run${guideChanges.length === 1 ? '' : 's'}`);
+      if (claimChanges.length) parts.push(`${claimChanges.length} Find claim${claimChanges.length === 1 ? '' : 's'}`);
+      const after = document.getElementById('v2-picker-status');
+      if (after) {
+        after.textContent = `Saved${parts.length ? `: ${parts.join(' and ')} moved in or out of the pool` : ''}`
+          + `${parts.length ? ', and' : '.'} the cell picks are stored.`
+          + ' Runs already in progress keep the tasks they were dealt.';
+        after.className = 'welcome-status';
+      }
+    } catch (error) {
+      say2(error.message || String(error), true);
+      button.disabled = false;
+    }
   }
 
   /**
@@ -2007,6 +2997,27 @@
         <thead><tr><th>#</th><th>Task</th><th>Answer</th><th>Condition</th><th></th></tr></thead>
         <tbody>${body}</tbody>
       </table></div>`;
+
+    // NO GROUPS AND NO SITTINGS TO ALTERNATE BETWEEN. One table, and it is the whole protocol: the
+    // same four runs, in this order, for every participant.
+    if (design === 'guide_visual_4') {
+      const pins = pinsFor(studyFlags.taskSelection, 'guide_visual_4', '');
+      return `
+        <h3 class="admin-subtitle">What every participant is dealt</h3>
+        <p class="viz-note">Generated from <code>GUIDE_VISUAL_CELLS</code> and
+          <code>buildGuideVisualQueue</code>, the same two the study runs. Which run fills each cell
+          is chosen in <b>Study tasks</b>; a cell shown as <em>not picked</em> falls back to any
+          eligible run of that key, which keeps the study running but leaves the stimulus to
+          whatever is first in the pool.</p>
+        ${table(GUIDE_VISUAL_CELLS.map((cell, i) => row(i + 1, 'Guide', 'Visual', cell.correct, cell.arm,
+          pins[i] ? `pinned to ${pins[i]}` : 'not picked — falls back')).join(''))}
+        <p class="viz-note"><b>Nothing here varies by participant.</b> That is what makes both
+          factors fully within-subjects — every completed sitting contributes to all four cells at
+          once, so no cell can be short of another and the recruitment target below has nothing left
+          to level. It is also the cost: the four runs are the four conditions, so any way in which
+          one run is harder than another is indistinguishable from its condition. Pick four that are
+          comparable, and read the per-cell accuracy as a claim about these four runs.</p>`;
+    }
 
     const forGroup = (group) => {
       const styles = stylesFor(group);
@@ -2510,15 +3521,428 @@
             grounded ? 'Grounded' : 'Non-grounded'}</span></td>`;
   }
 
+  // Every V2 queue design currently deals four tasks. A completed sitting may span both result
+  // tables, so completion is decided only after Find and Guide rows have been joined below.
+  const V2_TASKS_PER_SESSION = 4;
+
+  function resultSessionKey(row) {
+    if (row?.session_id != null) return `s${row.session_id}`;
+    if (row?.client_run_id) return `r${row.client_run_id}`;
+    return null;
+  }
+
+  /** One V2 participant, merged across the Find and Guide result tables. */
+  function resultParticipantSummaries(findRows, guideRows) {
+    const summaries = new Map();
+    const add = (row, taskType) => {
+      const key = resultSessionKey(row);
+      if (!key) return;
+      if (!summaries.has(key)) {
+        summaries.set(key, {
+          key,
+          participantId: String(row?.participant_id || '').trim() || 'anonymous',
+          tasks: new Set(),
+          indexes: new Set(),
+          find: 0,
+          guide: 0,
+        });
+      }
+      const summary = summaries.get(key);
+      const participantId = String(row?.participant_id || '').trim();
+      if (participantId && (!summary.participantId || summary.participantId === 'anonymous')) {
+        summary.participantId = participantId;
+      }
+      // question_index is global within a sitting (0–3) even though its rows are split across two
+      // tables. The fallback keeps old rows without that column distinct by task identity.
+      const index = Number(row?.question_index);
+      if (Number.isInteger(index) && index >= 0) summary.indexes.add(index);
+      const task = Number.isInteger(index) && index >= 0
+        ? `q${index}`
+        : `${taskType}:${row?.claim_id || row?.task_id || row?.result_key || ''}`;
+      if (task) summary.tasks.add(task);
+      summary[taskType] += 1;
+    };
+    (Array.isArray(findRows) ? findRows : []).forEach(row => add(row, 'find'));
+    (Array.isArray(guideRows) ? guideRows : []).forEach(row => add(row, 'guide'));
+
+    const sessionLabel = key => {
+      if (key.startsWith('s')) return `session ${key.slice(1)}`;
+      const run = key.slice(1);
+      return `local run ${run.length > 12 ? `${run.slice(0, 12)}…` : run}`;
+    };
+    return Array.from(summaries.values())
+      .map(summary => ({
+        ...summary,
+        // Strictly one real V2 session represented in BOTH result tables, with every global task
+        // position exactly accounted for. Four arbitrary rows (or a client-only fallback run) must
+        // not be promoted to a completed participant.
+        complete: summary.key.startsWith('s')
+          && summary.find > 0
+          && summary.guide > 0
+          && summary.indexes.size === V2_TASKS_PER_SESSION
+          && Array.from({ length: V2_TASKS_PER_SESSION }, (_, index) => index)
+            .every(index => summary.indexes.has(index)),
+        sessionLabel: sessionLabel(summary.key),
+      }))
+      .sort((a, b) => a.participantId.localeCompare(b.participantId, undefined, { numeric: true })
+        || a.key.localeCompare(b.key, undefined, { numeric: true }));
+  }
+
+  /**
+   * The session keys that submitted all four tasks.
+   *
+   * Recomputed from the FULL tables rather than from whatever survived the last filter, because
+   * completeness is a property of the sitting and must not change depending on what is currently
+   * being shown. Both tables are read: a sitting is only complete if its Find and Guide halves are
+   * both present, and `includedResultRows` is called once per table.
+   */
+  function completeResultSessionKeys() {
+    return new Set(resultParticipantSummaries(adminFindResults, adminGuideResults)
+      .filter(participant => participant.complete)
+      .map(participant => participant.key));
+  }
+
+  /**
+   * The rows every V2 summary, table, chart and test reads.
+   *
+   * Two filters, and they compose: the standing "completed sittings only" toggle, then the manual
+   * exclusions. Neither overrules the other — unticking a completed participant still drops them.
+   */
+  function includedResultRows(rows) {
+    const complete = completedResultsOnly ? completeResultSessionKeys() : null;
+    return (Array.isArray(rows) ? rows : []).filter(row => {
+      const key = resultSessionKey(row);
+      if (excludedResultSessions.has(key)) return false;
+      return !complete || complete.has(key);
+    });
+  }
+
+  function resultParticipantOverviewHtml(findRows, guideRows) {
+    const summaries = resultParticipantSummaries(findRows, guideRows);
+    const total = summaries.length;
+    const complete = summaries.filter(participant => participant.complete).length;
+    const excluded = summaries.filter(participant => excludedResultSessions.has(participant.key)).length;
+    // What the charts will actually read: held out by the toggle, or unticked by hand.
+    const isFilteredOut = participant => completedResultsOnly && !participant.complete;
+    const isIncluded = participant => !excludedResultSessions.has(participant.key)
+      && !isFilteredOut(participant);
+    const included = summaries.filter(isIncluded).length;
+    const heldBack = summaries.filter(participant => isFilteredOut(participant)
+      && !excludedResultSessions.has(participant.key)).length;
+    const includedNote = completedResultsOnly
+      ? `${heldBack} incomplete held out${excluded ? `, ${excluded} manually excluded` : ''}`
+      : (excluded ? `${excluded} manually excluded` : 'everyone included');
+    const stat = (value, label, note) => `<div class="viz-participant-stat">
+      <strong>${value}</strong><span>${esc(label)}</span><small>${esc(note)}</small>
+    </div>`;
+
+    return `<section class="viz-participants" aria-label="V2 participant counts and exclusions">
+      <div class="viz-participant-stats">
+        ${stat(total, 'V2 participants', 'submitted at least one task')}
+        ${stat(complete, 'Completed', `all ${V2_TASKS_PER_SESSION} V2 tasks`)}
+        ${stat(total - complete, 'Incomplete', `fewer than ${V2_TASKS_PER_SESSION} tasks`)}
+        ${stat(included, 'Included in results', includedNote)}
+      </div>
+      <details class="viz-participant-picker" id="v2-participant-picker"${participantResultPickerOpen ? ' open' : ''}>
+        <summary>
+          <span>Filter out V2 participants</span>
+          <small>${included} of ${total} included${total - included ? ` · ${total - included} filtered out` : ''}</small>
+        </summary>
+        <div class="viz-participant-actions">
+          <label class="viz-participant-toggle" title="Hold out every sitting that did not submit all ${V2_TASKS_PER_SESSION} tasks. Stays on across reloads, so a partial sitting that lands later is held out too.">
+            <input type="checkbox" id="v2-participants-completed-only"${completedResultsOnly ? ' checked' : ''}${complete ? '' : ' disabled'}>
+            <span>Completed sittings only</span>
+            <small>${complete} of ${total} submitted all ${V2_TASKS_PER_SESSION}</small>
+          </label>
+          <button type="button" class="admin-chip" id="v2-participants-all"${excluded ? '' : ' disabled'}>Include everyone</button>
+          <button type="button" class="admin-chip" id="v2-participants-exclude-incomplete"${complete === total || completedResultsOnly ? ' disabled' : ''}>Exclude all incomplete</button>
+          <span>Uncheck a sitting to remove it from every V2 summary, table, chart and test.</span>
+        </div>
+        <div class="viz-participant-list">
+          ${summaries.map(participant => {
+            const isExcluded = excludedResultSessions.has(participant.key);
+            const filtered = isFilteredOut(participant);
+            // A ticked box on a row the toggle is holding out would be a lie about what the charts
+            // read, so the tick comes off and the box goes dead until the toggle is turned back off.
+            return `<label class="viz-participant-row${isExcluded || filtered ? ' is-excluded' : ''}">
+              <input type="checkbox" class="v2-participant-include" data-session="${esc(participant.key)}"${isExcluded || filtered ? '' : ' checked'}${filtered ? ' disabled' : ''}>
+              <code>${esc(participant.participantId)}</code>
+              <span>${esc(participant.sessionLabel)}</span>
+              <span class="viz-participant-progress">${participant.tasks.size}/${V2_TASKS_PER_SESSION} tasks · ${participant.find} Find + ${participant.guide} Guide · ${participant.complete ? 'completed' : 'incomplete'}${filtered ? ' · held out' : ''}</span>
+            </label>`;
+          }).join('')}
+        </div>
+      </details>
+      <p class="viz-participant-note">Counts merge <code>pageguide_find_v2_results</code> and
+        <code>pageguide_guide_v2_results</code>. “Completed” requires the same non-null V2
+        <code>session_id</code> in both tables and exactly the four task positions 0–3. A participant
+        who started but submitted no task has no result row and is not counted here.
+        <b>Completed sittings only</b> holds every incomplete sitting out of the charts and tests;
+        it is a filter on the analysis, so say in the write-up which of the two counts a rate came
+        from.</p>
+    </section>`;
+  }
+
+  function bindResultParticipantFilters() {
+    document.getElementById('v2-participant-picker')?.addEventListener('toggle', event => {
+      participantResultPickerOpen = event.target.open;
+    });
+    document.querySelectorAll('.v2-participant-include').forEach(box => {
+      box.addEventListener('change', () => {
+        participantResultPickerOpen = true;
+        if (box.checked) excludedResultSessions.delete(box.dataset.session);
+        else excludedResultSessions.add(box.dataset.session);
+        renderResultsView();
+      });
+    });
+    document.getElementById('v2-participants-completed-only')?.addEventListener('change', event => {
+      participantResultPickerOpen = true;
+      completedResultsOnly = event.target.checked;
+      renderResultsView();
+    });
+    document.getElementById('v2-participants-all')?.addEventListener('click', () => {
+      participantResultPickerOpen = true;
+      // "Everyone" means everyone. Clearing the hand-picked exclusions while a standing filter kept
+      // holding sittings out would leave the button unable to do what it says.
+      completedResultsOnly = false;
+      excludedResultSessions.clear();
+      renderResultsView();
+    });
+    document.getElementById('v2-participants-exclude-incomplete')?.addEventListener('click', () => {
+      participantResultPickerOpen = true;
+      resultParticipantSummaries(adminFindResults, adminGuideResults)
+        .filter(participant => !participant.complete)
+        .forEach(participant => excludedResultSessions.add(participant.key));
+      renderResultsView();
+    });
+  }
+
   async function renderResults() {
     const content = document.getElementById('find-v2-admin-content');
     content.innerHTML = '<div class="viz-loading">Loading private Find V2 results…</div>';
-    let rows;
-    try { rows = await DB.listResults(adminPassword); }
-    catch (error) {
-      content.innerHTML = `<div class="welcome-status welcome-status-bad">${esc(error.message || error)}</div>`;
+    const [findResult, guideResult, classResult] = await Promise.allSettled([
+      DB.listResults(adminPassword),
+      DB.listGuideResults(adminPassword),
+      DB.classCounts(),
+    ]);
+    if (findResult.status === 'rejected') {
+      const error = findResult.reason;
+      content.innerHTML = `<div class="welcome-status welcome-status-bad">${esc(error?.message || error)}</div>`;
       return;
     }
+    adminFindResults = findResult.value;
+    adminGuideResults = guideResult.status === 'fulfilled' ? guideResult.value : [];
+    adminClassCounts = classResult.status === 'fulfilled' ? classResult.value : [];
+    adminGuideResultsError = guideResult.status === 'rejected'
+      ? String(guideResult.reason?.message || guideResult.reason)
+      : '';
+    renderResultsView();
+  }
+
+  /**
+   * The four sittings the queue can deal, and which cells each one fills.
+   *
+   * `assignment_slot % 4` decides everything: `slot % 2` picks the between-subjects modality
+   * (even = A/text, odd = B/visual) and `Math.floor(slot / 2) % 2` picks which of the two
+   * correctness sequences `crossedCorrect` walks. There are TWO sequences, not four — the
+   * correctness pattern reads the cycle's parity — so four consecutive slots fill every Find cell
+   * and every Guide cell exactly once.
+   *
+   * The consequence this whole panel rests on: A CLASS COUNT IS A CELL n. One completed sitting of
+   * class 1 is one observation in Find × Visual correct-grounded AND one in Guide × Visual
+   * incorrect-grounded, so levelling the four classes levels both halves of the study at once and
+   * there is no separate Find and Guide recruitment to do.
+   */
+  const RECRUIT_GROUPS = [
+    {
+      slotClass: 0, label: 'A · text', style: 'text', sequence: 'A',
+      find: ['correct_grounding', 'incorrect_nongrounding'],
+      guide: ['incorrect_grounding', 'correct_nongrounding'],
+    },
+    {
+      slotClass: 1, label: 'A · visual', style: 'visual', sequence: 'A',
+      find: ['correct_grounding', 'incorrect_nongrounding'],
+      guide: ['incorrect_grounding', 'correct_nongrounding'],
+    },
+    {
+      slotClass: 2, label: 'B · text', style: 'text', sequence: 'B',
+      find: ['incorrect_grounding', 'correct_nongrounding'],
+      guide: ['correct_grounding', 'incorrect_nongrounding'],
+    },
+    {
+      slotClass: 3, label: 'B · visual', style: 'visual', sequence: 'B',
+      find: ['incorrect_grounding', 'correct_nongrounding'],
+      guide: ['correct_grounding', 'incorrect_nongrounding'],
+    },
+  ];
+
+  /** The one group that fills this cell. Exactly one does, which is what makes the map invertible. */
+  function groupForCell(taskType, style, key) {
+    return RECRUIT_GROUPS.find(group => group.style === style && group[taskType].includes(key)) || null;
+  }
+
+  /**
+   * What the result rows actually contain per cell, for completed sittings.
+   *
+   * Not used to draw the n — that comes from the class counts, which are the design. Used to CHECK
+   * it: `pickGuideFor` settles for a Guide run of the wrong correctness when a style's pool has none
+   * of the wanted one, which would unbalance the Guide half without moving any class count. A silent
+   * discrepancy is the failure this catches.
+   */
+  function observedCellCounts(findRows, guideRows) {
+    const complete = completeResultSessionKeys();
+    const counts = new Map();
+    const tally = (rows, taskType) => (Array.isArray(rows) ? rows : []).forEach(row => {
+      if (!complete.has(resultSessionKey(row))) return;
+      const key = row.variant_key || V.variantKey(
+        taskType === 'find' ? row.claim_correct_snapshot : row.answer_correct_snapshot,
+        row.condition,
+      );
+      const style = String(row.task_style || '').endsWith('_visual') ? 'visual' : 'text';
+      const id = `${taskType}|${style}|${key}`;
+      counts.set(id, (counts.get(id) || 0) + 1);
+    });
+    tally(findRows, 'find');
+    tally(guideRows, 'guide');
+    return counts;
+  }
+
+  /**
+   * Recruitment standings: where each class is, what is still owed, and what the finished dataset
+   * looks like.
+   *
+   * ALWAYS COMPLETED SITTINGS ONLY, whatever the "Completed sittings only" checkbox says. A partial
+   * sitting fills no cell — four of the five on record stopped at Find task 0 or 1 — so counting one
+   * toward a group would under-state what is still needed, which is the one error this panel exists
+   * to prevent.
+   */
+  function recruitmentBalanceHtml(findRows, guideRows) {
+    const counts = new Map((adminClassCounts || []).map(row => [row.slotClass, row]));
+    if (!counts.size) {
+      return `<section class="viz-participants v2-recruit">
+        <h3 class="admin-subtitle">Recruitment balance</h3>
+        <p class="viz-note">This project has not run <code>supabase_v2_recruit_quota.sql</code> yet,
+          so the per-class standings cannot be read. Run it in the SQL editor and reload.</p>
+      </section>`;
+    }
+    const at = slotClass => counts.get(slotClass) || { started: 0, complete: 0, inflight: 0 };
+    const target = Math.max(0, Math.round(Number(studyFlags.slotQuota) || 0));
+    const have = RECRUIT_GROUPS.map(group => at(group.slotClass).complete);
+    // With no target set, "balance" still has an unambiguous meaning: bring every class up to the
+    // fullest one. That is the smallest recruitment that squares the dataset, and it is what the
+    // panel shows until somebody commits to a bigger number.
+    const goal = target > 0 ? target : Math.max(...have);
+    const started = RECRUIT_GROUPS.reduce((sum, group) => sum + at(group.slotClass).started, 0);
+    const done = have.reduce((sum, n) => sum + n, 0);
+    // The pooled rate, not the per-class one. The per-class rates differ (29% to 64% on the data as
+    // it stands) but on 12-14 sittings each that spread is not distinguishable from chance, and
+    // projecting from it would recruit to noise.
+    const rate = started > 0 ? done / started : 0;
+    const owed = RECRUIT_GROUPS.map((group, index) => Math.max(0, goal - have[index]));
+    const toRun = owed.map(n => (rate > 0 ? Math.ceil(n / rate) : 0));
+    const owedTotal = owed.reduce((sum, n) => sum + n, 0);
+    const runTotal = toRun.reduce((sum, n) => sum + n, 0);
+    const worst = owed.indexOf(Math.max(...owed));
+
+    const observed = observedCellCounts(findRows, guideRows);
+    const drift = [];
+    ['find', 'guide'].forEach(taskType => ['text', 'visual'].forEach(style => V.KEYS.forEach(key => {
+      const group = groupForCell(taskType, style, key);
+      if (!group) return;
+      const expected = at(group.slotClass).complete;
+      const actual = observed.get(`${taskType}|${style}|${key}`) || 0;
+      if (actual !== expected) drift.push(`${taskType} × ${style} · ${V.LABELS[key]} (${actual}, expected ${expected})`);
+    })));
+
+    const cellTable = (taskType, title) => `<table class="viz-table v2-recruit-table">
+      <caption>${esc(title)}</caption>
+      <thead><tr><th>Cell</th><th>Text</th><th>Visual</th></tr></thead>
+      <tbody>${V.KEYS.map(key => `<tr>
+        <th scope="row">${esc(V.LABELS[key])}</th>
+        ${['text', 'visual'].map(style => {
+          const group = groupForCell(taskType, style, key);
+          const n = group ? at(group.slotClass).complete : 0;
+          const short = Math.max(0, goal - n);
+          return `<td class="${short ? 'is-bad' : 'is-good'}">${n}${short ? ` → <b>${goal}</b>` : ''}</td>`;
+        }).join('')}
+      </tr>`).join('')}</tbody>
+    </table>`;
+
+    return `<section class="viz-participants v2-recruit">
+      <h3 class="admin-subtitle">Recruitment balance</h3>
+      <p class="viz-note">Completed sittings only, always — a partial sitting fills no cell.
+        ${target > 0
+          ? `Target <b>${target}</b> per class, set in Study settings; the next sitting is dealt the
+             class furthest from it.`
+          : `<b>No target set</b>, so this levels every class up to the fullest one (${goal}). Set a
+             target in Study settings to have the queue steer new sittings toward it — until then it
+             deals plain round-robin and the shortfall below stays where it is.`}
+        A class count is the n of four Find cells <em>and</em> four Guide cells, so one number
+        balances both halves.</p>
+
+      <div class="viz-table-wrap"><table class="viz-table v2-recruit-table">
+        <caption>Recruit next</caption>
+        <thead><tr>
+          <th>Group</th><th><code>slot % 4</code></th><th>Sequence</th>
+          <th>Started</th><th>Completed</th><th>In flight</th>
+          <th>Still owed</th><th>People to run</th>
+        </tr></thead>
+        <tbody>${RECRUIT_GROUPS.map((group, index) => `<tr${index === worst && owed[index] > 0 ? ' class="is-worst"' : ''}>
+          <th scope="row">${esc(group.label)}</th>
+          <td><code>${group.slotClass}</code></td>
+          <td>${group.sequence}</td>
+          <td>${at(group.slotClass).started}</td>
+          <td><b>${have[index]}</b></td>
+          <td>${at(group.slotClass).inflight}</td>
+          <td class="${owed[index] ? 'is-bad' : 'is-good'}">${owed[index] ? `+${owed[index]}` : '—'}</td>
+          <td>${toRun[index] ? `≈ ${toRun[index]}` : '—'}</td>
+        </tr>`).join('')}
+        <tr class="is-total">
+          <th scope="row">total</th><td colspan="2"></td>
+          <td>${started}</td><td><b>${done}</b></td>
+          <td>${RECRUIT_GROUPS.reduce((sum, group) => sum + at(group.slotClass).inflight, 0)}</td>
+          <td class="${owedTotal ? 'is-bad' : 'is-good'}">${owedTotal ? `+${owedTotal}` : '—'}</td>
+          <td>${runTotal ? `≈ ${runTotal}` : '—'}</td>
+        </tr></tbody>
+      </table></div>
+      <p class="viz-note">“People to run” is the owed completers divided by the observed completion
+        rate (<b>${(100 * rate).toFixed(0)}%</b>, ${done} of ${started} sittings). It is a budget, not
+        a script: dropout is not predictable, so recruit against the standings and stop when every
+        class reaches ${goal}.</p>
+
+      <div class="viz-table-wrap v2-recruit-cells">
+        ${cellTable('find', 'Find — n per cell, now → at target')}
+        ${cellTable('guide', 'Guide — n per cell, now → at target')}
+      </div>
+
+      <div class="viz-table-wrap"><table class="viz-table v2-recruit-table">
+        <caption>The dataset, now and once every class reaches ${goal}</caption>
+        <thead><tr><th></th><th>Now</th><th>To recruit</th><th>At target</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Sittings started</th><td>${started}</td><td>+${runTotal}</td><td>${started + runTotal}</td></tr>
+          <tr><th scope="row">Completed sittings (the analysed n)</th><td>${done}</td><td>+${owedTotal}</td><td><b>${goal * 4}</b></td></tr>
+          <tr><th scope="row">Find judgments</th><td>${done * 2}</td><td>+${owedTotal * 2}</td><td>${goal * 8}</td></tr>
+          <tr><th scope="row">Guide judgments</th><td>${done * 2}</td><td>+${owedTotal * 2}</td><td>${goal * 8}</td></tr>
+          <tr><th scope="row">Grounded vs non-grounded, within Find</th><td>${done} vs ${done}</td><td></td><td>${goal * 4} vs ${goal * 4}</td></tr>
+          <tr><th scope="row">Grounded vs non-grounded, within Guide</th><td>${done} vs ${done}</td><td></td><td>${goal * 4} vs ${goal * 4}</td></tr>
+          <tr><th scope="row">Correct vs incorrect answer, within each</th><td>${done} vs ${done}</td><td></td><td>${goal * 4} vs ${goal * 4}</td></tr>
+          <tr><th scope="row">Text vs visual participants</th><td>${have[0] + have[2]} vs ${have[1] + have[3]}</td><td></td><td>${goal * 2} vs ${goal * 2}</td></tr>
+          <tr><th scope="row">Any one of the 16 cells</th><td>${Math.min(...have)}–${Math.max(...have)}</td><td></td><td><b>${goal}</b></td></tr>
+        </tbody>
+      </table></div>
+      ${drift.length ? `<p class="welcome-status welcome-status-bad">Cells that do not match their
+        class count: ${esc(drift.join('; '))}. A Guide cell drifts when <code>pickGuideFor</code>
+        settles for a run of the wrong correctness because that style's pool has none of the wanted
+        one — recruiting cannot fix it, authoring the missing run can.</p>`
+        : '<p class="viz-note">Every cell matches its class count, so no sitting was dealt a task of the wrong correctness.</p>'}
+    </section>`;
+  }
+
+  function renderResultsView() {
+    const content = document.getElementById('find-v2-admin-content');
+    if (!content) return;
+    const rows = includedResultRows(adminFindResults);
+    const guideRows = includedResultRows(adminGuideResults);
     const rate = subset => {
       if (!subset.length) return '—';
       return `${(100 * subset.filter(row => row.verdict_correct).length / subset.length).toFixed(1)}%`;
@@ -2527,6 +3951,8 @@
     const cell = key => rows.filter(row => (row.variant_key
       || V.variantKey(row.claim_correct_snapshot, row.condition)) === key);
     content.innerHTML = `
+      ${resultParticipantOverviewHtml(adminFindResults, adminGuideResults)}
+      ${recruitmentBalanceHtml(adminFindResults, adminGuideResults)}
       <div class="find-v2-result-summary">
         <div><b>${rows.length}</b><span>judgments</span></div>
         <div><b>${rate(rows)}</b><span>verdict accuracy</span></div>
@@ -2560,9 +3986,10 @@
         </tr>`).join('')}</tbody>
       </table></div>` : '<p class="admin-review-empty">No Find V2 result rows yet.</p>'}
       <div id="find-v2-charts"></div>
-      <div id="find-v2-guide-results"><div class="viz-loading">Loading Guide results…</div></div>`;
+      <div id="find-v2-guide-results"></div>`;
 
-    renderGuideResults(rows);
+    renderGuideResults(rows, guideRows, adminGuideResultsError);
+    bindResultParticipantFilters();
   }
 
   /**
@@ -2571,13 +3998,12 @@
    * A participant's fourth task lands in a different table, so a Results tab that only read the Find
    * one showed three quarters of every sitting and gave no hint the rest existed.
    */
-  async function renderGuideResults(findRows) {
+  function renderGuideResults(findRows, rows, error = '') {
     const box = document.getElementById('find-v2-guide-results');
     if (!box) return;
-    let rows;
-    try { rows = await DB.listGuideResults(adminPassword); }
-    catch (error) {
-      box.innerHTML = `<p class="welcome-status welcome-status-bad">Guide results: ${esc(error.message || error)}</p>`;
+    if (error) {
+      box.innerHTML = `<p class="welcome-status welcome-status-bad">Guide results: ${esc(error)}</p>`;
+      renderCharts(findRows || [], []);
       return;
     }
     const scored = rows.filter(row => row.score_verdict_correct != null);

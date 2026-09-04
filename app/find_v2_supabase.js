@@ -422,7 +422,7 @@
   // The queue designs the site can deal. An unknown value — a project written to by hand, or one
   // running a newer site than this browser — maps to the default rather than throwing: a welcome
   // screen that refuses to start is worse than a sitting dealt under the documented default.
-  const QUEUE_DESIGNS = ['balanced_2x2', 'legacy_find3'];
+  const QUEUE_DESIGNS = ['balanced_2x2', 'legacy_find3', 'guide_visual_4'];
   const DEFAULT_QUEUE_DESIGN = 'balanced_2x2';
 
   function queueDesignOf(row) {
@@ -434,6 +434,39 @@
     const value = Number(row?.task_limit_seconds);
     if (!Number.isFinite(value)) return DEFAULT_TASK_LIMIT_SECONDS;
     return Math.min(900, Math.max(30, Math.round(value)));
+  }
+
+  // 0 is off — plain round-robin. Anything else is the target number of COMPLETED sittings per
+  // `assignment_slot % 4` class, which is identically the target n of four Find cells and four
+  // Guide cells. A project that has not run supabase_v2_recruit_quota.sql answers 0.
+  function slotQuotaOf(row) {
+    const value = Number(row?.slot_quota);
+    if (!Number.isFinite(value)) return 0;
+    return Math.min(200, Math.max(0, Math.round(value)));
+  }
+
+  /**
+   * The per-cell task pins, normalized to an object keyed by design.
+   *
+   * A project that has not run supabase_v2_task_picker.sql answers with no column at all, which is
+   * the same answer as "nothing is pinned" — every cell falls back to the rotation its design
+   * already had. That is what makes the picker additive: applying the migration changes nothing
+   * until somebody actually chooses.
+   */
+  // 0 is "no delay", 500 is the default, and 5000 is a usability ceiling rather than a design limit.
+  // A project that has not run supabase_v2_task_picker.sql answers with the default, which is what
+  // the code would use anyway — so applying the migration does not change how the walk feels.
+  const DEFAULT_BROWSE_SIM_DELAY_MS = 500;
+
+  function browseSimDelayOf(row) {
+    const value = Number(row?.browse_sim_delay_ms);
+    if (!Number.isFinite(value)) return DEFAULT_BROWSE_SIM_DELAY_MS;
+    return Math.min(5000, Math.max(0, Math.round(value)));
+  }
+
+  function taskSelectionOf(row) {
+    const value = row?.task_selection;
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   }
 
   async function getStudyFlags() {
@@ -454,6 +487,17 @@
       // which is the crossed one — the same answer it will give once the migration lands, so the
       // study a participant is dealt does not change when the SQL is applied.
       queueDesign: DEFAULT_QUEUE_DESIGN,
+      // OFF, so a project that has not run the quota migration deals exactly the round-robin it
+      // dealt before. Recruiting to a target is a decision, not a default.
+      slotQuota: 0,
+      // NOTHING PINNED. An unmigrated project deals exactly the rotation it dealt before, so the
+      // picker cannot change a study by being deployed — only by being used.
+      taskSelection: {},
+      // ON, matching the column default: the migration exists to add the button, so a project that
+      // has run it wants it. A project that has NOT run it never reaches this — the flag only does
+      // anything on a non-grounded Guide task, and the code that reads it is deployed together.
+      allowBrowseSim: true,
+      browseSimDelayMs: DEFAULT_BROWSE_SIM_DELAY_MS,
     };
     let data;
     try { data = await rpc('pageguide_find_v2_study_flags', {}); }
@@ -469,6 +513,11 @@
       // Absent means on, matching the column default and the fallback above.
       flagMilestones: row.flag_milestones !== false,
       showReasoningTrail: row.show_reasoning_trail === true,
+      slotQuota: slotQuotaOf(row),
+      taskSelection: taskSelectionOf(row),
+      // Absent means on, matching the column default and the fallback above.
+      allowBrowseSim: row.allow_browse_sim !== false,
+      browseSimDelayMs: browseSimDelayOf(row),
     };
   }
 
@@ -499,7 +548,51 @@
     if (typeof flags?.showReasoningTrail === 'boolean') {
       body.p_show_reasoning_trail = flags.showReasoningTrail;
     }
-    const data = await rpc('save_pageguide_find_v2_flags', body);
+    // Same rule again: omitted rather than sent as 0, so a browser older than the column cannot
+    // switch the quota off by not knowing about it.
+    if (Number.isFinite(Number(flags?.slotQuota))) {
+      body.p_slot_quota = Math.round(Number(flags.slotQuota));
+    }
+    // Same rule once more. The Study settings tab has no opinion about the pins and the Study tasks
+    // tab has none about the switches, so each sends only what it owns — and a tab that stayed
+    // silent must never be read as having cleared the other's work.
+    if (flags?.taskSelection && typeof flags.taskSelection === 'object'
+      && !Array.isArray(flags.taskSelection)) {
+      body.p_task_selection = flags.taskSelection;
+    }
+    if (typeof flags?.allowBrowseSim === 'boolean') {
+      body.p_allow_browse_sim = flags.allowBrowseSim;
+    }
+    if (Number.isFinite(Number(flags?.browseSimDelayMs))) {
+      body.p_browse_sim_delay_ms = Math.round(Number(flags.browseSimDelayMs));
+    }
+    // WHAT POSTGREST SAYS WHEN THE PROJECT IS BEHIND THE BROWSER, translated.
+    //
+    // Functions are resolved BY ARGUMENT NAME, so a browser that sends `p_task_selection` to a
+    // project still holding the nine-argument writer does not get "unknown parameter" — it gets
+    // "Could not find the function public.save_pageguide_find_v2_flags(p_allow_browse_sim,
+    // p_browse_sim_delay_ms, …) in the schema cache", a list of twelve names with nothing in it
+    // saying which are new or what to do. Shown raw in the Admin status line, that reads as the
+    // panel being broken rather than as one SQL file not having been run.
+    //
+    // Caught HERE rather than in each tab: Study settings and Study tasks both write through this
+    // function, and both would have to carry the same translation. Re-thrown, never swallowed —
+    // retrying without the new parameters would report a save that half happened.
+    let data;
+    try {
+      data = await rpc('save_pageguide_find_v2_flags', body);
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (/Could not find the function/i.test(message) && /save_pageguide_find_v2_flags/.test(message)) {
+        const missing = ['p_task_selection', 'p_allow_browse_sim', 'p_browse_sim_delay_ms']
+          .filter(name => name in body);
+        throw new Error('This Supabase project has not been migrated for these settings yet — its '
+          + `save_pageguide_find_v2_flags does not take ${missing.join(', ') || 'these parameters'}. `
+          + 'Run supabase_v2_task_picker.sql in the project\'s SQL editor (it is idempotent, so '
+          + 'running it again is safe), then reload this page. Nothing was saved.');
+      }
+      throw error;
+    }
     const row = Array.isArray(data) ? data[0] : data;
     return {
       collectEvidence: !!row?.collect_evidence,
@@ -509,6 +602,10 @@
       showGroupChip: row?.show_group_chip === true,
       flagMilestones: row?.flag_milestones !== false,
       showReasoningTrail: row?.show_reasoning_trail === true,
+      slotQuota: slotQuotaOf(row),
+      taskSelection: taskSelectionOf(row),
+      allowBrowseSim: row?.allow_browse_sim !== false,
+      browseSimDelayMs: browseSimDelayOf(row),
     };
   }
 
@@ -562,6 +659,35 @@
     return Array.isArray(rows) ? rows : [];
   }
 
+  /**
+   * How many sittings each `assignment_slot % 4` class has started, completed, and has in flight.
+   *
+   * Read from the SESSIONS table, which the Results tab never sees: a sitting that pressed Start and
+   * submitted nothing leaves no result row at all, so a denominator built from results alone would
+   * report a completion rate of 100% and a recruitment plan built on it would be wrong by half.
+   *
+   * The same function the slot dealer calls, deliberately — the panel showing the standings and the
+   * claim acting on them must not carry two copies of the completeness rule.
+   *
+   * Returns an empty list on a project that has not run supabase_v2_recruit_quota.sql, so the panel
+   * can say so rather than throw inside the Results tab.
+   */
+  async function classCounts() {
+    let rows;
+    try { rows = await rpc('pageguide_find_v2_class_counts', {}); }
+    catch (e) { return []; }
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .map(row => ({
+        slotClass: Number(row?.slot_class),
+        started: Number(row?.started) || 0,
+        complete: Number(row?.complete) || 0,
+        inflight: Number(row?.inflight) || 0,
+      }))
+      .filter(row => Number.isInteger(row.slotClass) && row.slotClass >= 0 && row.slotClass <= 3)
+      .sort((a, b) => a.slotClass - b.slotClass);
+  }
+
   window.StudyDB = {
     supabaseConfigured,
     listStudyTasks,
@@ -576,11 +702,13 @@
     saveClaim,
     listResults,
     listGuideResults,
+    classCounts,
     saveVariantAnchors,
     getStudyFlags,
     saveStudyFlags,
     QUEUE_DESIGNS,
     DEFAULT_QUEUE_DESIGN,
+    DEFAULT_BROWSE_SIM_DELAY_MS,
     listStudyGuideTasks,
     listAllGuideTasks,
     getGuideTrajectory,

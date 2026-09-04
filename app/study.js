@@ -207,6 +207,24 @@ function taskInteractionSummary() {
   return taskTelemetry ? taskTelemetry.snapshot() : null;
 }
 
+/**
+ * The interaction summary with the browse simulator's usage folded in.
+ *
+ * IN `interaction_summary` RATHER THAN ITS OWN COLUMNS, deliberately. That column already holds
+ * everything about how a participant worked through a task — scrolling, selection, pointer travel —
+ * and the simulator is one more of those. A column per number would need a migration to answer the
+ * next question about it, and the questions are not settled yet.
+ *
+ * `browse_sim` is ABSENT on a grounded task and on a session that never had the button, and a zeroed
+ * object on one that had it and left it alone. See browseSimStats.
+ */
+function withBrowseSim(summary) {
+  let stats = null;
+  try { stats = window.Stimulus?.browseSimStats?.() || null; } catch (e) { /* no stimulus mounted */ }
+  if (!stats) return summary;
+  return { ...(summary || {}), browse_sim: stats };
+}
+
 function stopTaskTelemetry() {
   if (!taskTelemetry) return;
   taskTelemetry.stop();
@@ -744,13 +762,42 @@ function verdictClocks({ pane, radioName, submit, liveButton, onExpire, showErro
   const $ = (id) => pane.querySelector(`#${id}`);
   const verdict = () => pane.querySelector(`input[name="${radioName}"]:checked`)?.value || null;
 
+  /**
+   * The lock, ON THE BUTTON as well as above the radios.
+   *
+   * The button was already `disabled` for these five seconds and a click on it genuinely did
+   * nothing — but nothing SAID so. `.q-btn` had no disabled styling at all, so it stayed solid,
+   * kept `cursor: pointer` and still lit up on hover: a control that looks live, feels live, and
+   * silently swallows the click. The one place a participant is looking when they press Submit is
+   * the button, and the only explanation was a line of grey text further up the pane, next to the
+   * radios, which is not where they are looking.
+   *
+   * So the button counts itself down. The remaining seconds are the label, which makes the wait
+   * legible exactly where the click lands, and the original label is kept on the node so unlock can
+   * put it back without this function having to know whether it is driving Submit or Next.
+   */
+  const paintLock = (elapsed) => {
+    const left = Math.max(1, Math.ceil((ANSWER_LOCK_MS - elapsed) / 1000));
+    const el = $('q-answer-lock-s');
+    if (el) el.textContent = String(left);
+    const live = liveButton?.();
+    if (!live) return;
+    if (live.dataset.lockLabel == null) live.dataset.lockLabel = live.textContent;
+    live.textContent = `${live.dataset.lockLabel.replace(/\s*→\s*$/, '')} in ${left}s`;
+  };
+
   const unlock = () => {
     unlocked = true;
     pane.querySelectorAll(`input[name="${radioName}"]`).forEach(el => { el.disabled = false; });
     $('q-find-answer')?.classList.remove('is-locked');
     $('q-answer-lock')?.remove();
     const live = liveButton?.();
-    if (live) live.disabled = false;
+    if (!live) return;
+    live.disabled = false;
+    if (live.dataset.lockLabel != null) {
+      live.textContent = live.dataset.lockLabel;
+      delete live.dataset.lockLabel;
+    }
   };
 
   const enforce = (elapsed) => {
@@ -779,15 +826,17 @@ function verdictClocks({ pane, radioName, submit, liveButton, onExpire, showErro
     showError?.(`Time is up. Choose Yes or No now — ${left}s.`);
   };
 
+  // PAINTED ONCE, NOW, rather than waiting for the first tick. The task's interval runs every 250ms,
+  // so the button would otherwise spend a quarter of a second reading "Submit →" and looking ready —
+  // which is exactly the quarter second an impatient participant clicks in.
+  if (!unlocked) paintLock(0);
+
   return {
     /** Call once a tick from the task's own interval. */
     tick(elapsed) {
       if (!unlocked) {
         if (elapsed >= ANSWER_LOCK_MS) unlock();
-        else {
-          const el = $('q-answer-lock-s');
-          if (el) el.textContent = String(Math.max(1, Math.ceil((ANSWER_LOCK_MS - elapsed) / 1000)));
-        }
+        else paintLock(elapsed);
       }
       if (IS_FIND_V2) enforce(elapsed);
     },
@@ -1155,6 +1204,12 @@ async function showGuideV2Task(task, arm) {
     // and putting it above the record asks a participant to disconfirm a confident claim rather than
     // to check one. The journey, the two page states and the answer are what remains.
     sections: { trail: S.studyFlags().showReasoningTrail },
+    // THE WALK, AND HOW LONG ONE OF ITS PAGES TAKES TO COME UP. Offered in both arms — it is a
+    // constant of the study rather than part of what separates them; see the note above
+    // `allowBrowseSim` in app/stimulus.js. The delay is a study variable: it sets the cost of going
+    // to look, which is what the measure is about.
+    allowBrowseSim: S.studyFlags().allowBrowseSim,
+    browseSimDelayMs: S.studyFlags().browseSimDelayMs,
   });
   renderGuideV2Questions(task, record, arm);
 }
@@ -1322,7 +1377,7 @@ function renderGuideV2Questions(task, record, arm) {
       // Step marking now overlaps verdict formation by design, so there is no honest separate
       // localization duration. Total and verdict time remain recorded; the dedicated field is null.
       localizationElapsed: null,
-      interactionSummary: taskInteractionSummary(),
+      interactionSummary: withBrowseSim(taskInteractionSummary()),
     });
   };
 

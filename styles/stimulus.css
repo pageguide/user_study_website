@@ -370,7 +370,15 @@ body {
 .tv-pop {
   position: fixed;
   z-index: 40;
-  width: 460px;
+  /* 506px = 460 + 10%. The width is the only dial: the screenshot inside is `width: 100%` and keeps
+     its aspect ratio, so the card grows in both directions from this one number.
+
+     WHY IT IS WORTH THE SPACE. This card is the grounded arm — it is the whole of what "each step
+     can be checked against the page it was taken on" means in practice, and a participant checking
+     step 7 against a page of search results is reading UI text inside a downscaled screenshot. The
+     `max-width` below still holds it on screen in a narrow window, and `position` measures the
+     rendered box rather than assuming a size, so both keep working as this changes. */
+  width: 506px;
   max-width: calc(100vw - 16px);
   /* The last resort when a short window cannot hold the card at all: scroll inside it rather than
      off the bottom of a fixed element, where the picture would be unreachable. */
@@ -527,6 +535,40 @@ body {
   color: rgba(0, 0, 0, 0.75);
 }
 
+/* How to open a step, under the legend that says which steps are worth opening.
+
+   IN THE PRODUCT'S PURPLE, not the milestone amber and not grey. Amber is the flag's own colour and
+   would read as "this is more about milestones", which it is not — this line is about every journey
+   row. Grey was the first attempt and was the real problem: at 4% black it barely separated from the
+   white pane, so the sentence read as a footnote to the amber card above rather than as its own
+   instruction, and the one line telling a participant how to use the grounded arm was the quietest
+   thing in the panel.
+
+   Purple ties it to the word it highlights and to the step numbers and preview card that the click
+   actually opens, so the colour is doing the same job as the `click` in the sentence: this is the
+   interactive part. A touch stronger than the amber's 8%, because violet at the same alpha reads
+   lighter against white than orange does. */
+.tv-peek-legend {
+  background: rgba(120, 87, 255, 0.12);
+  color: rgba(0, 0, 0, 0.82);
+}
+
+/* Stacked, so the pair reads as two lines of one preamble rather than two separate notices. */
+.tv-key-legend + .tv-peek-legend {
+  margin-top: -4px;
+}
+
+/* THE VERB, IN THE PRODUCT'S PURPLE. The sentence is one instruction and the whole of it is the word
+   "click" — the rest is scaffolding. Colouring the verb rather than bolding the sentence keeps the
+   line quiet enough to sit above the journey without competing with it, and matches the purple the
+   step numbers and .tv-pop-title already use, so it reads as "this is the interactive part" rather
+   than as a warning. Weight as well as colour: purple alone is not a distinction for a reader who
+   cannot see it. */
+.tv-peek-word {
+  color: #5b3fd6;
+  font-weight: 700;
+}
+
 /* ── The before/after thumbnails ──────────────────────────────────────────────
    The picture itself, small, above the label. "Click to view" described a screenshot without
    showing that one was there, and these two cards — the quickest way to see whether the job got
@@ -559,4 +601,198 @@ body {
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
+}
+
+/* ── The browse simulator ─────────────────────────────────────────────────────
+   The non-grounded arm's one way back to the pages the agent saw: a button above the journey that
+   opens the run as a slideshow, one page state per step, walked with Back and Next.
+
+   IT LOOKS LIKE AN OFFER, NOT LIKE A MISSING PIECE. The pane it sits in is deliberately spare — the
+   condition is that the evidence is not beside each claim — so a button styled like a primary
+   action would read as "the page failed to load its screenshots, press here". Dashed border, muted
+   ground, and a subtitle that says what it costs: the pages are there, going through them is work.
+   That framing is part of the manipulation and not decoration; see app/stimulus.js. */
+.tv-browse-offer {
+  margin: 0 0 16px;
+}
+
+.tv-browse-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+  border: 1px dashed rgba(0, 0, 0, 0.28);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.02);
+  color: inherit;
+  font: inherit;
+}
+
+.tv-browse-open:hover {
+  border-color: rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, 0.045);
+}
+
+.tv-browse-icon {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.tv-browse-open-text { display: grid; gap: 2px; }
+.tv-browse-open-text b { font-size: 14px; }
+.tv-browse-open-text small { font-size: 12px; color: rgba(0, 0, 0, 0.6); }
+
+/* The walk itself. BELOW .tv-lightbox (z-index 60), because clicking the page on screen opens the
+   full-size view ON TOP of the walk rather than instead of it — a participant reading page 9 of 14
+   who wants a closer look must not lose their place to get it, and the lightbox dismisses itself on
+   a click outside without touching the walk underneath. */
+.tv-browse {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.tv-browse-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(1200px, 100%);
+  max-height: 100%;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.tv-browse-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.tv-browse-title { flex: 1 1 auto; }
+.tv-browse-pos { color: rgba(0, 0, 0, 0.55); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.tv-browse-close {
+  border: 0;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+/* How far through the run this page is. The position is also written out in words beside the
+   title — the bar is the glance, the count is the answer. */
+.tv-browse-bar { height: 3px; background: rgba(0, 0, 0, 0.08); }
+.tv-browse-bar-fill { display: block; height: 100%; background: #7857ff; transition: width .15s ease; }
+
+/* The picture scrolls inside its own box rather than growing the dialog: a tall page state would
+   otherwise push Back and Next off the bottom of the viewport, which is where they are needed. */
+.tv-browse-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  background: rgba(0, 0, 0, 0.03);
+  cursor: zoom-in;
+}
+
+.tv-browse-shot {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+}
+
+.tv-browse-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.tv-browse-caption {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.tv-browse-caption .tv-browse-url {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tv-browse-back,
+.tv-browse-next {
+  flex: 0 0 auto;
+  padding: 9px 16px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tv-browse-back:hover:not(:disabled),
+.tv-browse-next:hover:not(:disabled) { border-color: #7857ff; color: #5b3fd6; }
+
+/* Disabled at the ends rather than wrapping: a walk that loops has no beginning, and whether the
+   first page was reached is one of the two things the instrument measures. Also disabled for the
+   tenth of a second a page takes to come up — see .is-loading below. */
+.tv-browse-back:disabled,
+.tv-browse-next:disabled { opacity: .35; cursor: default; }
+
+/* THE PAGE COMING UP. A tenth of a second, so this has to read at a glance and must not flash: the
+   page being LEFT stays on screen and dims slightly while the bar goes indeterminate, which is what
+   a browser does. Anything more theatrical — a spinner, a blank frame — would be on screen for less
+   time than it takes to recognise, and would read as a fault. */
+.tv-browse.is-loading .tv-browse-viewport { cursor: progress; }
+
+.tv-browse.is-loading .tv-browse-shot {
+  opacity: .55;
+  transition: opacity .1s ease;
+}
+
+.tv-browse.is-loading .tv-browse-bar-fill {
+  background: linear-gradient(90deg, #7857ff 0%, #c9bcff 50%, #7857ff 100%);
+  background-size: 200% 100%;
+  animation: tv-browse-loading .4s linear infinite;
+}
+
+@keyframes tv-browse-loading {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+/* A tenth of a second of animation is motion nobody asked for. The dim stays — it is a state, not a
+   flourish — and the bar simply holds still. */
+@media (prefers-reduced-motion: reduce) {
+  .tv-browse.is-loading .tv-browse-shot { transition: none; }
+  .tv-browse.is-loading .tv-browse-bar-fill { animation: none; }
 }

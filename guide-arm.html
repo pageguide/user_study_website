@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Guide arm</title>
+  <!--
+    ONE ARM OF ONE GUIDE RUN, on its own, in a frame.
+
+    Admin → Guide arms shows the grounded and the non-grounded rendering of the same run SIDE BY
+    SIDE, and that is the reason this page exists rather than a second mount inside the panel:
+    app/stimulus.js keeps the mounted arm in module-level state (`arm`, `showShots`) and marks the
+    non-grounded condition with a class on `document.body`. Two mounts in one document therefore
+    share one arm — the second overwrites the first, the hovers and the lightbox read whichever
+    landed last, and `tv-nogrounding` is on for both panes or neither. What renders looks right and
+    behaves as one arm, which is the single worst outcome for a screen whose whole job is to show
+    the difference between two.
+
+    An iframe per arm gives each one its own document, its own body class and its own module state,
+    running the REAL renderer with no changes at all. The walkthrough tab already frames the live
+    task page for the same reason.
+
+    ADMIN-ONLY, and it writes nothing: it reads one published trajectory and renders it. There is no
+    session, no assignment slot and no result path on this page.
+
+        guide-arm.html?task=<id>&arm=grounding|nongrounding[&sim=1][&delay=500][&trail=1][&milestones=1]
+  -->
+  <link rel="stylesheet" href="styles/stimulus.css?v=find-v2-20260904a">
+  <link rel="stylesheet" href="styles/site.css?v=find-v2-20260904a">
+</head>
+<body class="guide-arm-body">
+  <main class="tv-main">
+    <header class="guide-arm-head">
+      <h1 class="guide-arm-goal" id="arm-goal">Loading…</h1>
+      <p class="guide-arm-meta"><span id="arm-count"></span><span id="arm-source"></span></p>
+    </header>
+    <section class="tv-stage" id="arm-stage">
+      <div class="tv-empty">Loading the trajectory…</div>
+    </section>
+  </main>
+
+  <script src="app/find_v2_config.js?v=find-v2-20260904a" onerror="window.__findV2ConfigMissing = true"></script>
+  <script src="app/markdown.js?v=find-v2-20260904a"></script>
+  <script src="app/find_citations.js?v=find-v2-20260904a"></script>
+  <script src="app/find_v2_variants.js?v=find-v2-20260904a"></script>
+  <script src="app/find_v2_guide_key.js?v=find-v2-20260904a"></script>
+  <script src="app/find_v2_supabase.js?v=find-v2-20260904a"></script>
+  <!-- The definition of the non-grounded arm. Without it a run whose `arms.nongrounding` was never
+       recorded renders as "no trajectory for this condition", which is a blank page where the
+       condition should be. See the same note in index.html. -->
+  <script src="vendor/guide_trajectories.js?v=find-v2-20260904a"></script>
+  <script src="app/stimulus.js?v=find-v2-20260904a"></script>
+  <script>
+    // Wrapped, like preview.html's block: scripts/check-page-scripts.mjs does not parse inline
+    // blocks, so a top-level `const` here would be invisible to the one check that catches a
+    // collision with app/stimulus.js.
+    (function () {
+      const params = new URLSearchParams(location.search);
+      const armName = params.get('arm') === 'nongrounding' ? 'nongrounding' : 'grounding';
+      const on = (name, fallback) => (params.has(name) ? params.get(name) !== '0' : fallback);
+      const stage = document.getElementById('arm-stage');
+      const goal = document.getElementById('arm-goal');
+      const count = document.getElementById('arm-count');
+      const source = document.getElementById('arm-source');
+
+      const fail = (message) => {
+        goal.textContent = 'Could not show this arm';
+        stage.innerHTML = `<div class="tv-empty">${String(message)
+          .replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]))}</div>`;
+      };
+
+      (async function () {
+        const id = params.get('task') || '';
+        if (!id) return fail('No task id in the URL.');
+        if (window.__findV2ConfigMissing || !window.StudyDB?.supabaseConfigured()) {
+          return fail('Find V2 is not connected to its Supabase project.');
+        }
+        let record;
+        try { record = await window.StudyDB.getGuideTrajectory(id); }
+        catch (error) { return fail(error.message || String(error)); }
+
+        window.Stimulus.mountStimulus(record, armName, { goal, count, stage }, {
+          trailFirst: true,
+          journeyCollapsed: false,
+          highlightMilestones: on('milestones', true),
+          sections: { trail: on('trail', false) },
+          // The simulator is the thing this tab is most often opened to look at, so it is ON here
+          // unless the caller says otherwise. It is offered in BOTH arms, so both panes of a
+          // side-by-side carry it — the difference the comparison is for is the per-step evidence,
+          // not the walk.
+          allowBrowseSim: on('sim', true),
+          // Carried from the study's own setting by whichever tab built this URL, so a researcher
+          // checking the walk is timing the walk a participant will get rather than a default.
+          browseSimDelayMs: Number(params.get('delay')),
+        });
+
+        // SAY WHETHER THIS ARM WAS RECORDED OR DERIVED. Most runs carry only a grounded arm and the
+        // non-grounded one is stripped from it at render — the definition of the arm, not a
+        // substitute for it, but a researcher comparing the two panes should know which they have.
+        const derived = armName === 'nongrounding' && !record?.arms?.nongrounding;
+        source.textContent = derived
+          ? ' · derived from the recorded grounded arm'
+          : ` · recorded ${armName === 'nongrounding' ? 'non-grounded' : 'grounded'} arm`;
+      }());
+    }());
+  </script>
+</body>
+</html>

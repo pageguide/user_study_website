@@ -178,12 +178,22 @@ project that has only ever run `supabase_find_v2.sql`, run these in order in the
 | `supabase_v2_faithfulness.sql` | `claims_completion`, which separates a false success from an honest failure |
 | `supabase_v2_arms.sql` | builds `arms` from what the recorder writes, so a recorded run is not a blank stimulus |
 | `supabase_v2_failure_mode.sql` | `failure_mode` on Guide results, and a publish gate that accepts both ground-truth dialects |
-| `supabase_v2_queue_design.sql` | `queue_design` — which of the two queues a sitting is dealt (see below) |
+| `supabase_v2_queue_design.sql` | `queue_design` — which queue a sitting is dealt (see below) |
 | `supabase_v2_group_chip.sql` | `show_group_chip` — whether a participant is told which group they are in (off by default) |
 | `supabase_v2_milestone_flag.sql` | `flag_milestones` — whether the Guide journey flags the trail's steps (on by default) |
 | `supabase_v2_reasoning_trail.sql` | `show_reasoning_trail` — whether a Guide task shows the agent's own account of the run (off by default) |
 | `supabase_v2_step_marks.sql` | `marked_wrong_steps` — step numbers a participant marks while reviewing a Guide task |
+| `supabase_v2_recruit_quota.sql` | `slot_quota` and `pageguide_find_v2_class_counts` — recruiting to a per-class target instead of plain round-robin (see below) |
+| `supabase_v2_task_picker.sql` | the `guide_visual_4` queue (four fixed Guide × Visual runs, no round robin), `task_selection` for the per-cell picker behind it, and `allow_browse_sim` / `browse_sim_delay_ms` for the browse simulator (see below). Safe to re-run: it drops each earlier arity of the flags writer before recreating it |
 | `supabase_v2_local_time.sql` | views that read `created_at` in Alabama local time — optional, changes no data |
+
+**"Could not find the function … in the schema cache"** on Save means exactly one thing: the browser
+is ahead of the project. PostgREST resolves functions **by argument name**, so a page that sends
+`p_task_selection` to a database still holding the nine-argument writer gets back a list of twelve
+parameter names and no hint which are new. Run the migration the message names — Admin now says which
+one instead of showing the raw error. Nothing is saved when this happens, and the app deliberately
+does not retry without the new fields: a save that half happened and reported success is worse than
+one that failed.
 
 Then, once per batch of imported runs:
 
@@ -194,7 +204,7 @@ node scripts/classify_guide_runs.mjs   # fill claims_completion from how each an
 
 ## Which queue a participant is dealt
 
-Two designs, chosen in **Admin → Study settings**, read once when a sitting starts and snapshotted
+Three designs, chosen in **Admin → Study settings**, read once when a sitting starts and snapshotted
 into the session — a switch flipped mid-run cannot make task 4 belong to a different experiment from
 task 1.
 
@@ -206,12 +216,311 @@ task 1.
 - **Three Find cells + one grounded Guide task** (`legacy_find3`) — what V2 shipped with. Find deals
   three of its four correctness × grounding cells (there is deliberately no correct-and-grounded Find
   task) and the Guide task is grounded only, so nothing in it estimates grounding for the Guide half.
+- **Four Guide × Visual runs** (`guide_visual_4`, added by `supabase_v2_task_picker.sql`) — four
+  tasks, all Guide, all visual, **the same four for everyone**:
+
+  | # | task | answer | condition |
+  | --- | --- | --- | --- |
+  | 1 | Guide × Visual | Correct | Grounded |
+  | 2 | Guide × Visual | Incorrect | Non-grounded |
+  | 3 | Guide × Visual | Correct | Non-grounded |
+  | 4 | Guide × Visual | Incorrect | Grounded |
+
+  **No round robin.** `assignment_slot` still numbers the sitting — it is the session's identity and
+  the recruitment counter's — but it no longer selects anything. No Find claim is dealt and there is
+  no text group, so correctness and grounding are both fully within-subjects and *every* cell's n is
+  simply the number of completed sittings. Nothing can be short of anything else, which is why
+  `slot_quota` has nothing left to level under this design.
+
+  The order is not correct / correct / incorrect / incorrect on purpose: consecutive tasks differ in
+  correctness, so nobody can settle into answering the same way twice or read task 3's answer off
+  task 2's.
+
+  What this design gives up is the thing the other two are built on. The stimulus is no longer
+  crossed with the condition, so **a difference between cells is a difference between four
+  particular runs as much as between four conditions**. The four have to be chosen to be comparable
+  by hand, which is what **Admin → Study tasks** is for, and per-cell accuracy has to be reported as
+  a claim about *these four runs*.
+
+### Admin → Study tasks — one screen for what the study is made of
+
+`in_study` already existed on both pools, but it lived at the bottom of two long authoring forms:
+deciding what the study *contains* meant opening eleven of them and holding the tally in your head.
+The **Study tasks** tab shows the set instead — both pools as checklists, the cells the current
+design deals, and which task fills each cell, with the gaps named before a participant finds them.
+
+**It lists only what the current design can actually deal.** Under `guide_visual_4` that means the
+Guide pool shows *only* `guide_visual` runs and the Find section is not drawn at all — both are
+choices that could not take effect, and a screen whose job is "decide what the study contains" must
+not present them, because ticking one and seeing nothing change is how somebody concludes the picker
+is broken. What is left out is counted and named rather than silently dropped ("2 Guide × Text runs
+are not listed…"), the rows are untouched in their own authoring tabs, and they come back the moment
+the design changes.
+
+Two kinds of decision, kept apart on the screen because they are different facts:
+
+- **In the pool** — `in_study` on the row. Under a rotating design this is the whole choice: the
+  queue walks whatever is live.
+- **In this cell** — a pin in `pageguide_find_v2_settings.task_selection`. Only a fixed design needs
+  one, though a rotating design accepts one too, where it overrides that cell and leaves the rotation
+  to fill the rest.
+
+`task_selection` is keyed **by design**, so switching designs to look at one does not throw the
+other's choices away:
+
+```json
+{ "guide_visual_4": ["ms9j3200", "…", "…", "…"],
+  "balanced_2x2":   { "A": [null, null, "…", null], "B": [ … ] } }
+```
+
+A missing or `null` entry means *not pinned* — that cell falls back to the rotation its design
+already had, so a half-filled selection degrades to the old behaviour rather than to a short queue.
+It is deliberately **not** a foreign key: untick a task and every pin to it goes stale, and a stale
+pin should show up in Admin as a named gap someone can fix, not as a write that fails at 2am. A cell
+whose pin no longer resolves is drawn in red and falls back; the tab also warns when one run would
+fill two cells, since a participant who reads the same trajectory twice has answered the second one
+before seeing it.
+
+Nothing is written until **Save** is pressed, and the pool writes go before the pins — a pin is only
+meaningful if the task it names is dealt, so a failure part-way leaves a pool that is right and pins
+that are still the old ones. Only rows that actually changed are written, and a claim is re-read in
+full first (`getClaim`) because the claim writer replaces the whole row and the list query leaves out
+`page_html`.
+
+### Admin → The four cells — the fixed queue, previewed as it is dealt
+
+**Only on the tab strip when `queue_design` is `guide_visual_4`**, and that is the point rather than
+a limitation: under a rotating design "the four tasks" is not a thing that exists, because the slot
+decides which run fills each cell, so the honest answer is per-participant and the screen could only
+lie about it. The fixed design is what makes *what is everyone about to see?* a question with one
+answer.
+
+Four collapsible cards, one frame open at a time, each rendered in **the arm that cell is actually
+dealt in** — cell 1 grounded, cell 2 non-grounded, and so on — with the Study settings switches
+applied, so it is the screen as it will be dealt rather than a neutral rendering of the material.
+Each card says whether its run is pinned or is the fallback (and, if a pin went stale, which pin),
+whether the browse simulator is offered there, and whether the run's own answer key disagrees with
+the cell's label. It resolves through `buildGuideVisualQueue`, the same function the study deals
+with, so a falling-back cell shows the run it will really fall back to rather than the one somebody
+meant to pin.
+
+This is not **Guide arms** with a filter. That tab takes *one* run and shows *both* arms, to study
+the difference between the conditions; nobody is ever shown that grid. This one shows the four
+screens a participant really meets, in order.
+
+### Admin → Guide arms — both conditions, side by side, both live
+
+The grounded and non-grounded arms of a Guide run *are* the independent variable, and everything that
+matters about them is a difference: which chips survive, which step rows lose their screenshot, what
+the answer says once its `[ev:…]` markers are stripped. Comparing them by changing a dropdown and
+remembering the first one is the one thing memory is worst at. This tab renders both at once, and
+both are fully live — hover a grounded step for its screenshot, press the non-grounded pane's
+simulate button and the walk opens. It is where the simulator gets checked before a participant meets
+it. Nothing on the screen is recorded.
+
+Each pane is an **iframe** over `guide-arm.html`, which is not a decoration: `app/stimulus.js` keeps
+the mounted arm in module-level state and marks the non-grounded condition with a class on
+`document.body`, so two mounts in one document silently become one arm shown twice — rendering
+correctly and behaving as a single arm, which is the worst possible outcome for a screen whose whole
+job is to show the difference. A frame each gives both panes their own document and their own copy of
+the renderer, unchanged.
+
+### Four classes, and why a class count is a cell n
+
+Under the crossed design `assignment_slot % 4` decides everything about a sitting. `slot % 2` picks
+the between-subjects modality (even = group A, text; odd = group B, visual) and
+`Math.floor(slot / 2) % 2` picks the correctness sequence, because `crossedCorrect` reads the
+cycle's **parity**. There are therefore **two** sequences, not four:
+
+| `slot % 4` | group | task 1 · Find | task 2 · Find | task 3 · Guide | task 4 · Guide |
+| --- | --- | --- | --- | --- | --- |
+| 0 | A · text | correct / grounded | incorrect / non-grounded | incorrect / grounded | correct / non-grounded |
+| 1 | A · visual | correct / grounded | incorrect / non-grounded | incorrect / grounded | correct / non-grounded |
+| 2 | B · text | incorrect / grounded | correct / non-grounded | correct / grounded | incorrect / non-grounded |
+| 3 | B · visual | incorrect / grounded | correct / non-grounded | correct / grounded | incorrect / non-grounded |
+
+Four consecutive slots fill every Find cell and every Guide cell exactly once, so two people cover
+the four Find cells and four people cover all sixteen cells of the study. The consequence worth
+holding on to:
+
+> **The number of completed sittings in a class is, identically, the n of four Find cells and four
+> Guide cells.** There is no separate Find recruitment and Guide recruitment — one number per class
+> levels both halves at once.
+
+Two things this design does *not* control, which belong in a write-up rather than in the counts:
+grounding is confounded with task order (the grounded task always precedes the non-grounded one
+within each task type), and a cell is confounded with its position (a correct-and-grounded Find
+trial is always task 1). Removing either means a reversed cell order — an eight-class design — which
+is not what is shipped.
+
+## What the arms differ in
+
+The grounded arm is the **checkable journey**, and everything that makes a step checkable travels
+together:
+
+| | Grounded | Non-grounded |
+| --- | --- | --- |
+| **Milestone flags** | the steps the trail narrates are marked, with a legend saying those can be checked instead of the whole journey | none |
+| **Hover a step** | the page it was looking at when it acted | nothing |
+| **Click a step** | that page full size, with a line under the legend saying so | nothing |
+| **Evidence chips in the answer** | numbered, and they open what the agent saw | none, and the `[ev:…]` markers are stripped from the prose |
+| **Before / after page states** | shown in **both** — the arms differ in whether each *action* can be checked, not in whether the outcome is known | |
+| **Steps, order, wording, answer, trail, browse simulator** | identical | |
+
+The milestone flags used to render in both arms. That made them a fifth thing the non-grounded
+participant was handed, and a signpost to a door that is not there: a flagged row they cannot open is
+a line of text like every other row, and the legend inviting them to "check these rather than viewing
+the entire journey" invited them to check something uncheckable. Moving the flags into the grounded
+bundle makes the manipulation wider than "the screenshots are missing", deliberately —
+`flag_milestones` still switches them off for the grounded arm when a condition wants the journey
+unmarked.
+
+## The browse simulator — the run as browsing, in both arms
+
+A Guide task shows what the agent did as a list of steps. `allow_browse_sim`
+(`supabase_v2_task_picker.sql`, **Admin → Study settings**, default on) adds a button above the
+journey that turns that list back into the browsing it describes — the run as a slideshow, one page
+state per step, walked with Back and Next, arrow keys as well as the buttons, and a click on the page
+for the full-size view without losing your place.
+
+**It is offered in both arms**, which makes it a constant of the study rather than part of what
+separates the conditions — see *What the arms differ in* below. That makes its usage a behavioural
+measure *directly comparable across the arms*, which it could never be while only one of them had the
+button: "did grounding change how much people went and looked?" is now a question the data can answer.
+
+**It opens on the last page and travels backwards.** The task is to judge a claim about an outcome,
+and the outcome is where the run ends: starting at page 1 asks a participant to replay the whole run
+forwards and hold it in their head until they reach something that bears on the answer, while
+starting at the end puts the state the agent is describing on screen first and makes every press of
+Back ask the question that matters — *how did it get here, and does that support what it said?* The
+buttons keep their ordinary meaning (Back is earlier in the run, Next is later), so opening at the
+end simply opens with Next spent and Back live; nothing is relabelled.
+
+**Each move takes `browse_sim_delay_ms`, 500ms by default** — the *How long a simulated page takes to
+load* field in Admin → Study settings, between 0 and 5000. Browsing is not instant, and at 0 the
+buttons scrub: a fourteen-step run empties in a second with no page on screen long enough to read.
+During the wait the page being *left* stays up and dims while the bar goes indeterminate, which is
+what a browser does; a press that lands inside it is **dropped, not queued**, so a held arrow key
+cannot bank up a dozen moves that play out after the key is released.
+
+It is a setting rather than a constant because it is the one number here that changes what the
+instrument *measures*. The walk's whole subject is the **cost of looking** — the difference between
+the evidence being available and being worth going to get — and that cost is mostly this number.
+Half a second a page is a guess until a pilot says otherwise, so it is a dial rather than a decision
+baked into the code.
+
+**It is a manipulation, not a convenience, and it is worth being blunt about what it does.** Opened
+and walked to the end, a non-grounded participant has seen every screenshot a grounded one was shown.
+What still differs is the **cost and the deliberateness**: grounding puts the evidence beside each
+claim, where checking one step is a hover; the simulator makes them decide to go and look, then find
+the step they want. The arms stay distinguishable, but "non-grounded" stops meaning "the evidence was
+unavailable" and starts meaning "the evidence was not to hand". That is a defensible condition and it
+is not the one V2 ran before the button, so it is switchable and its use is recorded.
+
+Two rules the renderer owns rather than its callers:
+
+- **The pictures come from the record, never from `arm`.** In the non-grounded arm `arm` is the
+  stripped copy and its step screenshots are all `null` by design. Un-stripping it to fill the
+  slideshow would put them back into the journey as well and quietly end the condition.
+- **The bookends are part of the walk, a screenshot-less step is not.** "Before the agent started"
+  and "after it finished" are already shown in both arms, so including them costs the condition
+  nothing — and a walk that ends at step 1 rather than at the opening state would stop short of the
+  comparison a participant is making. A step the recorder captured nothing for is skipped rather
+  than drawn blank.
+
+Usage lands in each Guide result row's `interaction_summary.browse_sim` — no new columns, because
+that column already holds everything about *how* a participant worked through a task and the
+questions about this one are not settled yet:
+
+```json
+{ "offered": true, "frames": 14, "opens": 1, "moves": 9,
+  "nearest_page": 1, "pages_back": 13, "reached_first": true, "first_open_ms": 8412 }
+```
+
+The three position fields are measured **backwards**, because that is the direction the walk runs.
+`nearest_page` is the earliest page reached, 1-based against `frames`: it equals `frames` for someone
+who opened the walk and never pressed Back, and `1` for someone who retraced the whole run.
+`pages_back` is the same fact as a count of pages actually walked, and `reached_first` is the
+all-the-way-back flag. They replace an earlier `furthest` / `reached_end` pair rather than
+reinterpreting it — the walk used to start at page 1 and those names meant the opposite thing, so
+keeping them would have left every row ambiguous about which direction it was recorded under.
+
+It is **absent** on any session the study did not offer the button to, and a **zeroed object** on one
+that had it and left it alone. Those are different facts and only the second is about the
+participant: a session that never pressed it judged the run from what was on the page, which is the
+condition the study ran before the button existed, and can be analysed as one.
+
+## Recruiting to a target
+
+The queue deals the four classes evenly. **Who finishes does not**, and plain round-robin preserves
+a shortfall rather than closing it: hand out 13–14 of each class, get back 7 / 4 / 9 / 8 completed
+sittings, and the Find × Visual correct-grounded cell sits at n = 4 beside a non-grounded neighbour
+at 8. Recruiting more people under round-robin keeps that ratio.
+
+`supabase_v2_recruit_quota.sql` adds `slot_quota`, the target number of **completed** sittings per
+class, set in **Admin → Study settings**. Above 0, `claim_pageguide_find_v2_session` deals the class
+furthest from the target instead of the next one in line, by skipping the counter forward to the next
+slot of that class. It never rewinds: `cycle = floor(slot / 2)` also picks *which* claims are dealt,
+so going backwards would re-deal the same stimuli to a later participant. The slots it skips belong
+to classes that are already over-filled. **0 is off** — plain round-robin, exactly as before.
+
+Under `guide_visual_4` this whole mechanism is **inert**: every sitting is dealt the same four runs,
+so every completed sitting is an n of 1 in all four cells and no class can be behind another. The
+setting is left switchable rather than removed, so that going back to a rotating design does not
+silently lose the target.
+
+A sitting started in the last 30 minutes and not yet finished counts as *in flight* and is subtracted
+from the deficit alongside the completers, so a group of people who press Start in the same minute
+are not all steered into the same class.
+
+**Admin → Results opens with a Recruitment balance panel** built on the same
+`pageguide_find_v2_class_counts()` the dealer calls — the panel that shows the standings and the
+claim that acts on them must not carry two copies of the completeness rule. It reports, per class,
+sittings started / completed / in flight, what is still owed, and how many people to run for it at
+the observed completion rate; then the Find and Guide per-cell n now and at target; then what the
+finished dataset looks like. It always counts completed sittings, whatever the "Completed sittings
+only" checkbox says, because a partial sitting fills no cell and counting one would under-state what
+is still needed. With no target set it levels every class up to the fullest one.
+
+The panel reads *started* from the sessions table rather than from the result rows, because a sitting
+that pressed Start and answered nothing leaves no result row at all — a completion rate computed from
+results alone would read 100%.
+
+Its last line is a cross-check rather than a count: `pickGuideFor` settles for a Guide run of the
+wrong correctness when a style's pool has none of the wanted one, which would unbalance the Guide
+half without moving any class count. Any cell that disagrees with its class is named. Recruiting
+cannot fix that one; authoring the missing run can.
 
 ## The walkthrough
 
 Offered once, before task 1, on a browser that has not seen it — and skippable from anywhere. Two
 practice tasks, one Find and one Guide, rendered by the study's own screens so what is rehearsed is
 the thing that comes next rather than a diagram of it. Each is followed by the answer and why.
+
+**A sitting that deals no Find task gets no Find practice.** Under `guide_visual_4` the walkthrough
+is one practice task, the intro card promising "a saved webpage" is not drawn, and every count that
+follows — the progress label, Back, and the "Done — start task 1" button — follows from the shorter
+queue. The rule it obeys is the one the milestone flag already obeys: a walkthrough must not teach a
+screen the study then withholds, and the Find practice would otherwise spend a participant's first
+two minutes on a layout, a question and a set of gestures they never meet again, leaving them
+waiting for a page that never arrives.
+
+The test is the **dealt queue**, not `queue_design`: "will this participant meet a Find task?" is
+answered directly by what they are about to be shown, and going via the design flag would be a second
+derivation of the same fact — one that reads wrong for a run resumed from a session saved before the
+design was recorded. The admin preview is the one case with no dealt queue (it builds none on
+purpose), so **Admin → Walkthrough** passes the design in the URL:
+`study.html?tutorial=preview&design=…`.
+
+**The verdict is locked for the first five seconds** of every Find V2 task (`ANSWER_LOCK_MS`). Yes/No
+is one click away from the moment a task opens, and a participant who wants to be finished can answer
+before the page has finished rendering — producing a row that looks like a judgment and is a coin
+flip. During the lock the radios are disabled, the Submit button is disabled, and **the button counts
+itself down** ("Submit in 3s"), because the one place someone is looking when they press Submit is the
+button. It used to say so only in a line of grey text beside the radios while the button itself stayed
+solid purple with a live hover and `cursor: pointer` — genuinely disabled, but looking and feeling
+pressable, so a click that did nothing read as the study being broken rather than as being early.
+`.q-btn:disabled` now has a muted state and the hover rules are gated on `:not(:disabled)`.
 
 On the Guide practice and every real Guide task, a small **Mark wrong** control is visible on every
 Journey row from the start. Participants can mark problems while reviewing, before choosing their
@@ -231,8 +540,13 @@ missing screenshot means you did something wrong.
 One verdict of each kind, deliberately: the Find practice is a correct answer and the Guide practice
 is a run that finishes, sounds certain, and reports a booking reference its own steps never produced.
 
-Admin → Study settings has **Preview the walkthrough** (`study.html?tutorial=preview`, which claims
-no assignment slot) and a button to clear the "already seen" mark on that browser.
+Admin → Study settings has **Preview the walkthrough** (`study.html?tutorial=preview&design=…`, which
+claims no assignment slot) and a button to clear the "already seen" mark on that browser.
+
+The walkthrough **does** rehearse the browse simulator, and gets it for free: both practice tasks are
+grounded, and the walk is offered in both arms, so the Guide practice carries the same button the
+real tasks do. That was not true when the button was non-grounded-only — the practice would have
+been silent about a control half the queue carries.
 
 Switching designs mid-study splits the collected rows into two experiments. `queue_design` defaults
 to the crossed design for every project, including one that has already collected sittings under the
@@ -279,6 +593,16 @@ The V2 schema creates three plainly separated data tables:
 The Admin **Results** tab summarizes verdict accuracy overall, by arm, and **by each of the four
 cells** — accuracy on a correct answer is the false-alarm rate, accuracy on an incorrect one is the
 catch rate, and grounding should move the second without moving the first.
+
+The same V2 Results tab merges Find and Guide rows by `session_id` to show how many participants
+submitted anything, how many completed all four V2 tasks, and how many stopped part-way. Completed
+means the same non-null session appears in both tables with task positions 0, 1, 2, and 3. Open
+**Filter out V2 participants** to uncheck individual sittings; every V2 summary, table, chart and
+significance test is redrawn without them. **Completed sittings only** is a standing filter that
+holds out every partial sitting and keeps doing so after a reload, so a cell's n cannot quietly grow
+by an abandoned session — it is the one to use before reading a rate, and the write-up should say
+which of the two counts a number came from. **Exclude all incomplete** does the same as a one-off
+edit, leaving individual sittings free to be re-admitted by hand. **Include everyone** clears both.
 
 `supabase_find_v2.sql` is safe to re-run: on a project that already ran an earlier version it adds
 the new columns and lifts each existing single answer into the matching variant, pinning that row's

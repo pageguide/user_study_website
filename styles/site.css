@@ -583,9 +583,27 @@ body {
   font: 800 14px/1.2 inherit;
   cursor: pointer;
 }
-.q-btn:hover { border-color: var(--accent); color: var(--accent-dark); }
+.q-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-dark); }
 .q-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.q-btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
+.q-btn-primary:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
+
+/* A DISABLED BUTTON HAS TO LOOK DISABLED.
+   This had no styling at all, which made the five-second opening lock read as a fault: Submit was
+   genuinely disabled and a click on it genuinely did nothing, but it stayed solid purple, kept
+   `cursor: pointer` and still lit up on hover. A control that looks live, feels live and silently
+   swallows the click is worse than one that is plainly not ready — the participant concludes the
+   study is broken rather than that they are early. The hover rules above are gated on :not(:disabled)
+   for the same reason: a button that brightens under the pointer is claiming to be pressable.
+   Muted rather than hidden, because the lock is temporary and the button reappearing would move the
+   layout underneath a pointer that is already on its way down. */
+.q-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  /* The countdown label is written into the button while it is locked (verdictClocks.paintLock), so
+     the digits must not jump the width around as they change. */
+  font-variant-numeric: tabular-nums;
+}
+.q-btn-primary:disabled { background: var(--accent); border-color: var(--accent); color: #fff; }
 /* An <a> that has to sit in a row of <button>s without looking like the odd one out. */
 .q-btn-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 
@@ -1598,6 +1616,149 @@ body {
   color: var(--muted);
   font: 600 12px/1.3 inherit;
 }
+.viz-participants {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fff;
+  overflow: hidden;
+}
+.viz-participant-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.viz-participant-stat {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 9px;
+  align-items: center;
+  padding: 12px 14px;
+  min-width: 0;
+  border-right: 1px solid var(--line);
+}
+.viz-participant-stat:last-child { border-right: 0; }
+.viz-participant-stat strong {
+  grid-row: 1 / 3;
+  color: var(--accent-dark);
+  font-size: 26px;
+  line-height: 1;
+}
+.viz-participant-stat span {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+.viz-participant-stat small {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.viz-participant-picker {
+  border-top: 1px solid var(--line);
+  background: rgba(0, 0, 0, .018);
+}
+.viz-participant-picker summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+  list-style-position: inside;
+}
+.viz-participant-picker summary small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.viz-participant-actions {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0 14px 10px;
+}
+.viz-participant-actions span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+/* The standing filter sits with the bulk actions but is not one — it holds its state, so it reads
+   as a control rather than a button. */
+.viz-participant-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card, #fff);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+.viz-participant-toggle input { margin: 0; cursor: pointer; }
+.viz-participant-toggle span { color: inherit; }
+.viz-participant-toggle small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+.viz-participant-toggle:has(input:checked) {
+  border-color: rgba(120, 87, 255, .55);
+  background: rgba(120, 87, 255, .085);
+}
+.viz-participant-toggle:has(input:disabled) { opacity: .55; cursor: default; }
+.viz-participant-toggle:has(input:disabled) input { cursor: default; }
+.viz-participant-list {
+  display: grid;
+  max-height: 270px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+.viz-participant-row {
+  display: grid;
+  grid-template-columns: auto minmax(80px, .7fr) minmax(110px, 1fr) minmax(150px, 1.2fr);
+  gap: 9px;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, .065);
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.viz-participant-row:last-child { border-bottom: 0; }
+.viz-participant-row:hover { background: rgba(120, 87, 255, .055); }
+.viz-participant-row.is-excluded {
+  background: rgba(192, 57, 47, .045);
+  opacity: .68;
+}
+.viz-participant-row input { margin: 0; }
+.viz-participant-row code {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
+}
+.viz-participant-progress { text-align: right; }
+.viz-participant-note {
+  margin: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+@media (max-width: 760px) {
+  .viz-participant-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .viz-participant-stat:nth-child(2) { border-right: 0; }
+  .viz-participant-stat:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
+  .viz-participant-row { grid-template-columns: auto 1fr 1fr; }
+  .viz-participant-progress { grid-column: 2 / -1; text-align: left; }
+}
 /* The verdict answers the research question in one line, and refuses to answer it at all
    while any cell is too thin to support the claim. */
 .viz-verdict {
@@ -2498,6 +2659,11 @@ body {
 @media (max-width: 620px) {
   .tut-kinds { grid-template-columns: 1fr; }
 }
+
+/* One card, when the study contains only Guide tasks. Left at a single column rather than stretched
+   across both: a lone card filling the full width reads as a banner, and the point of the card shape
+   is that it says "this is one KIND of task, and there may be others". */
+.tut-kinds.is-single { grid-template-columns: minmax(0, 1fr); max-width: 460px; }
 
 .tut-kind {
   border: 1px solid var(--line);
@@ -4115,4 +4281,236 @@ body.welcome-body { display: block; height: auto; }
   height: 78vh;
   min-height: 520px;
   border: 0;
+}
+
+/* ── Recruitment balance, at the top of the V2 Results tab ─────────────────────
+   Its job is to be read at a glance and acted on: which class is furthest behind, how many people
+   that is, and what the finished dataset looks like. The tables are narrower than the result table
+   below them, so the 900px floor `.viz-table` sets for that one is lifted here — a five-column
+   table stretched to 900px reads as a spreadsheet rather than as a standing. */
+.v2-recruit {
+  padding: 14px 16px 16px;
+  margin-bottom: 14px;
+}
+.v2-recruit .admin-subtitle { margin-top: 0; }
+.v2-recruit .viz-table-wrap { margin: 10px 0; background: #fff; }
+.v2-recruit-table { min-width: 0; }
+.v2-recruit-table caption {
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font: 700 11px/1.3 inherit;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* Row headers name a group or a quantity — sentence case, unlike the column headers above them. */
+.v2-recruit-table tbody th[scope="row"] {
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.v2-recruit-table td { font-variant-numeric: tabular-nums; }
+.v2-recruit-table .is-good { color: #0f6b43; font-weight: 700; }
+.v2-recruit-table .is-bad { color: var(--bad); font-weight: 800; }
+/* The class the dealer will hand out next. Marked because it is the one actionable row: everything
+   else on the table is context for this. */
+.v2-recruit-table .is-worst td,
+.v2-recruit-table .is-worst th { background: rgba(165, 32, 32, 0.06); }
+.v2-recruit-table .is-total td,
+.v2-recruit-table .is-total th {
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  background: rgba(0, 0, 0, 0.025);
+}
+/* Find beside Guide, because the point is that they are the same four numbers twice. They stack
+   below the width where two eight-row tables stop being comparable side by side. */
+.v2-recruit-cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0;
+}
+.v2-recruit-cells > table + table { border-left: 1px solid var(--line); }
+.v2-recruit .welcome-status-bad { margin-top: 10px; }
+
+/* ── Admin → Study tasks ──────────────────────────────────────────────────────
+   The picker. Two kinds of decision on one screen — what is in each pool, and what fills each cell
+   — so they are styled apart: the cell table is the narrow, deliberate one and gets the emphasis,
+   the pool checklists below it are long and read as lists. */
+.picker-cells select {
+  width: 100%;
+  min-width: 220px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.picker-cells tr.is-stale td { background: #fdf3f3; }
+
+.picker-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.picker-tick input { margin: 0; }
+
+/* ── Admin → Guide arms ───────────────────────────────────────────────────────
+   Both conditions of one run, at the same moment, both live. Side by side above 1000px and stacked
+   below it: the whole point is a comparison, and two 400px-wide panes side by side on a laptop show
+   neither well enough to compare. */
+.arms-tools {
+  align-items: center;
+  gap: 12px;
+}
+
+.arms-tools select {
+  min-width: 260px;
+  max-width: 420px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.arms-frames {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  margin: 12px 0 16px;
+}
+
+@media (min-width: 1000px) {
+  .arms-frames { grid-template-columns: 1fr 1fr; }
+}
+
+.arms-pane {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card);
+}
+
+.arms-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-bg);
+}
+
+.arms-frame {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  min-height: 480px;
+  border: 0;
+}
+
+/* ── guide-arm.html ───────────────────────────────────────────────────────────
+   The framed page itself. It is one pane of a comparison rather than a screen of its own, so it has
+   no chrome beyond the goal and a line saying whether this arm was recorded or derived. */
+.guide-arm-body {
+  margin: 0;
+  background: var(--panel-bg);
+}
+
+.guide-arm-head {
+  padding: 12px 16px 0;
+}
+
+.guide-arm-goal {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.guide-arm-meta {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ── Admin → The four cells ───────────────────────────────────────────────────
+   The fixed queue previewed as it is dealt: four cards, each collapsible, one frame open at a time.
+   A card reads top-down as the cell's identity — number, the two chips that ARE the condition, then
+   the run that fills it — because the question this screen answers is "what is in cell 2?", not
+   "which runs exist". */
+.cells-grid {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0 16px;
+}
+
+.cells-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  overflow: hidden;
+}
+
+.cells-card.is-open { border-color: var(--accent); }
+
+.cells-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  background: var(--panel-bg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cells-card.is-open .cells-head { background: #f3efff; }
+
+.cells-n {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cells-chips { flex: 0 0 auto; display: flex; gap: 6px; }
+.cells-title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 700; }
+.cells-toggle { flex: 0 0 auto; color: var(--muted); }
+
+.cells-note {
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+.cells-note:empty { display: none; }
+
+/* Named rather than merely coloured: a run whose answer key disagrees with the cell it fills is
+   scored against its own key, so the cell label is the thing that is wrong. */
+.cells-warn { color: var(--bad); }
+
+.cells-frame {
+  display: block;
+  width: 100%;
+  height: 62vh;
+  min-height: 440px;
+  border: 0;
+  border-top: 1px solid var(--line);
 }

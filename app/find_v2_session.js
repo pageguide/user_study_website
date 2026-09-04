@@ -32,7 +32,10 @@
     // keep the protocol it began with: an admin flipping a switch mid-session
     // would otherwise change what task 4 asks compared with task 3 of the same
     // participant, and the two would be indistinguishable in the results.
-    flags: { collectEvidence: false, collectFollowup: false, taskLimitSeconds: 120 },
+    flags: {
+      collectEvidence: false, collectFollowup: false, taskLimitSeconds: 120,
+      allowBrowseSim: true, browseSimDelayMs: 500,
+    },
   };
 
   /** The protocol switches for THIS run, normalized — booleans boolean, the limit in range. */
@@ -53,6 +56,23 @@
       flagMilestones: f.flagMilestones !== false,
       // Absent means off, for a resumed run as for a fresh one.
       showReasoningTrail: f.showReasoningTrail === true,
+      // Absent means on, matching the column default: a run resumed from a session saved before the
+      // simulator existed is a run under the old protocol, but the flag is about what the page
+      // OFFERS rather than about what was recorded, so it follows the study rather than the save.
+      allowBrowseSim: f.allowBrowseSim !== false,
+      // Clamped to the same bounds the column enforces, and defaulting the way the column does. A
+      // run resumed from a session saved before the setting existed gets today's value: there is no
+      // recorded delay to honour, so honouring the current one is the only honest option — the same
+      // reasoning as the per-task limit above.
+      browseSimDelayMs: Number.isFinite(Number(f.browseSimDelayMs))
+        ? Math.min(5000, Math.max(0, Math.round(Number(f.browseSimDelayMs))))
+        : 500,
+      // CARRIED, not dropped. saveLocal writes `flags: studyFlags()`, so anything this function
+      // omits is gone from the saved run — and the welcome screen reads `saved.flags.queueDesign` to
+      // decide whether a resumed run was dealt under the design now set. Omitting it made every
+      // saved run look stale, which put the "discard your answers" button in front of every
+      // participant who reloaded mid-sitting.
+      queueDesign: String(f.queueDesign || ''),
     };
   }
 
