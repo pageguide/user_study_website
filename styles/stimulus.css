@@ -616,40 +616,77 @@ body {
   margin: 0 0 16px;
 }
 
+/* SOLID AND LOUD, which it did not used to be.
+   It began dashed and near-transparent, on the reasoning that a primary-looking button in the
+   non-grounded arm would read as "the screenshots failed to load, press here to retry". That
+   reasoning retired with the arm gate: the walk is offered in BOTH arms now, so it is a standing
+   feature of every Guide task rather than an apology for a missing one, and the thing to avoid is no
+   longer looking too eager — it is being missed entirely. A control nobody presses measures nothing.
+
+   Note that this raises how often the walk is opened, and that IS a measured behaviour. It does not
+   confound the arm comparison, because the button is identical in both arms; it moves a baseline. */
 .tv-browse-open {
   display: flex;
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 12px 14px;
+  padding: 14px 16px;
   text-align: left;
   cursor: pointer;
-  border: 1px dashed rgba(0, 0, 0, 0.28);
+  border: 1px solid #4c2fb8;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.02);
-  color: inherit;
+  /* A SHADE DOWN FROM THE RAW ACCENT (#7857ff), and the reason is contrast rather than taste: the
+     subtitle sat at 3.88:1 against that lighter violet, under AA for 12.5px text, and a two-line
+     button whose second line is only legible over half its own width is not louder, just harder to
+     read. #6945f2 → #4f31c4 keeps the same hue and puts both lines clear of AA end to end. */
+  background: linear-gradient(135deg, #6945f2 0%, #4f31c4 100%);
+  color: #fff;
   font: inherit;
+  box-shadow: 0 4px 14px rgba(88, 62, 214, 0.32);
+  transition: box-shadow .15s ease, transform .15s ease, filter .15s ease;
 }
 
 .tv-browse-open:hover {
-  border-color: rgba(0, 0, 0, 0.45);
-  background: rgba(0, 0, 0, 0.045);
+  filter: brightness(1.07);
+  box-shadow: 0 7px 20px rgba(88, 62, 214, 0.42);
+  transform: translateY(-1px);
+}
+
+.tv-browse-open:active {
+  transform: translateY(0);
+  box-shadow: 0 3px 10px rgba(88, 62, 214, 0.35);
+}
+
+/* The keyboard route has to be as findable as the pointer one, and `filter` is not a focus ring. */
+.tv-browse-open:focus-visible {
+  outline: 3px solid rgba(88, 62, 214, 0.45);
+  outline-offset: 2px;
+}
+
+/* A lift and a brightness change are decoration; the colour is the information. Hold the shadow and
+   drop the motion for anyone who has asked for less of it. */
+@media (prefers-reduced-motion: reduce) {
+  .tv-browse-open { transition: none; }
+  .tv-browse-open:hover { transform: none; }
 }
 
 .tv-browse-icon {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
   border-radius: 50%;
-  font-size: 11px;
-  background: rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .tv-browse-open-text { display: grid; gap: 2px; }
-.tv-browse-open-text b { font-size: 14px; }
-.tv-browse-open-text small { font-size: 12px; color: rgba(0, 0, 0, 0.6); }
+.tv-browse-open-text b { font-size: 14.5px; }
+/* Not rgba(255,255,255,.75): over a gradient that lands near 4:1, which is under AA for small text.
+   A flat near-white keeps the subtitle readable across the whole sweep of the button. */
+.tv-browse-open-text small { font-size: 12.5px; color: #efeaff; line-height: 1.45; }
 
 /* The walk itself. BELOW .tv-lightbox (z-index 60), because clicking the page on screen opens the
    full-size view ON TOP of the walk rather than instead of it — a participant reading page 9 of 14
