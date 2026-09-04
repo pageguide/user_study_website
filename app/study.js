@@ -219,10 +219,19 @@ function taskInteractionSummary() {
  * object on one that had it and left it alone. See browseSimStats.
  */
 function withBrowseSim(summary) {
-  let stats = null;
-  try { stats = window.Stimulus?.browseSimStats?.() || null; } catch (e) { /* no stimulus mounted */ }
-  if (!stats) return summary;
-  return { ...(summary || {}), browse_sim: stats };
+  let sim = null;
+  let walk = null;
+  try {
+    sim = window.Stimulus?.browseSimStats?.() || null;
+    walk = window.Stimulus?.stepWalkStats?.() || null;
+  } catch (e) { /* no stimulus mounted */ }
+  if (!sim && !walk) return summary;
+  const out = { ...(summary || {}) };
+  if (sim) out.browse_sim = sim;
+  // Paging done after expanding a step, kept apart from the button's walk: two gestures, and this
+  // one exists in the grounded arm whether or not the study offers the simulator.
+  if (walk) out.step_walk = walk;
+  return out;
 }
 
 function stopTaskTelemetry() {

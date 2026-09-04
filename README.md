@@ -362,7 +362,7 @@ together:
 | --- | --- | --- |
 | **Milestone flags** | the steps the trail narrates are marked, with a legend saying those can be checked instead of the whole journey | none |
 | **Hover a step** | the page it was looking at when it acted | nothing |
-| **Click a step** | that page full size, with a line under the legend saying so | nothing |
+| **Click a step** | that page full size **and paged from there** — Back and Next walk the run without leaving the overlay, with no delay — plus a line under the legend saying so | nothing |
 | **Evidence chips in the answer** | numbered, and they open what the agent saw | none, and the `[ev:…]` markers are stripped from the prose |
 | **Before / after page states** | shown in **both** — the arms differ in whether each *action* can be checked, not in whether the outcome is known | |
 | **Steps, order, wording, answer, trail, browse simulator** | identical | |
@@ -374,6 +374,35 @@ the entire journey" invited them to check something uncheckable. Moving the flag
 bundle makes the manipulation wider than "the screenshots are missing", deliberately —
 `flag_milestones` still switches them off for the grounded arm when a condition wants the journey
 unmarked.
+
+### Expanding a step is a walk, not a dead end
+
+Clicking a step in the grounded journey used to open one picture in a lightbox: to see the step
+before it you closed the box, found the previous row, and clicked again. That is three gestures to
+answer *"and what did the page look like a moment earlier?"* — which is most of what checking a step
+consists of, since a screenshot means little except against the one beside it.
+
+It now opens the **same walker the simulate-browsing button uses**, positioned at the step that was
+clicked, so the pages either side are one press away. One walker behind both doors, because two
+overlays that page through the same screenshots with subtly different rules would be two sets of
+behaviour to keep in step, and the participant is not told which one they are in.
+
+**The step route has no delay, and that is not an inconsistency.** The button's delay *is* the study
+variable — the cost of going to look, deliberately imposed. Expanding a step is the grounded arm's
+own affordance, already paid for by the click, and the paging is just "and the one after that";
+charging half a second there would tax the condition rather than measure it. At zero the move is
+applied synchronously rather than deferred a tick, so the second half of an ordinary double-click is
+not thrown away by the drop-don't-queue rule that protects the delayed route.
+
+Paging done this way is recorded as `interaction_summary.step_walk` (`{opens, moves}`), **separate
+from `browse_sim`**. They are two gestures — "I am going to look through this run" versus "I want a
+closer look at this one" — and the step route exists in the grounded arm whether or not the study
+offers the simulator at all. Pooling them would let a study with the button switched off still report
+browse-simulator activity.
+
+An item that is not a step the walk contains — an evidence chip with no recorded step number, a
+before/after bookend opened from its own card — still opens the plain lightbox. A walk of one frame
+with both buttons dead would be a lightbox wearing a costume.
 
 ## The browse simulator — the run as browsing, in both arms
 

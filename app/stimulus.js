@@ -102,6 +102,15 @@ let browseStepMs = BROWSE_STEP_DEFAULT_MS;
 // "walked all the way to the first page" are not the same number.
 let browseSim = { opens: 0, steps: 0, nearest: Infinity, firstOpenMs: null, mountedAt: 0 };
 
+// THE SAME OVERLAY REACHED THE OTHER WAY, counted separately.
+//
+// Clicking a step in the grounded journey opens the run at that step and can be paged from there,
+// so the two entry points share every line of the walker. They are not the same gesture, though:
+// pressing the button is "I am going to go and look through this run", while expanding a step is "I
+// want a closer look at THIS one" and the paging is what happens once someone is already in there.
+// Pooling them would let a study that never offers the button still report browse_sim activity.
+let stepWalk = { opens: 0, steps: 0, mountedAt: 0 };
+
 function esc(value) {
   return String(value == null ? '' : value)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -150,6 +159,7 @@ function mountStimulus(record, armName, mount, options) {
   browseStepMs = Number.isFinite(delay)
     ? Math.min(5000, Math.max(0, Math.round(delay))) : BROWSE_STEP_DEFAULT_MS;
   browseSim = { opens: 0, steps: 0, nearest: Infinity, firstOpenMs: null, mountedAt: Date.now() };
+  stepWalk = { opens: 0, steps: 0, mountedAt: Date.now() };
   closeBrowseSim();
 
   if (!record) {
@@ -547,6 +557,25 @@ function previewFor(el) {
   return { shot: step.screenshot, title: `Step ${step.n}`, note: step.instruction || '', url: step.url || '' };
 }
 
+/**
+ * The step number an anchor points at, or null.
+ *
+ * The three attributes are the three ways a row or chip names a step — a journey row carries
+ * `data-step`, a trail milestone `data-ev-step`, and an answer chip only a key, whose evidence may
+ * or may not record which step it came from. Only a resolved number can open the walk at the right
+ * place; anything else falls back to the single-picture lightbox.
+ */
+function stepNumberOf(el) {
+  if (el.dataset.step != null) return Number(el.dataset.step);
+  if (el.dataset.evStep != null) return Number(el.dataset.evStep);
+  if (el.dataset.evKey != null) {
+    const hit = (arm.answer_evidence || []).find(ev =>
+      String(ev.key || '').trim().toLowerCase() === String(el.dataset.evKey).trim().toLowerCase());
+    if (hit?.step != null) return Number(hit.step);
+  }
+  return null;
+}
+
 /** Whether a milestone has anything to show — evidence naming its step, or the step's own picture. */
 function milestoneHasShot(step) {
   if (step == null) return false;
@@ -609,7 +638,7 @@ function bindPreviews() {
     pop.addEventListener('mouseenter', cancelHide);
     pop.addEventListener('mouseleave', scheduleHide);
     pop.addEventListener('click', (ev) => {
-      if (ev.target.closest('.tv-pop-shot')) openLightbox(item);
+      if (ev.target.closest('.tv-pop-shot')) openStepWalk(item, stepNumberOf(anchor));
     });
 
     document.body.appendChild(pop);
@@ -628,7 +657,9 @@ function bindPreviews() {
     // participant reaches the evidence behind a claim.
     if (e.isTrusted) reportReference(anchor, 'click');
     const item = previewFor(anchor);
-    if (item) { hideNow(); openLightbox(item); }
+    // OPENED AS A WALK, positioned at the step that was clicked, so the pages either side of it are
+    // one press away rather than a close-and-find-the-next-row away.
+    if (item) { hideNow(); openStepWalk(item, stepNumberOf(anchor)); }
   });
 }
 
@@ -787,6 +818,11 @@ function closeBrowseSim() {
   document.getElementById('pageguide-browse-sim')?.remove();
 }
 
+/** Where in the walk a given step number sits, or -1. */
+function walkIndexOfStep(frames, n) {
+  return frames.findIndex(frame => frame.step != null && Number(frame.step) === Number(n));
+}
+
 /**
  * Open the walk.
  *
@@ -795,26 +831,31 @@ function closeBrowseSim() {
  * and a participant who clicks slightly wide of the image on page 9 of 14 must not lose their place.
  * So this closes on the ✕ and on Escape, and on nothing else.
  */
-function openBrowseSim() {
-  const frames = browseSimFrames();
+/**
+ * Open the run at `start` and let it be paged.
+ *
+ * ONE WALKER, TWO DOORS. The simulate-browsing button opens it at the last page with a page load in
+ * front of every move; clicking a step in the grounded journey opens it AT THAT STEP with no delay
+ * at all. Everything else — the clamping at both ends, the arrow keys, the caption, the click for
+ * full size, what closes it — is the same, and had to stay the same: two overlays that page through
+ * the same screenshots with subtly different rules is two sets of behaviour to keep in step, and the
+ * participant is not told which one they are in.
+ *
+ * WHY THE STEP ROUTE HAS NO DELAY, and it is not an inconsistency. The button's delay is the study
+ * variable — it is the cost of going to look, deliberately imposed. Expanding a step is the grounded
+ * arm's own affordance, already paid for by the click, and the paging is just "and the one after
+ * that": charging half a second there would be taxing the condition rather than measuring it.
+ *
+ * `counter` is whichever tally this door keeps; see the note above `stepWalk`.
+ */
+function openWalk({ frames, start, delayMs, counter, onOpen }) {
   if (!frames.length) return;
   closeBrowseSim();
 
-  // IT OPENS ON THE LAST PAGE AND TRAVELS BACKWARDS.
-  //
-  // The task is to judge a claim about an outcome, and the outcome is where the run ENDS. Starting
-  // at the first page asks a participant to replay the whole run forwards and hold it in their head
-  // until they reach something that bears on the answer; starting at the end puts the state the
-  // agent is describing on screen first, and every press of Back asks the question that actually
-  // matters — how did it get here, and does that support what it said?
-  //
-  // The buttons keep their ordinary meaning: Back is earlier in the run, Next is later. So opening
-  // at the end opens with Next already spent and Back the live control, which is the affordance
-  // this reading of the run wants, with no relabelling and nothing to explain.
-  let index = frames.length - 1;
+  let index = Math.min(frames.length - 1, Math.max(0, start));
   let moving = false;
-  browseSim.opens += 1;
-  if (browseSim.firstOpenMs == null) browseSim.firstOpenMs = Date.now() - browseSim.mountedAt;
+  counter.opens += 1;
+  onOpen?.(index);
 
   const overlay = document.createElement('div');
   overlay.id = 'pageguide-browse-sim';
@@ -853,6 +894,19 @@ function openBrowseSim() {
     if (moving) return;
     const clamped = Math.min(frames.length - 1, Math.max(0, next));
     if (clamped === index) return;
+
+    // NO DELAY MEANS NO DELAY, not a deferred tick. The drop-don't-queue rule below is there to stop
+    // a held key scrubbing through a run that is meant to cost something per page; with the delay at
+    // zero there is nothing to protect, and deferring by even one macrotask opens a window in which
+    // the second half of an ordinary double-click is thrown away. The step route runs at zero.
+    if (delayMs <= 0) {
+      index = clamped;
+      counter.steps += 1;
+      if (counter.nearest !== undefined) counter.nearest = Math.min(counter.nearest, index);
+      paintBrowseSim(overlay, frames, index);
+      return;
+    }
+
     moving = true;
     overlay.classList.add('is-loading');
     overlay.querySelector('.tv-browse-back').disabled = true;
@@ -862,12 +916,12 @@ function openBrowseSim() {
       // node would be harmless; painting over a LATER task's overlay would not.
       if (document.getElementById('pageguide-browse-sim') !== overlay) return;
       index = clamped;
-      browseSim.steps += 1;
-      browseSim.nearest = Math.min(browseSim.nearest, index);
+      counter.steps += 1;
+      if (counter.nearest !== undefined) counter.nearest = Math.min(counter.nearest, index);
       overlay.classList.remove('is-loading');
       paintBrowseSim(overlay, frames, index);
       moving = false;
-    }, browseStepMs);
+    }, delayMs);
   };
 
   overlay.addEventListener('click', (event) => {
@@ -893,7 +947,50 @@ function openBrowseSim() {
 
   document.body.appendChild(overlay);
   paintBrowseSim(overlay, frames, index);
-  browseSim.nearest = Math.min(browseSim.nearest, index);
+  if (counter.nearest !== undefined) counter.nearest = Math.min(counter.nearest, index);
+}
+
+/**
+ * The simulate-browsing button: the whole run, from the end, with the page load.
+ *
+ * IT OPENS ON THE LAST PAGE AND TRAVELS BACKWARDS. The task is to judge a claim about an outcome,
+ * and the outcome is where the run ENDS. Starting at the first page asks a participant to replay the
+ * run forwards and hold it in their head until they reach something that bears on the answer;
+ * starting at the end puts the state the agent is describing on screen first, and every press of
+ * Back asks the question that actually matters — how did it get here, and does that support what it
+ * said? The buttons keep their ordinary meaning (Back is earlier, Next is later), so opening at the
+ * end opens with Next already spent and Back the live control, with nothing to relabel or explain.
+ */
+function openBrowseSim() {
+  const frames = browseSimFrames();
+  openWalk({
+    frames,
+    start: frames.length - 1,
+    delayMs: browseStepMs,
+    counter: browseSim,
+    onOpen: () => {
+      if (browseSim.firstOpenMs == null) browseSim.firstOpenMs = Date.now() - browseSim.mountedAt;
+    },
+  });
+}
+
+/**
+ * Expanding one step in the grounded journey — and then being able to page from it.
+ *
+ * A click on a step used to open a single picture in a dead-end lightbox: to see the step before it
+ * you closed the box, found the previous row, and clicked again. That is three gestures to answer
+ * "and what did the page look like a moment earlier?", which is the question checking a step
+ * actually consists of — a screenshot means little except against the one beside it.
+ *
+ * Falls back to the plain lightbox when this item is not a step the walk contains (an evidence chip
+ * with no step number, a state bookend opened from its own card). A walk of one frame with both
+ * buttons dead would be a lightbox wearing a costume.
+ */
+function openStepWalk(item, stepNumber) {
+  const frames = browseSimFrames();
+  const start = walkIndexOfStep(frames, stepNumber);
+  if (start < 0) return openLightbox(item);
+  openWalk({ frames, start, delayMs: 0, counter: stepWalk });
 }
 
 /** Guarded like bindHints, and for the same reason: the stage node can outlive one task. */
@@ -918,6 +1015,18 @@ function bindBrowseSim() {
  * property of one of them: "did grounding change how much people went and looked?" is a question
  * this can answer, and could not while only the non-grounded arm had the control.
  */
+/**
+ * Paging done from an expanded step, as opposed to from the button.
+ *
+ * Absent when nothing was expanded. Reported apart from `browse_sim` for the reason given above
+ * `stepWalk`: they are two gestures, and one of them exists in the grounded arm whether or not the
+ * study offers the simulator at all.
+ */
+function stepWalkStats() {
+  if (!stepWalk.opens) return null;
+  return { opens: stepWalk.opens, moves: stepWalk.steps };
+}
+
 function browseSimStats() {
   if (!allowBrowseSim) return null;
   const frames = browseSimFrames().length;
@@ -965,4 +1074,4 @@ function openLightbox(item) {
   document.body.appendChild(overlay);
 }
 
-window.Stimulus = { mountStimulus, stimulusSteps, browseSimStats, REFERENCE_DWELL_MS };
+window.Stimulus = { mountStimulus, stimulusSteps, browseSimStats, stepWalkStats, REFERENCE_DWELL_MS };
