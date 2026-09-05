@@ -23,7 +23,15 @@ const ANSWER_LOCK_MS = 5 * 1000;
 // file — the task page then never boots and both panes stay on "Loading…". Read off the viewer when
 // it is loaded so the two cannot drift; the literal is for the pages that show no trajectory.
 const REFERENCE_DWELL = window.Stimulus?.REFERENCE_DWELL_MS ?? 400;
-const VERDICT_GRACE_MS = 5 * 1000;
+// NO GRACE, AND NO AUTOMATIC SUBMISSION. The clock used to expire into a five-second countdown and
+// then submit the task with no verdict at all, which produced a third outcome — "unanswered" — that
+// nobody asked the instrument to collect: a row with no judgment in it, from a participant who was
+// still reading. It also moved the study on without them, which reads as the page having crashed.
+//
+// At the limit the task now simply stops asking for anything except the verdict and WAITS. Yes/No
+// stay on screen, the message says the clock is up, and nothing happens until a person clicks. What
+// the limit is for is comparability of reading time — `time_ms` still records the overrun — not
+// taking the answer away.
 let taskTelemetry = null;
 
 // The data source, chosen per task. demo.html sets window.STUDY_SOURCE to a local fixture bank
@@ -783,22 +791,71 @@ function answerCardHtml(answer, arm) {
 }
 
 /**
- * The task question, as one or two numbered parts.
+ * The task question, as a structured brief.
  *
- * These questions are two-hop by construction — find a thing in the prose, then read something off
- * the picture it points at — and the evidence prompts have always said "the first part" and "the
- * second part". The question itself was a single wall of three sentences, so a participant had to
- * work out where one part ended and the other began before they could start, under a clock.
+ * These questions are multi-part by construction — find a thing, then read something off what it
+ * points at, sometimes twice over — and a participant has to hold every requirement in their head
+ * while judging whether an agent met them. Written as one paragraph, their first job is working out
+ * where one requirement ends and the next begins, under a clock. Written as a list, the judgement
+ * becomes what it should be: a checklist run against a run.
  *
- * THE SPLIT IS AUTHORED, NOT GUESSED: one line per part in the claim's question field. A question
- * written as a single line still renders as a single paragraph, so nothing already authored changes
- * shape until somebody edits it.
+ * THE STRUCTURE IS AUTHORED, NOT GUESSED, and the syntax is what somebody types anyway:
+ *
+ *     I need to buy a pickleball paddle.              <- lead-in: any line before the first "1."
+ *     1. Check my Wednesday schedule.                 <- a numbered requirement
+ *     2. Browse Walmart's website and find:
+ *        A. The cheapest pink paddle                  <- a sub-requirement: A. a) - or *
+ *        B. The cheapest green paddle
+ *
+ * Nothing is inferred from prose: a question with no markers keeps the ORIGINAL behaviour, where one
+ * line is one part and a single line is a single paragraph — so every question already authored
+ * renders exactly as it did until somebody edits it.
+ *
+ * Indentation is ignored. It reads well in the Admin textarea and carries no meaning, because a
+ * syntax where invisible whitespace changes the instrument is a syntax that will eventually change
+ * it by accident.
  */
 function questionParts(question) {
   return String(question || '')
     .split(/\r?\n/)
     .map(part => part.trim())
     .filter(Boolean);
+}
+
+/** `1.` / `1)` / `Step 1.` at the head of a line — an authored requirement number. */
+const Q_NUMBERED = /^(?:step\s*)?(\d{1,2})\s*[.)]\s+(.*)$/i;
+/** `A.` / `a)` / `-` / `*` / `•` — an authored sub-requirement. */
+const Q_SUB = /^(?:([A-Za-z])\s*[.)]|[-*•])\s+(.*)$/;
+
+/**
+ * One authored question, as a tree: a lead-in, numbered items each with their own sub-items, and
+ * anything trailing.
+ *
+ * A sub-item before any numbered item is promoted to a numbered one. That is a malformed brief
+ * rather than a nested list with no parent, and losing the line entirely — or rendering a stray
+ * bullet floating at the top — are both worse than showing it as a requirement in its own right.
+ */
+function questionOutline(question) {
+  const lines = questionParts(question);
+  const out = { lead: [], items: [], trail: [] };
+  let started = false;
+  lines.forEach(line => {
+    const numbered = line.match(Q_NUMBERED);
+    if (numbered) {
+      started = true;
+      out.items.push({ value: Number(numbered[1]), text: numbered[2], subs: [] });
+      return;
+    }
+    const sub = line.match(Q_SUB);
+    if (sub) {
+      started = true;
+      if (!out.items.length) out.items.push({ value: null, text: sub[2], subs: [] });
+      else out.items[out.items.length - 1].subs.push(sub[2]);
+      return;
+    }
+    (started ? out.trail : out.lead).push(line);
+  });
+  return out;
 }
 
 /**
@@ -817,10 +874,33 @@ function questionParts(question) {
  * the two-asterisk pairs this function put there become markup.
  */
 function questionHtml(question) {
-  const parts = questionParts(question);
   const mark = (part) => esc(part).replace(/\*\*([^*]+)\*\*/g, '<b class="q-hinge">$1</b>');
-  if (parts.length < 2) return mark(parts[0] || '');
-  return `<ol class="q-task-parts">${parts.map(part => `<li>${mark(part)}</li>`).join('')}</ol>`;
+  const outline = questionOutline(question);
+
+  // NOTHING AUTHORED: the original rule, untouched. One line is one part; one line alone is a
+  // paragraph. Every question written before this syntax existed lands here.
+  if (!outline.items.length) {
+    const parts = questionParts(question);
+    if (parts.length < 2) return mark(parts[0] || '');
+    return `<ol class="q-task-parts">${parts.map(part => `<li>${mark(part)}</li>`).join('')}</ol>`;
+  }
+
+  // The author's own numbers are honoured with `value`, so a brief that starts at 2 — because its
+  // first requirement is in the lead-in — reads the way it was written rather than being silently
+  // renumbered by the browser.
+  // THE MARKER IS A CSS COUNTER, not the browser's own list numbering — see .q-task-parts, which
+  // draws it as a pill on a connector line. `value` alone would therefore be ignored, so an authored
+  // number that does not match its position also resets the counter.
+  const item = (it, i) => `
+    <li${Number.isFinite(it.value) ? ` value="${it.value}"${it.value === i + 1 ? ''
+      : ` style="counter-reset: q-part ${it.value - 1}"`}` : ''}>${mark(it.text)}${it.subs.length
+      ? `<ol class="q-task-subs" type="A">${it.subs.map(sub => `<li>${mark(sub)}</li>`).join('')}</ol>`
+      : ''}</li>`;
+
+  return `
+    ${outline.lead.map(line => `<p class="q-task-lead">${mark(line)}</p>`).join('')}
+    <ol class="q-task-parts">${outline.items.map(item).join('')}</ol>
+    ${outline.trail.map(line => `<p class="q-task-trail">${mark(line)}</p>`).join('')}`;
 }
 
 /**
@@ -848,10 +928,8 @@ function questionHtml(question) {
  *
  * THE WALKTHROUGH IS NOT. A practice task is where somebody learns what the journey is, what a
  * milestone flag means, that a step opens, and what "No" covers — and a countdown turns that into a
- * test of how fast they can read it. Worse, the cutoff fires: a practice run could be submitted with
- * no verdict, which teaches the participant that the study takes answers away from them before they
- * are ready, and does it in the one place where nothing is being measured and there is no reason to
- * hurry. The five-second opening lock STAYS in practice — that one is about reading before answering,
+ * test of how fast they can read it, over material that exists to be explored. The five-second
+ * opening lock STAYS in practice — that one is about reading before answering,
  * which is exactly what the practice exists to rehearse.
  *
  * Named here rather than tested inline in three places, because the timer chip, the cutoff and the
@@ -865,7 +943,6 @@ function taskIsTimed() {
 function verdictClocks({ pane, radioName, submit, liveButton, onExpire, showError, clearError }) {
   let unlocked = !IS_FIND_V2;   // V1 has never had an opening lock
   let deadline = 'running';     // running -> grace -> done
-  let expiredAt = null;
   const timed = taskIsTimed();
 
   const $ = (id) => pane.querySelector(`#${id}`);
@@ -913,16 +990,15 @@ function verdictClocks({ pane, radioName, submit, liveButton, onExpire, showErro
     if (deadline === 'done') return;
     if (deadline === 'running') {
       if (elapsed < window.TaskTimer.LIMIT_MS) return;
-      // A verdict already given is the thing the grace exists to obtain, so there is nothing left to
-      // wait for: submit what there is.
+      // A verdict already given is the thing the expiry exists to obtain, so there is nothing left
+      // to ask for: submit what there is.
       if (verdict()) { deadline = 'done'; return void submit(verdict()); }
-      deadline = 'grace';
-      expiredAt = Date.now();
+      deadline = 'expired';
       onExpire?.();
       window.QForm.markMissing($('q-find-answer'));
       try { $('q-find-answer')?.scrollIntoView({ block: 'center' }); } catch (e) { /* ignore */ }
     }
-    // Answering inside the grace is a real answer, not a timeout: the run simply carries on and the
+    // Answering after the limit is a real answer, not a timeout: the run simply carries on and the
     // clock goes back to being the soft overrun it always was.
     if (verdict()) {
       deadline = 'done';
@@ -930,9 +1006,11 @@ function verdictClocks({ pane, radioName, submit, liveButton, onExpire, showErro
       clearError?.();
       return;
     }
-    const left = Math.ceil((VERDICT_GRACE_MS - (Date.now() - expiredAt)) / 1000);
-    if (left <= 0) { deadline = 'done'; return void submit(null); }
-    showError?.(`Time is up. Choose Yes or No now — ${left}s.`);
+    // AND THEN IT WAITS, for as long as it takes. Repainted every tick rather than said once,
+    // because a participant who clicks elsewhere can clear the message and would otherwise be left
+    // on a task with no clock, no explanation and a highlighted question.
+    showError?.('Time is up for this task. Choose Yes or No below, then press Submit — '
+      + 'nothing moves on until you do.');
   };
 
   // PAINTED ONCE, NOW, rather than waiting for the first tick. The task's interval runs every 250ms,
@@ -984,11 +1062,10 @@ function verdictOptionsHtml(options, labelFor) {
  * of a run rather than per task. V1's protocol is fixed: its data is already collected, and a flag
  * that reached it would change what its rows mean.
  *
- * THE TIMER IS A HARD CUTOFF IN V2. app/instrument.js explains why the countdown was built soft;
- * that is still true of V1 and of the Guide instrument, which is why the cutoff lives here rather
- * than in TaskTimer. At 00:00 the participant is pushed back to the verdict and given
- * VERDICT_GRACE_MS to give one; a task that runs those out is submitted with no verdict at all,
- * which is a third outcome and is stored as one.
+ * THE TIMER EXPIRES INTO THE VERDICT IN V2. app/instrument.js explains why the countdown was built
+ * soft; that is still true of V1 and of the Guide instrument, which is why this behaviour lives here
+ * rather than in TaskTimer. At 00:00 anything past the verdict is folded away and the participant is
+ * pushed back to Yes/No — and then the task waits for them. Nothing is submitted on their behalf.
  *
  * AND THE VERDICT IS LOCKED FOR THE FIRST FEW SECONDS (ANSWER_LOCK_MS). Yes/No is one click away
  * from the moment the task opens, and a participant who wants to be finished can answer before the
@@ -1074,7 +1151,7 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
     showError,
     clearError,
     liveButton: () => (askEvidence ? $q('q-find-next') : $q('q-find-submit')),
-    // The evidence stage is past the verdict, and the grace only guards the verdict.
+    // The evidence stage is past the verdict, and the expiry only asks for the verdict.
     onExpire: () => {
       const stage = $q('q-support-stage');
       if (stage) stage.hidden = true;
@@ -1083,8 +1160,8 @@ function renderFindQuestions(task, canned, answer, arm, cites, groundTruth) {
   });
 
   // One countdown for the whole task — see window.TaskTimer in app/instrument.js for the three-minute
-  // budget. It ticks four times a second rather than once because the opening lock and the grace are
-  // both counted in it, and a second's lag on either reads as a frozen page.
+  // budget. It ticks four times a second rather than once because the opening lock is counted in it
+  // too, and a second's lag there reads as a frozen page.
   answerTimer = setInterval(() => {
     const elapsed = Date.now() - startedAt;
     if (taskIsTimed()) window.TaskTimer.paint(questionPane, elapsed);

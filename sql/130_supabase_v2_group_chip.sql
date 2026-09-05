@@ -1,6 +1,6 @@
 -- Find V2 — whether the participant is told which group they are in.
 -- ==================================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_queue_design.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/120_supabase_v2_queue_design.sql. Idempotent.
 --
 -- The task pane carries a "GROUP A · text" / "GROUP B · visual" chip beside the condition banner. It
 -- was added for the researcher's benefit — the counterbalancing half is invisible otherwise, and a
@@ -104,7 +104,7 @@ begin
 end;
 $$;
 
--- DROP THE FIVE-ARGUMENT VERSION. supabase_v2_queue_design.sql created
+-- DROP THE FIVE-ARGUMENT VERSION. sql/120_supabase_v2_queue_design.sql created
 -- save_pageguide_find_v2_flags(text, boolean, boolean, integer, text); a sixth parameter with a
 -- default makes an OVERLOAD rather than replacing it, and Postgres then refuses every five-argument
 -- call with "function ... is not unique". The six-argument one serves those calls itself, since

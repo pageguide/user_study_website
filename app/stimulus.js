@@ -454,7 +454,7 @@ function render() {
   // check the marked steps INSTEAD OF the whole journey. That is licence to stop reading, and the
   // steps it licenses stopping at are the ones the agent CHOSE to narrate — which for a misreported
   // run is exactly where the discrepancy is not. Switchable per study (flag_milestones) so a
-  // condition can be run without it; see supabase_v2_milestone_flag.sql.
+  // condition can be run without it; see sql/140_supabase_v2_milestone_flag.sql.
   const keySteps = new Set(milestones.map(m => Number(m.step)).filter(n => Number.isFinite(n)));
 
   // GROUNDED ONLY. The flags used to render in both arms, which made them a fifth thing the

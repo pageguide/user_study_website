@@ -1,6 +1,6 @@
 -- Find V2 — whether a Guide task shows the agent's reasoning trail.
 -- =================================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_milestone_flag.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/140_supabase_v2_milestone_flag.sql. Idempotent.
 --
 -- The Guide stimulus carries two accounts of the same run. The VIEW JOURNEY is the record: every
 -- action the agent took, in order, each one checkable against the page it was taken on. The

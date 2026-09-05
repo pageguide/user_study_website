@@ -1,7 +1,7 @@
 -- Find V2 — build `arms` from what the recorder actually writes.
 -- =============================================================
--- Run once in the SQL editor of the V2 project, LAST — after supabase_v2_init.sql,
--- supabase_v2_guide.sql and supabase_v2_faithfulness.sql, whose `claims_completion` column the
+-- Run once in the SQL editor of the V2 project, LAST — after sql/000_supabase_v2_init.sql,
+-- sql/020_supabase_v2_guide.sql and sql/040_supabase_v2_faithfulness.sql, whose `claims_completion` column the
 -- meta writer below depends on. Idempotent: re-running changes nothing already correct.
 --
 -- THE BUG THIS FIXES. app/stimulus.js — a port of the extension's trajectory viewer — reads
@@ -130,7 +130,7 @@ comment on function public.pageguide_v2_guide_arms(jsonb, jsonb, text) is
 
 
 -- ── The writer, with `arms` added ───────────────────────────────────────────
--- Identical to the definition in supabase_v2_init.sql except that `arms` is now derived and stored
+-- Identical to the definition in sql/000_supabase_v2_init.sql except that `arms` is now derived and stored
 -- alongside the legacy columns. Recomputed on every write rather than only when missing: `arms` is a
 -- projection of two columns that this same statement is updating, and a derived value that is only
 -- filled once is a derived value that goes stale.
@@ -238,7 +238,7 @@ grant execute on function public.save_pageguide_guide_v2_task(text, jsonb) to an
 -- (pageguide_v2_assert_authored) were never on the path that published them, and a run with an
 -- empty `arms` went live and played as an empty page.
 --
--- Redefined here with the same 7-argument signature supabase_v2_faithfulness.sql gave it, plus one
+-- Redefined here with the same 7-argument signature sql/040_supabase_v2_faithfulness.sql gave it, plus one
 -- rule: a task cannot go live unless the player has an answer and at least one step to show. Refused
 -- in the function rather than in the browser, for the same reason every other rule here is — a stale
 -- tab or a hand-made request must not be able to publish a blank stimulus.
@@ -282,7 +282,7 @@ begin
 
     if coalesce(v_arm ->> 'answer', '') = ''
        or coalesce(jsonb_array_length(v_arm -> 'steps'), 0) = 0 then
-      raise exception 'This task has nothing for the player to show — app/stimulus.js reads arms.grounding.{steps, answer}, and this row has neither. Run supabase_v2_arms.sql (it derives them from the recorded trajectory and the authored answer), then try again.';
+      raise exception 'This task has nothing for the player to show — app/stimulus.js reads arms.grounding.{steps, answer}, and this row has neither. Run sql/030_supabase_v2_arms.sql (it derives them from the recorded trajectory and the authored answer), then try again.';
     end if;
   end if;
 

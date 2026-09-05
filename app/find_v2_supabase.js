@@ -220,7 +220,7 @@
     'guide_ground_truth',
   ];
   const GUIDE_LIST_COLUMNS = GUIDE_LIST_BASE.concat('claims_completion').join(',');
-  // Retried without it when supabase_v2_faithfulness.sql has not been applied yet: the panel is more
+  // Retried without it when sql/040_supabase_v2_faithfulness.sql has not been applied yet: the panel is more
   // useful missing one chip than refusing to open.
   const GUIDE_LIST_FALLBACK = GUIDE_LIST_BASE.join(',');
 
@@ -228,7 +228,7 @@
     try { return await get(`pageguide_guide_v2_tasks?select=${GUIDE_LIST_COLUMNS}${where}`); }
     catch (e) {
       if (!/claims_completion/.test(e?.message || '')) throw e;
-      console.warn('[find-v2] claims_completion is missing; run supabase_v2_faithfulness.sql');
+      console.warn('[find-v2] claims_completion is missing; run sql/040_supabase_v2_faithfulness.sql');
       return get(`pageguide_guide_v2_tasks?select=${GUIDE_LIST_FALLBACK}${where}`);
     }
   }
@@ -263,7 +263,7 @@
    * The guide tasks a queue may be built from: live, and actually judged.
    *
    * NEVER THROWS, for the same reason getStudyFlags does not. A project that has not had
-   * supabase_v2_guide.sql applied answers "no guide tasks", and the Find half of the study still
+   * sql/020_supabase_v2_guide.sql applied answers "no guide tasks", and the Find half of the study still
    * runs — the welcome screen already says which group is short of what. Failing hard here took the
    * whole welcome screen down over a table the participant may not even reach.
    */
@@ -312,6 +312,36 @@
     return row;
   }
 
+  /**
+   * The step list — visible and hidden — WITHOUT the screenshots.
+   *
+   * `hidden_steps` carries a full base64 image per entry, so reading the column to find out what is
+   * hidden would move hundreds of kilobytes to render three lines of text. The function returns the
+   * same shape the writer returns, so Admin renders the same list before and after an edit.
+   */
+  async function listGuideSteps(id) {
+    const rows = await rpc('pageguide_guide_v2_step_list', { p_id: id });
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  /**
+   * Hide, restore or delete steps of a run — see sql/190_supabase_v2_guide_steps.sql.
+   *
+   * `steps` are the numbers as they READ NOW: display numbers for hide and delete, and the "was
+   * step N" of a hidden entry for show. One operation per call, because the three cannot be composed
+   * safely — a hide and a restore in one request would each be numbering against a list the other
+   * has changed.
+   */
+  async function saveGuideSteps(password, id, op, steps) {
+    const list = (Array.isArray(steps) ? steps : [steps])
+      .map(Number).filter(n => Number.isInteger(n) && n > 0);
+    if (!list.length) throw new Error('No steps selected.');
+    const rows = await rpc('save_pageguide_guide_v2_steps', {
+      p_password: password, p_id: id, p_op: op, p_steps: list,
+    });
+    return Array.isArray(rows) ? rows : [];
+  }
+
   /** The journey, screenshots and all. Heavy, and only ever loaded on a deliberate click. */
   async function getGuideSteps(id) {
     const rows = await get('pageguide_guide_v2_tasks'
@@ -354,6 +384,11 @@
       p_in_study: !!meta.inStudy,
       p_task_index: Number.isFinite(Number(meta.taskIndex)) ? Number(meta.taskIndex) : null,
       p_claims_completion: typeof meta.claimsCompletion === 'boolean' ? meta.claimsCompletion : null,
+      // The name and the instruction — see sql/180_supabase_v2_guide_name.sql. Sent as null when the caller
+      // has no opinion, which the function reads as "leave it alone" rather than "clear it", so an
+      // older Admin build cannot blank a name it does not know how to show.
+      p_title: typeof meta.title === 'string' ? meta.title : null,
+      p_goal: typeof meta.goal === 'string' ? meta.goal : null,
     });
   }
 
@@ -412,12 +447,12 @@
    * Falls back to both-off on ANY failure — an unmigrated project, an offline
    * moment, a function that was never granted. The fallback is the default
    * protocol rather than a thrown error on purpose: a researcher who has not
-   * run supabase_v2_flags.sql yet gets the short study, not a welcome screen
+   * run sql/010_supabase_v2_flags.sql yet gets the short study, not a welcome screen
    * that refuses to start.
    */
   // Two minutes, matching the column default — what a project answers before
-  // supabase_v2_task_limit.sql has been applied and the RPC returns no such field.
-  const DEFAULT_TASK_LIMIT_SECONDS = 120;
+  // sql/110_supabase_v2_task_limit.sql has been applied and the RPC returns no such field.
+  const DEFAULT_TASK_LIMIT_SECONDS = 180;
 
   // The queue designs the site can deal. An unknown value — a project written to by hand, or one
   // running a newer site than this browser — maps to the default rather than throwing: a welcome
@@ -438,7 +473,7 @@
 
   // 0 is off — plain round-robin. Anything else is the target number of COMPLETED sittings per
   // `assignment_slot % 4` class, which is identically the target n of four Find cells and four
-  // Guide cells. A project that has not run supabase_v2_recruit_quota.sql answers 0.
+  // Guide cells. A project that has not run sql/160_supabase_v2_recruit_quota.sql answers 0.
   function slotQuotaOf(row) {
     const value = Number(row?.slot_quota);
     if (!Number.isFinite(value)) return 0;
@@ -448,13 +483,13 @@
   /**
    * The per-cell task pins, normalized to an object keyed by design.
    *
-   * A project that has not run supabase_v2_task_picker.sql answers with no column at all, which is
+   * A project that has not run sql/170_supabase_v2_task_picker.sql answers with no column at all, which is
    * the same answer as "nothing is pinned" — every cell falls back to the rotation its design
    * already had. That is what makes the picker additive: applying the migration changes nothing
    * until somebody actually chooses.
    */
   // 0 is "no delay", 500 is the default, and 5000 is a usability ceiling rather than a design limit.
-  // A project that has not run supabase_v2_task_picker.sql answers with the default, which is what
+  // A project that has not run sql/170_supabase_v2_task_picker.sql answers with the default, which is what
   // the code would use anyway — so applying the migration does not change how the walk feels.
   const DEFAULT_BROWSE_SIM_DELAY_MS = 500;
 
@@ -486,9 +521,9 @@
       // has not run the migration yet must not rehearse a screen the study then withholds.
       flagMilestones: true,
       // OFF. The trail is the agent's own account of the run, not evidence about it — see
-      // supabase_v2_reasoning_trail.sql for why it frames the judgement rather than informing it.
+      // sql/150_supabase_v2_reasoning_trail.sql for why it frames the judgement rather than informing it.
       showReasoningTrail: false,
-      // A project that has not run supabase_v2_queue_design.sql answers with the default design,
+      // A project that has not run sql/120_supabase_v2_queue_design.sql answers with the default design,
       // which is the crossed one — the same answer it will give once the migration lands, so the
       // study a participant is dealt does not change when the SQL is applied.
       queueDesign: DEFAULT_QUEUE_DESIGN,
@@ -604,7 +639,7 @@
           .filter(name => name in body);
         throw new Error('This Supabase project has not been migrated for these settings yet — its '
           + `save_pageguide_find_v2_flags does not take ${missing.join(', ') || 'these parameters'}. `
-          + 'Run supabase_v2_task_picker.sql in the project\'s SQL editor (it is idempotent, so '
+          + 'Run sql/170_supabase_v2_task_picker.sql in the project\'s SQL editor (it is idempotent, so '
           + 'running it again is safe), then reload this page. Nothing was saved.');
       }
       throw error;
@@ -645,7 +680,7 @@
    * One variant's citation anchors, and — only when a reference was deleted — its answer text.
    *
    * `p_answer_text` is omitted entirely when null rather than sent as null, so a project that has
-   * not run supabase_v2_answer_edit.sql still resolves the 4-argument overload and re-linking keeps
+   * not run sql/080_supabase_v2_answer_edit.sql still resolves the 4-argument overload and re-linking keeps
    * working. Deleting a reference on such a project fails loudly, which is the right way round: the
    * alternative is an answer that still shows a citation the anchors no longer have.
    */
@@ -686,7 +721,7 @@
    * The same function the slot dealer calls, deliberately — the panel showing the standings and the
    * claim acting on them must not carry two copies of the completeness rule.
    *
-   * Returns an empty list on a project that has not run supabase_v2_recruit_quota.sql, so the panel
+   * Returns an empty list on a project that has not run sql/160_supabase_v2_recruit_quota.sql, so the panel
    * can say so rather than throw inside the Results tab.
    */
   async function classCounts() {
@@ -732,6 +767,8 @@
     getGuideInspect,
     getGuideSteps,
     saveGuideMeta,
+    listGuideSteps,
+    saveGuideSteps,
     saveGuideProblems,
     insertGuideResult,
   };

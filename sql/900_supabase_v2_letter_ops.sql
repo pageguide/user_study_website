@@ -40,7 +40,7 @@ create table if not exists public.pageguide_find_v2_claims_backup_letter_ops as
   where id in ('EDU-v1', 'MARS-v1', 'MUFC-V1-TEXT', 'HARRY-v1', 'NVIDA-V1', 'PEDANT-V1');
 
 comment on table public.pageguide_find_v2_claims_backup_letter_ops is
-  'The four claims as they stood before supabase_v2_letter_ops.sql replaced their alphabet arithmetic. Restore instructions are at the bottom of that file.';
+  'The four claims as they stood before sql/900_supabase_v2_letter_ops.sql replaced their alphabet arithmetic. Restore instructions are at the bottom of that file.';
 
 -- ── MARS-v1 · sum of positions → alphabetical order ──────────────────────────────────────────────
 

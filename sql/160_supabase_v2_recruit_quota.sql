@@ -1,6 +1,6 @@
 -- Find V2 — a recruitment quota, so a shortfall can actually be recruited away.
 -- ============================================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_reasoning_trail.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/150_supabase_v2_reasoning_trail.sql. Idempotent.
 --
 -- WHAT THIS FIXES. `assignment_slot % 4` decides everything about a sitting: `slot % 2` picks the
 -- between-subjects modality (even = A/text, odd = B/visual) and `floor(slot / 2) % 2` picks which of

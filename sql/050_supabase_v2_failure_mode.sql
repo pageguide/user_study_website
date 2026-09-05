@@ -1,6 +1,6 @@
 -- Find V2 — WHY a Guide run is incorrect, recorded beside the verdict.
 -- ===================================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_arms.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/030_supabase_v2_arms.sql. Idempotent.
 --
 -- The Guide task asks one question and stores one verdict. The runs it asks about fail two ways,
 -- and the difference is the one the study is built on:
@@ -43,7 +43,7 @@ comment on column public.pageguide_guide_v2_results.failure_mode is
 -- TWO DIALECTS OF guide_ground_truth ARE LIVE, and the schema comment describes neither. Runs
 -- migrated from V1 carry `correctness: 'success' | 'failure'` with `errors: [{type, steps: [..]}]`;
 -- runs saved by the extension recorder carry `correct: boolean`. The comment in
--- supabase_v2_init.sql claims a `correct` key with problem ids ("wrong_element") and an error shape
+-- sql/000_supabase_v2_init.sql claims a `correct` key with problem ids ("wrong_element") and an error shape
 -- ({step, type}) that appear nowhere in the data. Anyone reading it to write a query gets a query
 -- that silently matches half the pool.
 comment on column public.pageguide_guide_v2_tasks.guide_ground_truth is
@@ -58,9 +58,9 @@ comment on column public.pageguide_guide_v2_tasks.guide_ground_truth is
 -- than through this function; corrected anyway, because the next person to publish a migrated row
 -- through Admin would hit it with no idea why.
 --
--- Redefined whole rather than patched, following supabase_v2_guide.sql -> _faithfulness.sql ->
--- _arms.sql: each migration restates the function it changes, so the newest file is always the
--- complete definition. Identical to supabase_v2_arms.sql apart from the check below.
+-- Redefined whole rather than patched, following sql/020_supabase_v2_guide.sql -> 040_…_faithfulness.sql ->
+-- 030_…_arms.sql: each migration restates the function it changes, so the newest file is always the
+-- complete definition. Identical to sql/030_supabase_v2_arms.sql apart from the check below.
 create or replace function public.save_pageguide_guide_v2_task(
   p_password text,
   p_task jsonb

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Fill in `claims_completion` on the Guide runs.
 // =============================================
-// Run once after supabase_v2_faithfulness.sql:  node scripts/classify_guide_runs.mjs
+// Run once after sql/040_supabase_v2_faithfulness.sql:  node scripts/classify_guide_runs.mjs
 // Re-running is safe; pass --force to re-derive rows that already have a value.
 //
 // The classification the study turns on needs TWO facts, not one:
@@ -48,7 +48,7 @@ try {
   list = await api('pageguide_guide_v2_tasks?select=id,task_style,in_study,agent_completed,claims_completion&order=id');
 } catch (e) {
   if (/claims_completion/.test(e.message)) {
-    console.error('\n  The claims_completion column does not exist. Run supabase_v2_faithfulness.sql first.\n');
+    console.error('\n  The claims_completion column does not exist. Run sql/040_supabase_v2_faithfulness.sql first.\n');
     process.exit(1);
   }
   throw e;

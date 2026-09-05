@@ -1,6 +1,6 @@
 -- Find V2 — the per-task time limit, as a setting rather than a constant.
 -- ======================================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_flags.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/010_supabase_v2_flags.sql. Idempotent.
 --
 -- The limit was 3 minutes, hard-coded in app/instrument.js and shared with the Find questions
 -- through window.TaskTimer so the two instruments could not drift apart. It is now 2 minutes, and a
@@ -97,7 +97,7 @@ begin
 end;
 $$;
 
--- DROP THE THREE-ARGUMENT VERSION. supabase_v2_flags.sql created
+-- DROP THE THREE-ARGUMENT VERSION. sql/010_supabase_v2_flags.sql created
 -- save_pageguide_find_v2_flags(text, boolean, boolean); adding a fourth parameter with a default
 -- makes an overload rather than replacing it, and Postgres then refuses every three-argument call
 -- with "function ... is not unique". The four-argument one serves those calls itself, since

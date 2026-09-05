@@ -1,6 +1,6 @@
 -- Find V2 — let Admin classify WHY a Guide run is incorrect.
 -- =========================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_arms.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/030_supabase_v2_arms.sql. Idempotent.
 --
 -- `guide_ground_truth.problems` decides the failure mode app/find_v2_guide_key.js derives, which
 -- decides the Admin board, the per-mode accuracy split and `failure_mode` on every result row. Until

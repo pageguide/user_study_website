@@ -164,7 +164,7 @@ function buildRoundRobinQueue(list, slot) {
   if (missing.length) throw new Error(`Missing published study questions for: ${missing.join(', ')}.`);
   const n = Math.max(0, Number(slot) || 0);
   // Kept in step with the condition_order label built by claim_study_assignment
-  // (supabase_results_v2.sql) — the same `slot % 2` rule names the layout there.
+  // (sql/002_supabase_results_v2.sql) — the same `slot % 2` rule names the layout there.
   const arms = n % 2 === 0
     ? ['grounding', 'nongrounding']
     : ['nongrounding', 'grounding'];
@@ -3564,7 +3564,7 @@ function missingStyleNoticeHtml(allRows) {
     this database predates that column, so the site dropped it rather than lose the row. The facets
     below fall back to the stimulus each row came from, which resolves every published task; to fix
     it at the source, run the <code>alter table … add column if not exists task_style text;</code>
-    from <code>supabase_results_v2.sql</code> in the Supabase SQL editor.
+    from <code>sql/002_supabase_results_v2.sql</code> in the Supabase SQL editor.
   </div>`;
 }
 

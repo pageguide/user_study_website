@@ -1,6 +1,6 @@
 -- Find V2 — let the reference reviewer delete a citation, not just re-link one.
 -- ============================================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_anchors.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/070_supabase_v2_anchors.sql. Idempotent.
 --
 -- Deleting a reference is not the same edit as re-linking one. Re-linking changes only WHERE a
 -- phrase lives in the page, so save_pageguide_find_v2_anchors writes `citation_anchors` and nothing
@@ -16,7 +16,7 @@
 -- as it did, which is what makes this safe to apply to a project mid-study: the default is the old
 -- behaviour, and rewriting the answer is something a caller has to ask for explicitly.
 
--- DROP THE FOUR-ARGUMENT VERSION FIRST. supabase_v2_anchors.sql created
+-- DROP THE FOUR-ARGUMENT VERSION FIRST. sql/070_supabase_v2_anchors.sql created
 -- save_pageguide_find_v2_anchors(text, text, text, jsonb), and adding a fifth parameter with a
 -- default does not replace it — it creates an overload. Postgres then refuses every four-argument
 -- call with "function ... is not unique", which is every re-link made from a tab that has not been

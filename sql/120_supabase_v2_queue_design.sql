@@ -1,6 +1,6 @@
 -- Find V2 — which queue a participant is dealt, as a setting rather than a constant.
 -- ================================================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_task_limit.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/110_supabase_v2_task_limit.sql. Idempotent.
 --
 -- V2 shipped with one queue: three Find claims in three FIXED cells (grounded/incorrect,
 -- non-grounded/correct, non-grounded/incorrect — there is deliberately no grounded/correct Find
@@ -52,7 +52,7 @@ comment on column public.pageguide_find_v2_settings.queue_design is
 -- DROPPED FIRST, not replaced: this function returns a row type defined by its OUT parameters, and
 -- `create or replace` refuses to change one ("cannot change return type of existing function").
 -- Adding the fourth column therefore needs the old one gone. Safe — it takes no arguments and the
--- grant is re-issued below. Same reasoning as supabase_v2_task_limit.sql.
+-- grant is re-issued below. Same reasoning as sql/110_supabase_v2_task_limit.sql.
 drop function if exists public.pageguide_find_v2_study_flags();
 
 -- Still deliberately narrow: `select *` on this row would hand the browser the admin password hash.
@@ -128,7 +128,7 @@ begin
 end;
 $$;
 
--- DROP THE FOUR-ARGUMENT VERSION. supabase_v2_task_limit.sql created
+-- DROP THE FOUR-ARGUMENT VERSION. sql/110_supabase_v2_task_limit.sql created
 -- save_pageguide_find_v2_flags(text, boolean, boolean, integer); adding a fifth parameter with a
 -- default makes an OVERLOAD rather than replacing it, and Postgres then refuses every four-argument
 -- call with "function ... is not unique". The five-argument one serves those calls itself, since

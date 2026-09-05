@@ -42,7 +42,7 @@ in load order and parses the result the way the browser would.
 ## Setup
 
 **1. Create the tables.** In the Supabase SQL editor, run `supabase_schema.sql` from the pageguide
-repo, then run `supabase_results_v2.sql` from this repo. The first script creates the stimuli tables;
+repo, then run `sql/002_supabase_results_v2.sql` from this repo. The first script creates the stimuli tables;
 the second creates the clean browser-result table this site writes to.
 
 > An insert naming a column the table lacks is rejected **whole**, and the failure is logged and
@@ -129,7 +129,7 @@ recorded in `variant_key`, not against a fixed property of the claim row.
 
 ### Configure the blank `PageGuideUserStudy` Supabase project
 
-1. In the new project's SQL editor, run all of `supabase_find_v2.sql`.
+1. In the new project's SQL editor, run all of `sql/001_supabase_find_v2.sql`.
 2. In the same SQL editor, set the password that authorizes the V2 Admin editor:
 
    ```sql
@@ -166,26 +166,38 @@ runs, reads no claims, and writes results where nobody will look for them.
 Anon keys only. The secret key belongs in `.env` on the researcher's machine, read by
 `scripts/publish.mjs`; Supabase refuses it from a browser anyway.
 
-The Guide half of V2 was added after the Find half, in one idempotent SQL file per change. On a
-project that has only ever run `supabase_find_v2.sql`, run these in order in the same SQL editor:
+Every schema change is one idempotent SQL file in [`sql/`](sql/), and the number in the name is the
+order they are applied in — `sql/README.md` is the index, with what each one adds and what it needs
+first. On a project that has only ever run `sql/001_supabase_find_v2.sql`, run these in order in the
+same SQL editor:
 
 | File | What it adds |
 | --- | --- |
-| `supabase_v2_init.sql` | the V2 tables, the admin password gate, and the item writers |
-| `supabase_v2_flags.sql` | the protocol switches (`collect_evidence`, `collect_followup`) |
-| `supabase_v2_guide.sql` | the Guide task: `arms`, the `agent_completed` answer key, and `save_pageguide_guide_v2_meta` |
-| `supabase_v2_anchors.sql` | citation anchors for Find references |
-| `supabase_v2_faithfulness.sql` | `claims_completion`, which separates a false success from an honest failure |
-| `supabase_v2_arms.sql` | builds `arms` from what the recorder writes, so a recorded run is not a blank stimulus |
-| `supabase_v2_failure_mode.sql` | `failure_mode` on Guide results, and a publish gate that accepts both ground-truth dialects |
-| `supabase_v2_queue_design.sql` | `queue_design` — which queue a sitting is dealt (see below) |
-| `supabase_v2_group_chip.sql` | `show_group_chip` — whether a participant is told which group they are in (off by default) |
-| `supabase_v2_milestone_flag.sql` | `flag_milestones` — whether the Guide journey flags the trail's steps (on by default) |
-| `supabase_v2_reasoning_trail.sql` | `show_reasoning_trail` — whether a Guide task shows the agent's own account of the run (off by default) |
-| `supabase_v2_step_marks.sql` | `marked_wrong_steps` — step numbers a participant marks while reviewing a Guide task |
-| `supabase_v2_recruit_quota.sql` | `slot_quota` and `pageguide_find_v2_class_counts` — recruiting to a per-class target instead of plain round-robin (see below) |
-| `supabase_v2_task_picker.sql` | the `guide_visual_4` queue (four fixed Guide × Visual runs, no round robin), `task_selection` for the per-cell picker behind it, `allow_browse_sim` / `browse_sim_delay_ms` for the browse simulator, and `post_survey_url` for the questionnaire (all below). Safe to re-run: it drops each earlier arity of the flags writer before recreating it |
-| `supabase_v2_local_time.sql` | views that read `created_at` in Alabama local time — optional, changes no data |
+| `sql/000_supabase_v2_init.sql` | the V2 tables, the admin password gate, and the item writers |
+| `sql/010_supabase_v2_flags.sql` | the protocol switches (`collect_evidence`, `collect_followup`) |
+| `sql/020_supabase_v2_guide.sql` | the Guide task: `arms`, the `agent_completed` answer key, and `save_pageguide_guide_v2_meta` |
+| `sql/030_supabase_v2_arms.sql` | builds `arms` from what the recorder writes, so a recorded run is not a blank stimulus |
+| `sql/040_supabase_v2_faithfulness.sql` | `claims_completion`, which separates a false success from an honest failure |
+| `sql/050_supabase_v2_failure_mode.sql` | `failure_mode` on Guide results, and a publish gate that accepts both ground-truth dialects |
+| `sql/060_supabase_v2_failure_mode_editor.sql` | lets Admin classify *why* a run is keyed incorrect |
+| `sql/070_supabase_v2_anchors.sql` | citation anchors for Find references |
+| `sql/080_supabase_v2_answer_edit.sql` | lets the reference reviewer delete a citation, not only re-link it |
+| `sql/090_supabase_v2_reference_use.sql` | did the participant open the references? Run it **before** deploying the matching JS |
+| `sql/100_supabase_v2_step_marks.sql` | `marked_wrong_steps` — step numbers a participant marks while reviewing a Guide task |
+| `sql/110_supabase_v2_task_limit.sql` | the per-task time limit, as a setting rather than a constant |
+| `sql/120_supabase_v2_queue_design.sql` | `queue_design` — which queue a sitting is dealt (see below) |
+| `sql/130_supabase_v2_group_chip.sql` | `show_group_chip` — whether a participant is told which group they are in (off by default) |
+| `sql/140_supabase_v2_milestone_flag.sql` | `flag_milestones` — whether the Guide journey flags the trail's steps (on by default) |
+| `sql/150_supabase_v2_reasoning_trail.sql` | `show_reasoning_trail` — whether a Guide task shows the agent's own account of the run (off by default) |
+| `sql/160_supabase_v2_recruit_quota.sql` | `slot_quota` and `pageguide_find_v2_class_counts` — recruiting to a per-class target instead of plain round-robin (see below) |
+| `sql/170_supabase_v2_task_picker.sql` | the `guide_visual_4` queue (four fixed Guide × Visual runs, no round robin), `task_selection` for the per-cell picker behind it, `allow_browse_sim` / `browse_sim_delay_ms` for the browse simulator, and `post_survey_url` for the questionnaire (all below). Safe to re-run: it drops each earlier arity of the flags writer before recreating it |
+| `sql/180_supabase_v2_guide_name.sql` | a Guide task's name and instruction become editable from Admin |
+| `sql/190_supabase_v2_guide_steps.sql` | hiding and deleting steps of a run, with every step reference renumbered |
+| `sql/200_supabase_v2_task_limit_3min.sql` | the per-task budget becomes three minutes |
+
+Then, optionally: `sql/900_supabase_v2_letter_ops.sql` and `sql/910_supabase_v2_guide_briefs.sql`
+rewrite live stimulus text (both reversible, both documented in their own headers), and
+`sql/950_supabase_v2_local_time.sql` adds views that read `created_at` in Alabama local time.
 
 **"Could not find the function … in the schema cache"** on Save means exactly one thing: the browser
 is ahead of the project. PostgREST resolves functions **by argument name**, so a page that sends
@@ -216,7 +228,7 @@ task 1.
 - **Three Find cells + one grounded Guide task** (`legacy_find3`) — what V2 shipped with. Find deals
   three of its four correctness × grounding cells (there is deliberately no correct-and-grounded Find
   task) and the Guide task is grounded only, so nothing in it estimates grounding for the Guide half.
-- **Four Guide × Visual runs** (`guide_visual_4`, added by `supabase_v2_task_picker.sql`) — four
+- **Four Guide × Visual runs** (`guide_visual_4`, added by `sql/170_supabase_v2_task_picker.sql`) — four
   tasks, all Guide, all visual, **the same four for everyone**:
 
   | # | task | answer | condition |
@@ -493,7 +505,7 @@ with both buttons dead would be a lightbox wearing a costume.
 ## The browse simulator — the run as browsing, in both arms
 
 A Guide task shows what the agent did as a list of steps. `allow_browse_sim`
-(`supabase_v2_task_picker.sql`, **Admin → Study settings**, default on) adds a button above the
+(`sql/170_supabase_v2_task_picker.sql`, **Admin → Study settings**, default on) adds a button above the
 journey that turns that list back into the browsing it describes — the run as a slideshow, one page
 state per step, walked with Back and Next, arrow keys as well as the buttons, and a click on the page
 for the full-size view without losing your place.
@@ -572,7 +584,7 @@ a shortfall rather than closing it: hand out 13–14 of each class, get back 7 /
 sittings, and the Find × Visual correct-grounded cell sits at n = 4 beside a non-grounded neighbour
 at 8. Recruiting more people under round-robin keeps that ratio.
 
-`supabase_v2_recruit_quota.sql` adds `slot_quota`, the target number of **completed** sittings per
+`sql/160_supabase_v2_recruit_quota.sql` adds `slot_quota`, the target number of **completed** sittings per
 class, set in **Admin → Study settings**. Above 0, `claim_pageguide_find_v2_session` deals the class
 furthest from the target instead of the next one in line, by skipping the counter forward to the next
 slot of that class. It never rewinds: `cycle = floor(slot / 2)` also picks *which* claims are dealt,
@@ -702,10 +714,10 @@ every Guide practice carries the same button the real tasks do.
 
 Switching designs mid-study splits the collected rows into two experiments. `queue_design` defaults
 to the crossed design for every project, including one that has already collected sittings under the
-old one — `supabase_v2_queue_design.sql` ends with the one-line update that pins such a project back
+old one — `sql/120_supabase_v2_queue_design.sql` ends with the one-line update that pins such a project back
 to `legacy_find3`.
 
-`supabase_v2_arms.sql` matters for any run recorded through the extension rather than migrated from
+`sql/030_supabase_v2_arms.sql` matters for any run recorded through the extension rather than migrated from
 V1. `app/stimulus.js` reads only `arms.{grounding,nongrounding}.{steps, answer, trail, …}`, and the
 recorder's writer used to fill `trajectory` and `answer_variants` and leave `arms` empty — so the run
 played as an empty stimulus while the Admin card still reported its step count, which is counted off
@@ -756,21 +768,21 @@ by an abandoned session — it is the one to use before reading a rate, and the 
 which of the two counts a number came from. **Exclude all incomplete** does the same as a one-off
 edit, leaving individual sittings free to be re-admitted by hand. **Include everyone** clears both.
 
-`supabase_find_v2.sql` is safe to re-run: on a project that already ran an earlier version it adds
+`sql/001_supabase_find_v2.sql` is safe to re-run: on a project that already ran an earlier version it adds
 the new columns and lifts each existing single answer into the matching variant, pinning that row's
 `correctness_mode` so it keeps behaving exactly as before until it is re-authored. V1 continues
 to use `study_*` tables and `app/config.js` exactly as before.
 
 ## Assigning conditions
 
-Participants are assigned by the Supabase RPC in `supabase_results_v2.sql`, not by URL. When a
+Participants are assigned by the Supabase RPC in `sql/002_supabase_results_v2.sql`, not by URL. When a
 participant presses Start, `claim_study_assignment` atomically claims the next round-robin slot and
 creates the `study_sessions` row. Each participant sees 8 tasks:
 
 - grounded: the slot's Find x Text, Find x Visual, Guide x Text, and Guide x Visual tasks
 - non-grounded: the next slot's task from each of those four styles, wrapping within each style
 
-Run `supabase_results_v2.sql` before deploying this version; it adds the assignment counter, session
+Run `sql/002_supabase_results_v2.sql` before deploying this version; it adds the assignment counter, session
 metadata columns, and the claim RPC. `ARM_ASSIGNMENT` remains only as a fallback for old debug paths.
 
 ## What lands in the database
@@ -888,7 +900,7 @@ a result — it is a summary to check, and the charts remain the data.
 / … If the column is missing from the table, `insertStudyResult` drops it and saves the row anyway
 (the answer is worth more than a label), so the dashboard says so at the top and falls back to the
 stimulus each row came from. Run the `alter table … add column if not exists task_style text;` from
-`supabase_results_v2.sql` to fix it at the source.
+`sql/002_supabase_results_v2.sql` to fix it at the source.
 
 ### Publishing the figure code
 

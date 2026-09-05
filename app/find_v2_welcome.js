@@ -19,7 +19,7 @@
   // The design here is only what a page reads before the flags come back; the study is dealt from
   // what loadWelcome fetched, and beginStudy snapshots that into the session.
   let studyFlags = {
-    collectEvidence: false, collectFollowup: false, taskLimitSeconds: 120,
+    collectEvidence: false, collectFollowup: false, taskLimitSeconds: 180,
     queueDesign: 'balanced_2x2', slotQuota: 0,
   };
   let adminPassword = '';
@@ -486,16 +486,32 @@
     }
     if (!studyFlags.collectEvidence) document.getElementById('welcome-step-evidence')?.remove();
 
+    // THE LIMIT CHIP, BEFORE THE RESUME BRANCH. It used to be painted only on the path that deals a
+    // fresh queue, so a participant coming back to an unfinished run read "— per task" — an em dash
+    // where the one promise the header makes about pacing should be. The chip reads the SETTING, not
+    // a number written into the page: a welcome screen promising three minutes over a two-minute
+    // clock is worse than no promise at all.
+    const limitChip = document.getElementById('find-v2-task-limit');
+    if (limitChip) {
+      const seconds = Number(studyFlags.taskLimitSeconds) || 180;
+      limitChip.textContent = seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
+    }
+
     // AN UNFINISHED RUN RESUMES UNDER THE DESIGN IT WAS DEALT UNDER, always — the queue is saved with
     // the run, and re-dealing it mid-sitting would make task 4 belong to a different experiment from
     // task 1. What was missing is that nothing SAID so, so a pilot run left on this browser under the
     // old three-cell queue came back as "Continue →" with no hint that it was not the design now set,
     // and it looked like the setting had not taken.
     //
-    // Now it is named, and a stale one can be thrown away. The discard button appears only when the
-    // saved run's design is not the one the study is set to (a run saved before the setting existed
-    // counts, since it was dealt under the old queue by definition) — so a participant mid-sitting
-    // under the current design is never offered a button that destroys their progress.
+    // Now it is named, and ANY unfinished run can be thrown away — not only one dealt under a
+    // superseded design. The button used to appear only for a stale queue, on the reasoning that a
+    // participant mid-sitting should not be shown a control that destroys their progress. In
+    // practice the case it left unhandled is the common one: a run abandoned halfway, a browser
+    // shared between pilots, somebody who wants to start again from a clean sheet. Their only way
+    // out was clearing site data, and a study whose escape hatch is devtools does not have one.
+    //
+    // What keeps it safe is the button itself: it is quiet, it sits apart from Continue, and it
+    // asks a second time before it does anything — see addDiscardButton.
     if (saved && saved.idx < saved.queue.length) {
       const design = currentDesign();
       const savedDesign = saved.flags?.queueDesign || '';
@@ -511,7 +527,7 @@
       start.textContent = 'Continue →';
       start.disabled = false;
       start.onclick = () => { location.href = 'study.html'; };
-      if (stale) addDiscardButton();
+      addDiscardButton();
       return;
     }
 
@@ -522,13 +538,6 @@
     const guideSlots = design === 'guide_visual_4' ? 4 : design === 'legacy_find3' ? 1 : 2;
     const findSlots = design === 'guide_visual_4' ? 0 : design === 'legacy_find3' ? FIND_CELLS.length : 2;
     countChip.textContent = String(findSlots + (liveGuideTasks.length ? guideSlots : 0));
-    // The limit chip reads the SETTING, not a number written into the page. A welcome screen
-    // promising three minutes over a two-minute clock is worse than no promise at all.
-    const limitChip = document.getElementById('find-v2-task-limit');
-    if (limitChip) {
-      const seconds = Number(studyFlags.taskLimitSeconds) || 120;
-      limitChip.textContent = seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
-    }
     // THE FIXED DESIGN DEALS NO FIND CLAIMS AT ALL, so an empty claim pool is not a reason to refuse
     // to start under it — the old check would have held the study shut over a table it never reads.
     if (design === 'guide_visual_4') {
@@ -606,7 +615,7 @@
     // apparatus works, which is not their concern and is one more sentence between them and the
     // task; the gaps below are still reported, because those a researcher needs to see.
     say(noGuideAtAll
-      ? 'Ready — Find only. No Guide task is available yet; run supabase_v2_guide.sql, then scripts/migrate_guide_v2.mjs, then tag them in Admin → Guide tasks.'
+      ? 'Ready — Find only. No Guide task is available yet; run sql/020_supabase_v2_guide.sql, then scripts/migrate_guide_v2.mjs, then tag them in Admin → Guide tasks.'
       : (shortages.length ? `Ready, with gaps: ${shortages.join('; ')}.` : ''),
     !!shortages.length);
     // Also silent. How the queue is composed and which group a sitting lands in are the researcher's
@@ -622,7 +631,12 @@
    *
    * Deliberately a second, quieter control rather than a mode of the Start button: it destroys work,
    * and a participant who pressed the wrong one would lose their answers and be re-assigned a slot.
-   * Only rendered when the saved run's design is not the one now set — see the note at the call.
+   * Offered for EVERY unfinished run — see the note at the call — which is why it asks twice: the
+   * first press only arms it, and the label changes to say what the second press will do.
+   *
+   * IT CLEARS THE BROWSER'S COPY, and nothing else. Answers already written to Supabase stay where
+   * they are, which is the honest thing: those tasks were genuinely completed, and a discarded run
+   * is an abandoned sitting rather than a retraction. The new run gets its own session id.
    */
   function addDiscardButton() {
     const actions = document.querySelector('.welcome-actions');
@@ -637,7 +651,7 @@
         // One confirmation, in the button itself: a window.confirm on the welcome screen is a modal a
         // participant can dismiss without reading, and this is not a participant's decision anyway.
         button.dataset.armed = 'true';
-        button.textContent = 'Discard the saved answers — click again to confirm';
+        button.textContent = 'Discard this run and its saved answers — click again to confirm';
         return;
       }
       S.clearLocal();
@@ -1142,7 +1156,7 @@
   function previewQuestionPaneHtml(task) {
     const arm = previewOpts.arm;
     const group = task?.task_style === 'guide_visual' ? 'B' : 'A';
-    const limit = Number(studyFlags.taskLimitSeconds) || 120;
+    const limit = Number(studyFlags.taskLimitSeconds) || 180;
     const mmss = `${String(Math.floor(limit / 60)).padStart(2, '0')}:${String(limit % 60).padStart(2, '0')}`;
     const copy = arm === 'nongrounding'
       ? { label: 'Non-grounded', note: 'no screenshots, and no evidence behind the answer' }
@@ -1809,7 +1823,7 @@
   /**
    * The two protocol switches, and what turning one off costs in the data.
    *
-   * BOTH ARE OFF BY DEFAULT, in the database rather than here — see supabase_v2_flags.sql. The
+   * BOTH ARE OFF BY DEFAULT, in the database rather than here — see sql/010_supabase_v2_flags.sql. The
    * default study is the Yes/No verdict alone; the evidence stage and the follow-up are things a
    * researcher turns on deliberately, because each one lengthens every task in the queue.
    *
@@ -1901,7 +1915,7 @@
             and 900 seconds.</small></span></span>
           <span class="admin-limit">
             <input type="number" id="v2-task-limit" min="30" max="900" step="10"
-              value="${Number(flags.taskLimitSeconds) || 120}"> seconds
+              value="${Number(flags.taskLimitSeconds) || 180}"> seconds
           </span>
         </label>
       </div>
@@ -2917,6 +2931,12 @@
             inStudy: card.querySelector(`input[data-guide-live="${CSS.escape(id)}"]`).checked,
             claimsCompletion: (rows.find(r => r.id === id) || {}).claims_completion,
             taskIndex: Number(card.querySelector(`input[data-guide-order="${CSS.escape(id)}"]`).value) || 0,
+            // THE EDIT PATH BACK TO SUPABASE. Sent on every save rather than only when the fold is
+            // open: the fields are rendered from the stored row either way, so an untouched card
+            // writes back exactly what it read. A blank one sends '' and the function leaves the
+            // stored value alone — see sql/180_supabase_v2_guide_name.sql.
+            goal: card.querySelector(`textarea[data-guide-goal="${CSS.escape(id)}"]`)?.value ?? null,
+            title: card.querySelector(`input[data-guide-title="${CSS.escape(id)}"]`)?.value ?? null,
           });
           // A SECOND WRITE, because it is a second fact with a different owner: the meta writer sets
           // the four judged fields, this sets the recorder's problems[]. Sent after the meta save so
@@ -2969,7 +2989,7 @@
    *   claims the job is done + it was not -> INCORRECT (false success) — the study item
    *   admits it could not finish          -> honest failure, not used
    *
-   * `claims_completion` is null until supabase_v2_faithfulness.sql is applied. In that window the
+   * `claims_completion` is null until sql/040_supabase_v2_faithfulness.sql is applied. In that window the
    * status is reported as unclassified rather than guessed, because guessing is what would put an
    * honest failure on screen labelled "Incorrect" — the exact confusion this exists to remove.
    */
@@ -3223,7 +3243,7 @@
     }
     if (claims === null) {
       return { label: done ? 'Completed' : 'Did not complete', cls: '',
-        note: 'run supabase_v2_faithfulness.sql to separate a false success from an honest failure' };
+        note: 'run sql/040_supabase_v2_faithfulness.sql to separate a false success from an honest failure' };
     }
     return done
       ? { label: 'CORRECT', cls: 'is-correct', note: 'faithful success — says it finished, and did' }
@@ -3397,23 +3417,119 @@
       button.disabled = true;
       holder.innerHTML = '<p class="q-sub">Loading the journey…</p>';
       try {
-        const steps = await DB.getGuideSteps(id);
+        const [steps, listed] = await Promise.all([
+          DB.getGuideSteps(id),
+          // Never fatal: a project that has not applied sql/190_supabase_v2_guide_steps.sql still gets its
+          // journey, just without the trim controls.
+          DB.listGuideSteps(id).catch(() => null),
+        ]);
+        const hidden = (listed || []).filter(row => row.hidden);
+        const canTrim = Array.isArray(listed);
         holder.innerHTML = steps.length
-          ? `<div class="admin-journey">${steps.map(step => `
+          ? `${canTrim ? guideTrimNoteHtml(steps.length) : ''}
+            <div class="admin-journey">${steps.map(step => `
               <div class="admin-journey-row" data-step-row="${esc(String(step.n ?? ''))}">
                 <b>${esc(String(step.n ?? ''))}</b>
                 <div>
                   <div>${esc(step.instruction || step.action || '')}</div>
                   ${step.url ? `<div class="q-sub">${esc(step.url)}</div>` : ''}
+                  ${canTrim ? `<div class="admin-journey-acts">
+                    <button class="admin-chip admin-chip-quiet" data-step-op="hide"
+                      data-step-n="${esc(String(step.n ?? ''))}"
+                      title="Take this step out of what participants see. Kept, and restorable.">Hide</button>
+                    <button class="admin-chip admin-chip-quiet" data-step-op="delete"
+                      data-step-n="${esc(String(step.n ?? ''))}"
+                      title="Remove this step for good, screenshot and all.">Delete</button>
+                  </div>` : ''}
                   ${step.screenshot ? `<img class="admin-journey-shot" src="${esc(shotSrc(step.screenshot))}" alt="step ${esc(String(step.n ?? ''))}">` : '<div class="q-sub">No screenshot saved.</div>'}
                 </div>
-              </div>`).join('')}</div>`
+              </div>`).join('')}</div>
+            ${guideHiddenListHtml(hidden)}
+            <div class="welcome-status" data-step-status></div>`
           : '<p class="q-sub">No steps recorded for the grounded arm.</p>';
+        bindGuideStepOps(holder, id, button);
       } catch (error) {
         holder.innerHTML = `<p class="welcome-status welcome-status-bad">${esc(error.message || String(error))}</p>`;
         button.disabled = false;
       }
     };
+  }
+
+  /**
+   * Trimming a run: what it does, said once above the steps rather than on every button.
+   *
+   * The sentence that matters is the renumbering. A researcher hiding step 4 of 13 is not annotating
+   * the record, they are changing what "step 6" means — to the participant, to their step marks, and
+   * to the answer key — and the panel has to say so before they press it, not after.
+   */
+  function guideTrimNoteHtml(count) {
+    return `
+      <p class="q-sub admin-journey-note"><b>${count} step${count === 1 ? '' : 's'} shown to
+        participants.</b> Hiding or deleting one <b>renumbers the rest</b>, and the evidence chips,
+        milestones and the answer key move with it. <b>Hide</b> keeps the step and can be undone;
+        <b>Delete</b> does not.</p>`;
+  }
+
+  /** What has been taken out, and the way back. Rendered only when there is something in it. */
+  function guideHiddenListHtml(hidden) {
+    if (!hidden.length) return '';
+    return `
+      <div class="admin-journey-hidden">
+        <div class="admin-journey-hidden-head">${hidden.length} hidden step${hidden.length === 1 ? '' : 's'}
+          <span class="q-sub">not shown to participants, and not counted in the step count</span></div>
+        ${hidden.map(row => `
+          <div class="admin-journey-hidden-row">
+            <span class="q-sub">was step ${esc(String(row.orig_n ?? '?'))}</span>
+            <span>${esc(row.instruction || '')}</span>
+            <button class="admin-chip admin-chip-quiet" data-step-op="show"
+              data-step-n="${esc(String(row.orig_n ?? ''))}">Restore</button>
+          </div>`).join('')}
+      </div>`;
+  }
+
+  /**
+   * Hide / Delete / Restore, each one confirmed in the button it is pressed on.
+   *
+   * DELETE ASKS TWICE, hide does not. The asymmetry is the point of having both: a hide is a
+   * decision you can look at and change your mind about, and making it as heavy as a deletion would
+   * push people towards deleting because it is the same number of clicks.
+   *
+   * The journey is re-read from the server afterwards rather than patched in place — the write
+   * renumbers four other structures, and a list rebuilt from what came back cannot disagree with
+   * what was stored.
+   */
+  function bindGuideStepOps(holder, id, loader) {
+    const status = holder.querySelector('[data-step-status]');
+    holder.querySelectorAll('[data-step-op]').forEach(btn => {
+      btn.onclick = async () => {
+        const op = btn.dataset.stepOp;
+        const n = Number(btn.dataset.stepN);
+        if (!Number.isInteger(n)) return;
+        if (op === 'delete' && btn.dataset.armed !== 'true') {
+          btn.dataset.armed = 'true';
+          btn.textContent = 'Delete for good — click again';
+          return;
+        }
+        holder.querySelectorAll('[data-step-op]').forEach(b => { b.disabled = true; });
+        if (status) {
+          status.textContent = op === 'show' ? 'Restoring…' : op === 'hide' ? 'Hiding…' : 'Deleting…';
+          status.className = 'welcome-status';
+        }
+        try {
+          await DB.saveGuideSteps(adminPassword, id, op, [n]);
+          // Reload through the button's own handler, so the list, the hidden panel and the step
+          // count all come from one fresh read.
+          loader.disabled = false;
+          loader.click();
+        } catch (error) {
+          holder.querySelectorAll('[data-step-op]').forEach(b => { b.disabled = false; });
+          if (status) {
+            status.textContent = error.message || String(error);
+            status.className = 'welcome-status welcome-status-bad';
+          }
+        }
+      };
+    });
   }
 
   /**
@@ -3552,6 +3668,28 @@
           </div>
           <span class="q-sub">${esc(id)} · ${Number(row.step_count) || 0} steps · ${esc(status.note)}</span>
         </div>
+
+        <!-- THE TWO NAMES, EDITABLE. Folded, because keying a run is the everyday job on this card
+             and renaming one is not — but present, because until now the only way to fix the
+             sentence a participant is asked to judge was the SQL editor. The instruction is a
+             textarea rather than an input: it is a sentence, and a one-line box that scrolls
+             sideways hides the end of the thing being checked. -->
+        <details class="admin-guide-name">
+          <summary class="q-sub">Rename this task</summary>
+          <label class="q-sub admin-guide-field">The task the agent was given
+            <textarea class="welcome-input" rows="2" data-guide-goal="${esc(id)}"
+              placeholder="Book a lane at the 7am Saturday swim and tell me the booking reference."
+              >${esc(row.goal || '')}</textarea>
+            <span class="q-sub admin-guide-hint">Shown to the participant, word for word. Their
+              verdict is “did the agent do <b>this</b>?”</span>
+          </label>
+          <label class="q-sub admin-guide-field">Short name
+            <input class="welcome-input" data-guide-title="${esc(id)}"
+              value="${esc(row.title || '')}" placeholder="Saturday 7am lane booking">
+            <span class="q-sub admin-guide-hint">Admin lists and the task picker only. Blank falls
+              back to the instruction.</span>
+          </label>
+        </details>
         <div class="admin-row">
           <label class="q-sub">Style
             <select data-guide-style="${esc(id)}">
@@ -3917,7 +4055,7 @@
     if (!counts.size) {
       return `<section class="viz-participants v2-recruit">
         <h3 class="admin-subtitle">Recruitment balance</h3>
-        <p class="viz-note">This project has not run <code>supabase_v2_recruit_quota.sql</code> yet,
+        <p class="viz-note">This project has not run <code>sql/160_supabase_v2_recruit_quota.sql</code> yet,
           so the per-class standings cannot be read. Run it in the SQL editor and reload.</p>
       </section>`;
     }

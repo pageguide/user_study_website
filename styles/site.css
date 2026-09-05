@@ -222,15 +222,18 @@ body {
   list-style: none;
   counter-reset: q-part;
 }
-.q-task-parts li {
+/* DIRECT CHILDREN ONLY. A requirement can now carry sub-requirements, and an unscoped descendant
+   selector gave each of those its own numbered pill and its own connector line — two numbering
+   systems in one list. */
+.q-task-parts > li {
   position: relative;
   counter-increment: q-part;
   padding: 0 0 14px 30px;
 }
-.q-task-parts li:last-child { padding-bottom: 0; }
+.q-task-parts > li:last-child { padding-bottom: 0; }
 
 /* The numbered marker. */
-.q-task-parts li::before {
+.q-task-parts > li::before {
   content: counter(q-part);
   position: absolute;
   left: 0;
@@ -248,7 +251,7 @@ body {
 }
 
 /* The trail to the next step. Stops at the last one, because there is nothing after it to lead to. */
-.q-task-parts li:not(:last-child)::after {
+.q-task-parts > li:not(:last-child)::after {
   content: "";
   position: absolute;
   left: 9px;
@@ -257,6 +260,37 @@ body {
   width: 2px;
   background: rgba(120, 87, 255, 0.32);
 }
+
+/* The line before the list — "I need to buy a pickleball paddle." It is the goal; the numbered
+   items are how it breaks down, so it reads first and slightly larger than they do. */
+.q-task-lead {
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+/* Anything written after the list. Same shape as the lead-in, less prominent: by the time it is read
+   the requirements have been. */
+.q-task-trail {
+  margin: 10px 0 0;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+/* Sub-requirements — A, B, C under one numbered item. Lettered rather than numbered so a participant
+   saying "it missed 2B" is unambiguous, and left with the browser's own marker: a second pill would
+   compete with the requirement's. */
+.q-task-subs {
+  margin: 6px 0 0;
+  padding-left: 22px;
+  font-weight: 600;
+}
+
+.q-task-subs > li {
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+
+.q-task-subs > li::marker { color: var(--accent-dark, #4a2fc0); font-weight: 800; }
 
 .q-task-card {
   background: #efe9ff;
@@ -1278,6 +1312,40 @@ body {
   border-radius: 0 8px 8px 0;
 }
 .admin-guide-summary { margin: 0 0 8px; font-size: 13px; line-height: 1.55; }
+
+/* The rename fold. Quiet by default — keying a run is the everyday job on this card and renaming
+   one is the rare one — but it opens into full-width fields, because the instruction it holds is a
+   sentence a participant will read word for word. */
+.admin-guide-name {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.015);
+}
+
+.admin-guide-name > summary { cursor: pointer; font-weight: 700; }
+.admin-guide-name[open] > summary { margin-bottom: 8px; }
+
+.admin-guide-field {
+  display: block;
+  margin: 0 0 10px;
+  font-weight: 700;
+}
+
+.admin-guide-field:last-child { margin-bottom: 2px; }
+
+/* The inputs sit under their label rather than beside it: side by side, a 70-character instruction
+   is squeezed into whatever the label leaves, which is the field that most needs the width. */
+.admin-guide-field .welcome-input {
+  display: block;
+  width: 100%;
+  margin: 4px 0 3px;
+  font-weight: 400;
+}
+
+.admin-guide-field textarea.welcome-input { resize: vertical; line-height: 1.5; }
+.admin-guide-hint { display: block; font-weight: 400; color: var(--muted); }
 .viz-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -1404,6 +1472,51 @@ body {
 
 .admin-journey { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
 .admin-journey-row { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
+
+/* Trimming a run. The note above the list carries the warning about renumbering; the buttons stay
+   quiet, because deciding what a participant sees is a deliberate act and a prominent Delete beside
+   every step is an invitation to tidy a recording into something that never happened. */
+.admin-journey-note {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid rgba(120, 87, 255, 0.45);
+  background: rgba(120, 87, 255, 0.06);
+  border-radius: 0 8px 8px 0;
+  line-height: 1.55;
+}
+
+.admin-journey-acts { display: flex; gap: 6px; margin: 6px 0 2px; }
+
+.admin-journey-hidden {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.admin-journey-hidden-head {
+  font-weight: 800;
+  font-size: 12.5px;
+  margin-bottom: 8px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.admin-journey-hidden-row {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 0;
+  font-size: 13px;
+  line-height: 1.45;
+  border-top: 1px solid var(--line);
+}
+
+.admin-journey-hidden-row:first-of-type { border-top: 0; }
 .admin-journey-shot {
   display: block;
   max-width: 100%;

@@ -93,12 +93,12 @@ function fmtTime(ms) {
  * Shared by both instruments (this one and the Find questions in study.js) through window.TaskTimer
  * so the two cannot drift into different limits.
  */
-// TWO MINUTES BY DEFAULT, and settable — Admin → Study settings writes it, and a run reads it once
+// THREE MINUTES BY DEFAULT, and settable — Admin → Study settings writes it, and a run reads it once
 // at start (StudySession.state.flags.taskLimitSeconds). Mutable module state rather than a constant
 // because both instruments share this one clock through window.TaskTimer; a second copy of the
 // number is a second thing that can be stale, and the Find and Guide halves would silently disagree
 // about when a task ran out.
-let TASK_TIME_LIMIT_MS = 2 * 60 * 1000;
+let TASK_TIME_LIMIT_MS = 3 * 60 * 1000;
 const TASK_TIME_LOW_MS = 30 * 1000;
 
 const TASK_LIMIT_MIN_MS = 30 * 1000;

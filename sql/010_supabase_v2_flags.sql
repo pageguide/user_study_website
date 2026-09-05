@@ -1,7 +1,7 @@
 -- Find V2 — study protocol flags, and room for a timed-out verdict.
 -- ================================================================
 -- Run this once in the Supabase SQL editor of the Find V2 project, AFTER
--- supabase_v2_init.sql. It is idempotent: re-running it changes nothing and
+-- sql/000_supabase_v2_init.sql. It is idempotent: re-running it changes nothing and
 -- does not reset a flag an admin has already set.
 --
 -- Two things happen here.

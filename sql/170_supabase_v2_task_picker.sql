@@ -1,6 +1,6 @@
 -- Find V2 — the fixed Guide × Visual queue, the task picker behind it, and the browse simulator.
 -- =============================================================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_recruit_quota.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/160_supabase_v2_recruit_quota.sql. Idempotent.
 --
 -- THREE THINGS, one migration, because they are one decision. The study is moving off the round
 -- robin: every participant now sees the SAME four Guide × Visual runs, one per cell of correctness

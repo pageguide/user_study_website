@@ -1,6 +1,6 @@
 -- Find V2 — flagging the trail's steps inside the journey.
 -- ========================================================
--- Run once in the SQL editor of the V2 project, after supabase_v2_group_chip.sql. Idempotent.
+-- Run once in the SQL editor of the V2 project, after sql/130_supabase_v2_group_chip.sql. Idempotent.
 --
 -- The Guide stimulus shows two accounts of the same run: the reasoning trail, which names the steps
 -- the agent treated as milestones, and the View Journey, which lists every action it took. Matching

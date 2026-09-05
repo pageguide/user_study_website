@@ -152,7 +152,7 @@ async function insertStudySession(participantId, conditionLabel) {
 /**
  * The label describing the layout a slot was dealt, for when the RPC did not return one.
  *
- * Matches claim_study_assignment (supabase_results_v2.sql) exactly, including the `% 2` rule that
+ * Matches claim_study_assignment (sql/002_supabase_results_v2.sql) exactly, including the `% 2` rule that
  * decides which arm leads each pair in buildRoundRobinQueue. A fallback that kept saying `rr_mixed`
  * would file an interleaved session under the old block-order design — the one distinction the
  * analysis has to make.
@@ -234,7 +234,7 @@ async function insertStudyResult(record) {
     if (!missingOptionalColumn) return null;
 
     console.warn(`[study] this database has no \`${missingOptionalColumn}\` column yet; saving the row without it. `
-      + 'Run supabase_results_v2.sql in the Supabase SQL editor to keep all result fields.');
+      + 'Run sql/002_supabase_results_v2.sql in the Supabase SQL editor to keep all result fields.');
     delete row[missingOptionalColumn];
   }
   return null;

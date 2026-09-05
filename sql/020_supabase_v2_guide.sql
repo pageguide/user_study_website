@@ -1,7 +1,7 @@
 -- Find V2 — the Guide task.
 -- ========================
 -- Run once in the Supabase SQL editor of the V2 project (zlezbekyiwomtwdcnsge), AFTER
--- supabase_v2_init.sql and supabase_v2_flags.sql. Idempotent: re-running changes nothing and does
+-- sql/000_supabase_v2_init.sql and sql/010_supabase_v2_flags.sql. Idempotent: re-running changes nothing and does
 -- not reset anything an admin has already authored.
 --
 -- V2 began Find-only. `pageguide_guide_v2_tasks` was created ahead of the work and never filled, so
@@ -106,7 +106,7 @@ $$;
 grant execute on function public.save_pageguide_guide_v2_meta(text, text, text, boolean, boolean, integer) to anon;
 
 -- The Admin panel reads tasks with a plain select: the "anon reads Guide V2 tasks"
--- policy in supabase_v2_init.sql is `using (true)`, so not-yet-live rows are
+-- policy in sql/000_supabase_v2_init.sql is `using (true)`, so not-yet-live rows are
 -- already visible the same way not-yet-live Find claims are (listAllClaims).
 -- Nothing privileged is needed to LIST them; only save_pageguide_guide_v2_meta
 -- above is password-checked, because only writing needs to be.

@@ -33,7 +33,7 @@
     // would otherwise change what task 4 asks compared with task 3 of the same
     // participant, and the two would be indistinguishable in the results.
     flags: {
-      collectEvidence: false, collectFollowup: false, taskLimitSeconds: 120,
+      collectEvidence: false, collectFollowup: false, taskLimitSeconds: 180,
       allowBrowseSim: true, browseSimDelayMs: 500,
     },
   };
@@ -48,7 +48,7 @@
       // Clamped to the same bounds the settings column enforces. A run resumed from a session saved
       // before the limit existed has no value here and gets the current default, which is right:
       // there is no recorded limit to honour, so honouring today's is the only honest option.
-      taskLimitSeconds: Number.isFinite(seconds) ? Math.min(900, Math.max(30, Math.round(seconds))) : 120,
+      taskLimitSeconds: Number.isFinite(seconds) ? Math.min(900, Math.max(30, Math.round(seconds))) : 180,
       // Absent means off, for a resumed run as for a fresh one.
       showGroupChip: f.showGroupChip === true,
       // Absent means on: the flag predates nothing, and a run resumed from a session saved before
@@ -168,7 +168,7 @@
       value.flags = {
         collectEvidence: !!value.flags?.collectEvidence,
         collectFollowup: !!value.flags?.collectFollowup,
-        taskLimitSeconds: Number(value.flags?.taskLimitSeconds) || 120,
+        taskLimitSeconds: Number(value.flags?.taskLimitSeconds) || 180,
         // CARRIED, NOT DEFAULTED. The queue was dealt when the run started and is saved with it, so
         // this changes nothing about what is played — but it is the only record of WHICH DESIGN a
         // half-finished run belongs to, and the welcome screen says so before offering to resume it.
@@ -262,6 +262,54 @@
     };
   }
 
+  /**
+   * The task clock, CAPPED AT THE LIMIT.
+   *
+   * A task is budgeted `taskLimitSeconds`, and past that the participant is shown the verdict and
+   * the task waits for them — for as long as they take. What that waiting measures is not reading:
+   * it is a coffee, a phone call, a tab left open over lunch. One 40-minute row of that moves a
+   * condition's mean by more than every real difference the study is powered to find, and the
+   * obvious defences are both worse — dropping the row throws away a real verdict, and winsorising
+   * after the fact is a decision made on the data rather than before it.
+   *
+   * So the recorded time is `min(elapsed, limit)`, which is a rule fixed in advance and the same one
+   * for every row: "this task took at least the whole budget".
+   *
+   * NOTHING IS LOST. The true elapsed time goes into `interaction_summary.time`, alongside the limit
+   * it was capped against, so the overrun is still analysable and a later reanalysis can undo this
+   * entirely. What the column holds is the analysis-ready number; what the jsonb holds is what
+   * happened.
+   */
+  function taskClock(payload) {
+    const raw = Number(payload?.answerElapsed);
+    const limit = Number(studyFlags().taskLimitSeconds) * 1000;
+    if (!Number.isFinite(raw) || !Number.isFinite(limit) || limit <= 0) {
+      return { ms: payload?.answerElapsed ?? null, at: value => value, over: 0 };
+    }
+    return {
+      ms: Math.min(raw, limit),
+      // Every other measure taken from the same start is clamped to the same ceiling, so a
+      // verdict cannot be recorded as having been reached after the task it belongs to ended.
+      at: value => (Number.isFinite(Number(value)) ? Math.min(Number(value), limit) : value),
+      over: Math.max(0, raw - limit),
+      raw,
+      limit,
+    };
+  }
+
+  /** The interaction summary, with the true clock folded in when the cap actually bit. */
+  function summaryWithClock(summary, clock) {
+    if (!clock.over) return summary || null;
+    return Object.assign({}, summary || null, {
+      time: {
+        elapsed_ms: Math.round(clock.raw),
+        recorded_ms: Math.round(clock.ms),
+        limit_ms: Math.round(clock.limit),
+        over_ms: Math.round(clock.over),
+      },
+    });
+  }
+
   function buildFindResultRow({ task, payload, confidence, helpfulness, notes }) {
     // NULL, not false, when the timer ran out before a choice. Coercing an
     // unanswered task to "No" would score it against the claim and quietly
@@ -270,6 +318,8 @@
     const verdict = payload.answer == null
       ? null
       : String(payload.answer).toLowerCase() === 'yes';
+    const clock = taskClock(payload);
+    const summary = summaryWithClock(payload.interactionSummary, clock);
     // The key is the correctness of the variant this participant was dealt, not
     // a property of the claim row: the same row is shown correct to one slot and
     // incorrect to the next.
@@ -295,8 +345,10 @@
       participant_verdict: verdict,
       verdict_correct: verdict == null ? null : verdict === expected,
       verdict_timed_out: verdict == null,
-      answer_time_ms: payload.answerElapsed,
-      verdict_time_ms: payload.answerChoiceMs,
+      answer_time_ms: clock.ms,
+      verdict_time_ms: clock.at(payload.answerChoiceMs),
+      // NOT capped: this is the duration of a stage that starts after the verdict, not an offset
+      // from the task's own start, so the task ceiling is not its ceiling.
       evidence_time_ms: payload.findSupportingMs,
       evidence_responses: payload.evidenceResponses || [],
       score_evidence_precision: payload.findScores?.precision ?? null,
@@ -306,8 +358,8 @@
       confidence: confidence || null,
       helpfulness: helpfulness || null,
       notes: notes || null,
-      interaction_summary: payload.interactionSummary || null,
-      ...interactionColumns(payload.interactionSummary),
+      interaction_summary: summary,
+      ...interactionColumns(summary),
     };
   }
 
@@ -333,6 +385,8 @@
       ? null
       : String(payload.answer).toLowerCase() === 'yes';
     const expected = typeof task?.agentCompleted === 'boolean' ? task.agentCompleted : null;
+    const clock = taskClock(payload);
+    const summary = summaryWithClock(payload.interactionSummary, clock);
     return {
       result_key: resultKey(task),
       client_run_id: state.runId || null,
@@ -365,15 +419,17 @@
       score_step_precision: payload.stepScores?.precision ?? null,
       score_step_recall: payload.stepScores?.recall ?? null,
       score_step_exact: payload.stepScores?.exact ?? null,
-      time_ms: payload.answerElapsed,
-      answer_time_ms: payload.answerElapsed,
-      verdict_time_ms: payload.answerChoiceMs,
+      time_ms: clock.ms,
+      answer_time_ms: clock.ms,
+      verdict_time_ms: clock.at(payload.answerChoiceMs),
+      // NOT capped, like evidence_time_ms above: step marking happens after the verdict and is
+      // timed from its own start.
       localization_time_ms: payload.localizationElapsed ?? null,
       confidence: confidence || null,
       helpfulness: helpfulness || null,
       notes: notes || null,
-      interaction_summary: payload.interactionSummary || null,
-      ...interactionColumns(payload.interactionSummary),
+      interaction_summary: summary,
+      ...interactionColumns(summary),
     };
   }
 
